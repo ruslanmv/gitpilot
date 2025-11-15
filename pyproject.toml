@@ -9,7 +9,10 @@ version = "0.1.0"
 description = "Production-ready agentic AI assistant for GitHub repositories with multi-LLM support and visual workflow insights"
 requires-python = ">=3.11,<3.12"
 readme = "README.md"
-license = { text = "MIT" }
+
+# Use a simple SPDX license string, not a table
+license = "MIT"
+
 authors = [{ name = "Ruslan Magana Vsevolodovna" }]
 keywords = [
     "ai",
@@ -28,7 +31,7 @@ keywords = [
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    # License classifier removed to avoid deprecation warning
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: JavaScript",
