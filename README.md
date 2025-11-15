@@ -4,7 +4,7 @@
 
 **🚀 The AI Coding Companion That Understands Your GitHub Repositories**
 
-[![PyPI version](https://badge.fury.io/py/gitpilot.svg)](https://pypi.org/project/gitpilot/)
+[![PyPI version](https://badge.fury.io/py/gitcopilot.svg)](https://pypi.org/project/gitpilot/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![GitHub stars](https://img.shields.io/github/stars/ruslanmv/gitpilot.svg?style=social&label=Star)](https://github.com/ruslanmv/gitpilot)
