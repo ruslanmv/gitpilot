@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from textwrap import dedent
 from typing import List, Literal
 
 from crewai import Agent, Crew, Process, Task
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .llm_provider import build_llm
+from .agent_tools import REPOSITORY_TOOLS, set_repo_context
 
 
 class PlanFile(BaseModel):
@@ -18,7 +20,8 @@ class PlanStep(BaseModel):
     step_number: int
     title: str
     description: str
-    files: List[PlanFile] = []
+    # Important: avoid mutable default list
+    files: List[PlanFile] = Field(default_factory=list)
     risks: str | None = None
 
 
@@ -32,40 +35,156 @@ async def generate_plan(goal: str, repo_full_name: str) -> PlanResult:
     """Agentic planning: create a structured plan but DO NOT modify the repo."""
     llm = build_llm()
 
+    # Set repository context for tools
+    owner, repo = repo_full_name.split("/")
+    set_repo_context(owner, repo)
+
+    # PRE-FETCH repository information to provide as context
+    # This ensures the agent has actual repository state upfront
+    from .github_api import get_repo_tree
+
+    try:
+        tree = await get_repo_tree(owner, repo)
+        file_list = [item["path"] for item in tree]
+        total_files = len(file_list)
+
+        # Build directory structure
+        dirs = set()
+        for path in file_list:
+            if "/" in path:
+                dir_path = path.rsplit("/", 1)[0]
+                dirs.add(dir_path.split("/")[0])
+
+        # Format repository context
+        repo_context = f"""
+========================================
+CURRENT REPOSITORY STATE FOR {repo_full_name}
+========================================
+Total Files: {total_files}
+Top-level Directories: {', '.join(sorted(dirs)) if dirs else 'None (files at root only)'}
+
+COMPLETE FILE LIST (these are the ONLY files that exist):
+"""
+        for path in sorted(file_list):
+            repo_context += f"  - {path}\n"
+
+        repo_context += """
+CRITICAL: This is the ACTUAL current state of the repository.
+- For DELETE actions: ONLY include files from this list above!
+- For MODIFY actions: ONLY include files from this list above!
+- For CREATE actions: ONLY include NEW files NOT in this list!
+- DO NOT plan to delete directories like "src/" or "docs/" - delete the individual FILES inside them!
+========================================
+"""
+
+    except Exception as e:
+        repo_context = f"""
+Warning: Could not pre-fetch repository tree: {str(e)}
+You MUST use your repository exploration tools before creating a plan!
+"""
+
     planner = Agent(
         role="Repository Refactor Planner",
-        goal="Design safe, step-by-step refactor plans for a GitHub repo.",
+        goal=(
+            "Design safe, step-by-step refactor plans for a GitHub repo "
+            "based on actual repository analysis."
+        ),
         backstory=(
-            "You are an experienced staff engineer. "
-            "You *only* propose plans. You never make changes yourself."
+            "You are an experienced staff engineer with deep expertise in repository analysis. "
+            "You have been provided with the CURRENT STATE of the repository including all files. "
+            "You MUST base your plans ONLY on the actual files listed in the repository context. "
+            "You NEVER assume files exist - you verify against the provided file list. "
+            "When users ask to delete files, you delete individual FILES, not directory names. "
+            "You can use your tools to read file contents if needed for understanding. "
+            "You *only* propose plans based on ACTUAL files that exist in the repository. "
+            "You never make changes yourself, only create detailed plans."
         ),
         llm=llm,
-        verbose=False,
+        tools=REPOSITORY_TOOLS,  # Give planner access to repository exploration tools
+        verbose=True,            # <-- enable detailed logs for debugging
         allow_delegation=False,
     )
 
     plan_task = Task(
-        description=(
-            "User goal: {goal}\n"
-            f"Repository: {repo_full_name}\n\n"
-            "You must propose a **plan only**:\n"
-            "- Break work into small ordered steps.\n"
-            "- For each step list: title, description, and files with specific actions.\n"
-            "- For each file, specify the action type:\n"
-            '  * "CREATE" - file will be created (does not exist yet)\n'
-            '  * "MODIFY" - file will be edited (already exists)\n'
-            '  * "DELETE" - file will be removed\n'
-            "- Example file entry: { \"path\": \"src/api/login.py\", \"action\": \"CREATE\" }\n"
-            "- Only JSON that matches the PlanResult schema.\n"
-            "- Do NOT actually change any files or call tools.\n"
-        ),
-        expected_output=(
-            "A structured JSON object with fields: "
-            "goal, summary, steps[] where each step has: "
-            "step_number, title, description, "
-            "files[] (array of {path: string, action: CREATE|MODIFY|DELETE}), "
-            "and optional risks."
-        ),
+        description=dedent(f"""
+            User goal: {{goal}}
+            Repository: {repo_full_name}
+
+            {repo_context}
+
+            PLANNING INSTRUCTIONS:
+            1. Review the CURRENT REPOSITORY STATE provided above carefully.
+            2. You may use your tools for additional exploration if needed:
+               - Use "Read file content" to understand what's in a file
+               - Use "Search for files by pattern" to find files by extension
+            3. Base your plan ONLY on files that exist in the repository state above.
+            4. When planning DELETE actions, ONLY include individual FILE PATHS from the list above.
+            5. When planning MODIFY actions, ONLY include FILE PATHS from the list above.
+            6. When planning CREATE actions, ONLY include NEW files NOT in the list above.
+            7. DO NOT try to delete directory names (like "src/" or "docs/") - delete the individual files!
+
+            Your FINAL ANSWER must be a single JSON object that matches exactly this schema:
+
+            {{
+              "goal": "string describing the goal",
+              "summary": "string with overall plan summary",
+              "steps": [
+                {{
+                  "step_number": 1,
+                  "title": "Step title",
+                  "description": "What this step does",
+                  "files": [
+                    {{"path": "actual/file/path.py", "action": "DELETE"}},
+                    {{"path": "another/file.md", "action": "MODIFY"}}
+                  ],
+                  "risks": "Optional risk description or null"
+                }}
+              ]
+            }}
+
+            CRITICAL JSON RULES:
+            - Output MUST be valid JSON:
+              - Double quotes around all keys and string values.
+              - No comments.
+              - No trailing commas anywhere.
+            - "action" MUST be exactly one of: "CREATE", "MODIFY", "DELETE".
+            - For DELETE or MODIFY: verify the EXACT file path exists in the repository state above.
+            - For CREATE: verify the file does NOT exist in the repository state above.
+            - "step_number" MUST be an integer starting from 1.
+            - "risks" can be either a string or null (the JSON null value, without quotes).
+            - Do NOT wrap the JSON in markdown code fences.
+            - Do NOT add any explanation before or after the JSON.
+            - The ENTIRE response MUST be ONLY the JSON object, starting with '{{' and ending with '}}'.
+
+            EXAMPLE - If user says "delete all files except README.md" and the repo state shows:
+              - README.md
+              - src/main.py
+              - src/utils.py
+              - docs/tutorial.md
+
+            Your plan should include:
+              DELETE src/main.py (actual file from list)
+              DELETE src/utils.py (actual file from list)
+              DELETE docs/tutorial.md (actual file from list)
+              MODIFY README.md (to update it as requested)
+
+            NOT:
+              DELETE src/ (this is a directory, not a file!)
+              DELETE docs/ (this is a directory, not a file!)
+        """),
+        expected_output=dedent("""
+            A single valid JSON object matching the PlanResult schema:
+            - goal: string
+            - summary: string
+            - steps: array of objects, each with:
+              - step_number: integer
+              - title: string
+              - description: string
+              - files: array of { "path": string, "action": "CREATE" | "MODIFY" | "DELETE" }
+              - risks: string or null
+            The response must contain ONLY pure JSON (no markdown, no prose, no code fences).
+            All file paths must match EXACTLY with files from the CURRENT REPOSITORY STATE provided.
+        """),
         agent=planner,
         output_pydantic=PlanResult,
     )
@@ -74,15 +193,17 @@ async def generate_plan(goal: str, repo_full_name: str) -> PlanResult:
         agents=[planner],
         tasks=[plan_task],
         process=Process.sequential,
-        verbose=False,
+        verbose=True,  # <-- see full reasoning and final JSON in logs
     )
 
     def _run():
+        # Any ValidationError here will bubble up and be visible with verbose logs
         return crew.kickoff(inputs={"goal": goal})
 
     result = await asyncio.to_thread(_run)
+
     # CrewAI returns CrewOutput with .pydantic attribute containing the PlanResult
-    if hasattr(result, 'pydantic') and result.pydantic:
+    if hasattr(result, "pydantic") and result.pydantic:
         return result.pydantic
     return result
 
@@ -98,6 +219,9 @@ async def execute_plan(plan: PlanResult, repo_full_name: str) -> dict:
     execution_steps = []
     llm = build_llm()
 
+    # Set repository context for tools (in case Code Writer needs them)
+    set_repo_context(owner, repo)
+
     # Create a Code Writer agent that generates actual content
     code_writer = Agent(
         role="Expert Code Writer",
@@ -107,9 +231,11 @@ async def execute_plan(plan: PlanResult, repo_full_name: str) -> dict:
             "You write clean, well-documented, and functional code. "
             "You understand context and generate appropriate content for each file type. "
             "For documentation files (README.md, docs, etc.), you write clear, comprehensive content. "
-            "For code files, you follow best practices and include proper comments."
+            "For code files, you follow best practices and include proper comments. "
+            "You can use repository exploration tools to understand the codebase when needed."
         ),
         llm=llm,
+        tools=REPOSITORY_TOOLS,  # Give Code Writer access to repository tools
         verbose=False,
         allow_delegation=False,
     )
@@ -126,15 +252,15 @@ async def execute_plan(plan: PlanResult, repo_full_name: str) -> dict:
                             f"Generate complete content for a new file: {file.path}\n\n"
                             f"Overall Goal: {plan.goal}\n"
                             f"Step Context: {step.description}\n\n"
-                            f"Requirements:\n"
+                            "Requirements:\n"
                             f"- Create production-ready content appropriate for {file.path}\n"
-                            f"- If it's a documentation file (.md, .txt, .rst), write comprehensive, well-structured documentation\n"
-                            f"- If it's a code file, include proper imports, comments, and follow best practices\n"
-                            f"- If it's a configuration file, include sensible defaults and comments\n"
-                            f"- Make the content complete and ready to use\n"
-                            f"- Do NOT include placeholder comments like 'TODO' or 'IMPLEMENT THIS'\n"
-                            f"- The content should be fully functional and informative\n\n"
-                            f"Return ONLY the file content, no explanations or markdown code blocks."
+                            "- If it's a documentation file (.md, .txt, .rst), write comprehensive, well-structured documentation\n"
+                            "- If it's a code file, include proper imports, comments, and follow best practices\n"
+                            "- If it's a configuration file, include sensible defaults and comments\n"
+                            "- Make the content complete and ready to use\n"
+                            "- Do NOT include placeholder comments like 'TODO' or 'IMPLEMENT THIS'\n"
+                            "- The content should be fully functional and informative\n\n"
+                            "Return ONLY the file content, no explanations or markdown code blocks."
                         ),
                         expected_output=f"Complete, production-ready content for {file.path}",
                         agent=code_writer,
@@ -149,7 +275,7 @@ async def execute_plan(plan: PlanResult, repo_full_name: str) -> dict:
                         )
                         result = crew.kickoff()
                         # Extract the raw output from CrewOutput
-                        if hasattr(result, 'raw'):
+                        if hasattr(result, "raw"):
                             return result.raw
                         return str(result)
 
@@ -186,14 +312,14 @@ async def execute_plan(plan: PlanResult, repo_full_name: str) -> dict:
                                 f"Step Context: {step.description}\n\n"
                                 f"Current File Content:\n"
                                 f"---\n{existing_content}\n---\n\n"
-                                f"Requirements:\n"
-                                f"- Make the changes described in the step context\n"
-                                f"- Preserve the existing structure and format\n"
-                                f"- For documentation: update or add relevant sections\n"
-                                f"- For code: add/modify functions, imports, or logic as needed\n"
-                                f"- Ensure the result is complete and functional\n"
-                                f"- Do NOT just add comments - make real, substantive changes\n\n"
-                                f"Return ONLY the complete modified file content, no explanations."
+                                "Requirements:\n"
+                                "- Make the changes described in the step context\n"
+                                "- Preserve the existing structure and format\n"
+                                "- For documentation: update or add relevant sections\n"
+                                "- For code: add/modify functions, imports, or logic as needed\n"
+                                "- Ensure the result is complete and functional\n"
+                                "- Do NOT just add comments - make real, substantive changes\n\n"
+                                "Return ONLY the complete modified file content, no explanations."
                             ),
                             expected_output=f"Complete, modified content for {file.path}",
                             agent=code_writer,
@@ -207,7 +333,7 @@ async def execute_plan(plan: PlanResult, repo_full_name: str) -> dict:
                                 verbose=False,
                             )
                             result = crew.kickoff()
-                            if hasattr(result, 'raw'):
+                            if hasattr(result, "raw"):
                                 return result.raw
                             return str(result)
 
@@ -276,31 +402,31 @@ async def get_flow_definition() -> dict:
                 "id": "repo_reader",
                 "label": "Repository Reader",
                 "type": "agent",
-                "description": "Analyzes repository structure and codebase"
+                "description": "Analyzes repository structure and codebase",
             },
             {
                 "id": "planner",
                 "label": "Refactor Planner",
                 "type": "agent",
-                "description": "Creates safe, step-by-step refactor plans"
+                "description": "Creates safe, step-by-step refactor plans",
             },
             {
                 "id": "code_writer",
                 "label": "Code Writer",
                 "type": "agent",
-                "description": "Implements approved changes to codebase"
+                "description": "Implements approved changes to codebase",
             },
             {
                 "id": "reviewer",
                 "label": "Code Reviewer",
                 "type": "agent",
-                "description": "Reviews changes for quality and safety"
+                "description": "Reviews changes for quality and safety",
             },
             {
                 "id": "github_tools",
                 "label": "GitHub API",
                 "type": "tool",
-                "description": "Read/write files, create commits & PRs"
+                "description": "Read/write files, create commits & PRs",
             },
         ],
         "edges": [
