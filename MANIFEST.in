@@ -1,0 +1,15 @@
+# MANIFEST.in - Specify additional files to include in the distribution
+
+# Include documentation
+include README.md
+include FRONTEND_CODE_REFERENCE.md
+include LICENSE
+
+# Include the built frontend assets
+recursive-include gitpilot/web *
+
+# Exclude development and cache files
+global-exclude *.py[cod]
+global-exclude __pycache__
+global-exclude *.so
+global-exclude .DS_Store

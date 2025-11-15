@@ -1,0 +1,105 @@
+# Makefile - GitPilot
+# Backend (Python, uv) + Frontend (React/Vite)
+
+.DEFAULT_GOAL := install
+
+UV      ?= uv
+PYTHON  ?= python3.11
+PORT    ?= 8000
+
+.PHONY: help install uv-install frontend-install frontend-build \
+        dev run test lint fmt build publish-test publish clean
+
+## Show available targets
+help:
+	@echo ""
+	@echo "GitPilot Make targets"
+	@echo "---------------------"
+	@echo "  make install         Install backend (uv) + frontend (npm install)"
+	@echo "  make uv-install      Create/refresh Python env and install deps via uv"
+	@echo "  make frontend-install Install frontend npm dependencies"
+	@echo "  make frontend-build  Build React/Vite frontend into gitpilot/web"
+	@echo "  make dev             Alias for install"
+	@echo "  make run             Run GitPilot server via uv (opens UI on localhost)"
+	@echo "  make test            Run tests with pytest via uv"
+	@echo "  make lint            Lint codebase with ruff via uv"
+	@echo "  make fmt             Format codebase with ruff via uv"
+	@echo "  make build           Build wheel and sdist (includes built frontend)"
+	@echo "  make publish-test    Upload distribution to TestPyPI with twine via uv"
+	@echo "  make publish         Upload distribution to PyPI with twine via uv"
+	@echo "  make clean           Remove build artifacts and cache directories"
+	@echo ""
+
+## High-level install: backend + frontend
+install: uv-install frontend-install
+	@echo "✅ Backend (uv) and frontend (npm) dependencies installed."
+
+## Create / sync the environment with uv (all extras)
+uv-install:
+	@echo "🔧 Syncing Python environment with uv (all extras)..."
+	@$(UV) sync --all-extras
+	@echo "✅ Python environment ready."
+
+## Install frontend dependencies
+frontend-install:
+	@echo "📦 Installing frontend dependencies (npm)..."
+	@cd frontend && npm install
+	@echo "✅ Frontend dependencies installed."
+
+## Build the React/Vite frontend and copy dist -> gitpilot/web
+frontend-build: frontend-install
+	@echo "🛠  Building frontend (Vite)..."
+	@cd frontend && npm run build
+	@echo "📂 Copying frontend/dist into gitpilot/web..."
+	@$(PYTHON) -c "import shutil, pathlib; src = pathlib.Path('frontend')/'dist'; dst = pathlib.Path('gitpilot')/'web'; shutil.rmtree(dst, ignore_errors=True); shutil.copytree(src, dst)"
+	@echo "✅ Frontend build complete (gitpilot/web)."
+
+## Developer convenience alias
+dev: install
+
+## Run GitPilot from the uv-managed environment
+run:
+	@echo "🚀 Starting GitPilot on http://127.0.0.1:$(PORT)..."
+	@$(UV) run gitpilot serve --host 127.0.0.1 --port $(PORT)
+
+## Run tests
+test:
+	@echo "🧪 Running tests with pytest..."
+	@$(UV) run pytest
+
+## Lint code
+lint:
+	@echo "🔍 Linting with ruff..."
+	@$(UV) run ruff check gitpilot
+
+## Format code
+fmt:
+	@echo "🎨 Formatting with ruff..."
+	@$(UV) run ruff format gitpilot
+
+## Build wheel + sdist (includes built frontend)
+build: frontend-build
+	@echo "📦 Building distribution (wheel + sdist)..."
+	@$(UV) run $(PYTHON) -m build
+	@echo "✅ Build artifacts are in ./dist"
+
+## Upload to TestPyPI
+publish-test:
+	@echo "🚚 Uploading to TestPyPI..."
+	@$(UV) run twine upload -r testpypi dist/*
+	@echo "✅ Uploaded to TestPyPI"
+
+## Upload to PyPI
+publish:
+	@echo "🚀 Uploading to PyPI..."
+	@$(UV) run twine upload dist/*
+	@echo "✅ Uploaded to PyPI"
+
+## Clean build artifacts and caches (cross-platform)
+clean:
+	@echo "🧹 Cleaning build artifacts and caches..."
+	@$(PYTHON) -c "import shutil, pathlib; \
+paths = ['build', 'dist', '.pytest_cache', '.ruff_cache']; \
+[shutil.rmtree(p, ignore_errors=True) for p in paths]; \
+[shutil.rmtree(p, ignore_errors=True) for p in pathlib.Path('.').glob('*.egg-info')]"
+	@echo "✅ Clean complete"
