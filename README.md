@@ -550,6 +550,10 @@ make publish
 
 ![](assets/2025-11-16-00-25-49.png)
 
+# Example of genertion of content
+
+![](assets/2025-11-16-00-29-47.png)
+
 
 ---
 
