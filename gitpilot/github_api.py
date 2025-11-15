@@ -130,3 +130,49 @@ async def put_file(
         "commit_sha": commit.get("sha", ""),
         "commit_url": commit.get("html_url"),
     }
+
+
+async def delete_file(
+    owner: str,
+    repo: str,
+    path: str,
+    message: str,
+) -> dict[str, Any]:
+    """Delete a file from the repository.
+
+    Args:
+        owner: Repository owner
+        repo: Repository name
+        path: Path to the file to delete
+        message: Commit message for the deletion
+
+    Returns:
+        Dictionary with deletion details including commit info
+    """
+    # Get current file SHA (required for deletion)
+    existing = await github_request(f"/repos/{owner}/{repo}/contents/{path}")
+    sha = existing.get("sha")
+
+    if not sha:
+        raise HTTPException(
+            status_code=404,
+            detail=f"File {path} not found or has no SHA"
+        )
+
+    # Delete the file
+    body = {
+        "message": message,
+        "sha": sha,
+    }
+    result = await github_request(
+        f"/repos/{owner}/{repo}/contents/{path}",
+        method="DELETE",
+        json=body,
+    )
+
+    commit = result.get("commit", {})
+    return {
+        "path": path,
+        "commit_sha": commit.get("sha", ""),
+        "commit_url": commit.get("html_url"),
+    }
