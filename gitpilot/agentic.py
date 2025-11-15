@@ -360,24 +360,18 @@ async def execute_plan(plan: PlanResult, repo_full_name: str) -> dict:
                         step_summary += f"\n  ✗ Failed to modify {file.path}: {str(e)}"
 
                 elif file.action == "DELETE":
-                    # For safety, we add a deprecation comment instead of deleting
+                    # Actually delete the file from the repository
+                    from .github_api import delete_file
                     try:
-                        existing_content = await get_file(owner, repo, file.path)
-                        deprecated_content = (
-                            f"# DEPRECATED by GitPilot - Step {step.step_number}\n"
-                            f"# This file is marked for deletion\n\n"
-                            + existing_content
-                        )
-                        await put_file(
+                        await delete_file(
                             owner,
                             repo,
                             file.path,
-                            deprecated_content,
-                            f"GitPilot: Mark {file.path} for deletion - {step.title}",
+                            f"GitPilot: Delete {file.path} - {step.title}",
                         )
-                        step_summary += f"\n  ✓ Marked {file.path} for deletion"
+                        step_summary += f"\n  ✓ Deleted {file.path}"
                     except Exception as e:
-                        step_summary += f"\n  ✗ Failed to mark {file.path} for deletion: {str(e)}"
+                        step_summary += f"\n  ✗ Failed to delete {file.path}: {str(e)}"
 
             except Exception as e:
                 step_summary += f"\n  ✗ Error processing {file.path}: {str(e)}"

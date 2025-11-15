@@ -546,6 +546,11 @@ make publish-test
 make publish
 ```
 
+# Example of deletion of files
+
+![](assets/2025-11-16-00-25-49.png)
+
+
 ---
 
 ## 🤝 Contributing
