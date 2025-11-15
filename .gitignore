@@ -1,0 +1,121 @@
+# ------------------------------------------------------------------------------
+# GitPilot .gitignore
+# Python 3.11 + uv + FastAPI + React UI (static) + common IDEs
+# ------------------------------------------------------------------------------
+
+# -----------------
+# Python artifacts
+# -----------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Byte-compiled / optimized / DLL files
+*.pyd
+*.so
+*.dylib
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+.Python
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+.coverage
+.coverage.*
+.cache
+.nox/
+.pytest_cache/
+htmlcov/
+.tox/
+
+# Type checker / linter caches
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.dmypy.json
+.dmypy/
+
+# Jupyter & IPython
+.ipynb_checkpoints/
+profile_default/
+ipython_config.py
+
+# -----------------
+# Node / Frontend
+# -----------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.tsbuildinfo
+*.log
+
+# If you build a separate UI bundle with a Node toolchain:
+ui/build/
+ui/dist/
+ui/.turbo/
+ui/.parcel-cache/
+ui/.vite/
+
+# -----------------
+# Editor / IDE
+# -----------------
+.vscode/
+.vscode-test/
+.idea/
+*.swp
+*.swo
+*.orig
+
+# OS files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# -----------------
+# uv & misc tools
+# -----------------
+# uv will create .venv at project root by default (covered above)
+.uv/
+uv.lock.old
+
+# Local environment files
+.env
+.env.*
+!.env.template
+*.local
+
+# -----------------
+# Project-specific
+# -----------------
+# If you generate any temporary scratch or examples, ignore them here:
+scratch/
+tmp/
+uv.lock
+
+# GitPilot runtime config
+.gitpilot/
+config.json
+
+# PyPI credentials
+.pypirc
+
+# Frontend build artifacts (source - we keep gitpilot/web/ for packaging)
+frontend/dist/
+frontend/.vite/
