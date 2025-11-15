@@ -8,26 +8,27 @@ PYTHON  ?= python3.11
 PORT    ?= 8000
 
 .PHONY: help install uv-install frontend-install frontend-build \
-        dev run test lint fmt build publish-test publish clean
+        dev run test lint fmt build publish-test publish clean stop
 
 ## Show available targets
 help:
 	@echo ""
 	@echo "GitPilot Make targets"
 	@echo "---------------------"
-	@echo "  make install         Install backend (uv) + frontend (npm install)"
-	@echo "  make uv-install      Create/refresh Python env and install deps via uv"
+	@echo "  make install          Install backend (uv) + frontend (npm install)"
+	@echo "  make uv-install       Create/refresh Python env and install deps via uv"
 	@echo "  make frontend-install Install frontend npm dependencies"
-	@echo "  make frontend-build  Build React/Vite frontend into gitpilot/web"
-	@echo "  make dev             Alias for install"
-	@echo "  make run             Run GitPilot backend + frontend dev server"
-	@echo "  make test            Run tests with pytest via uv"
-	@echo "  make lint            Lint codebase with ruff via uv"
-	@echo "  make fmt             Format codebase with ruff via uv"
-	@echo "  make build           Build wheel and sdist (includes built frontend)"
-	@echo "  make publish-test    Upload distribution to TestPyPI with twine via uv"
-	@echo "  make publish         Upload distribution to PyPI with twine via uv"
-	@echo "  make clean           Remove build artifacts and cache directories"
+	@echo "  make frontend-build   Build React/Vite frontend into gitpilot/web"
+	@echo "  make dev              Alias for install"
+	@echo "  make run              Run GitPilot backend + frontend dev server"
+	@echo "  make stop             Stop all processes on ports 8000 and 5173"
+	@echo "  make test             Run tests with pytest via uv"
+	@echo "  make lint             Lint codebase with ruff via uv"
+	@echo "  make fmt              Format codebase with ruff via uv"
+	@echo "  make build            Build wheel and sdist (includes built frontend)"
+	@echo "  make publish-test     Upload distribution to TestPyPI with twine via uv"
+	@echo "  make publish          Upload distribution to PyPI with twine via uv"
+	@echo "  make clean            Remove build artifacts and cache directories"
 	@echo ""
 
 ## High-level install: backend + frontend
@@ -64,6 +65,31 @@ run:
 	@trap 'kill 0' EXIT; \
 	$(UV) run gitpilot serve --host 127.0.0.1 --port $(PORT) & \
 	cd frontend && npm run dev
+
+## Stop all running processes (ports 8000 and 5173)
+stop:
+	@echo "🛑 Attempting to stop processes on ports $(PORT) and 5173..."
+
+	@# Stop anything on backend port $(PORT)
+	@pids=$$(sudo lsof -t -i:$(PORT) -sTCP:LISTEN); \
+	if [ -n "$$pids" ]; then \
+		echo "Killing $$pids on port $(PORT)..."; \
+		sudo kill -9 $$pids; \
+	else \
+		echo "No process found on port $(PORT)."; \
+	fi
+
+	@# Stop anything on frontend port 5173
+	@pids=$$(sudo lsof -t -i:5173 -sTCP:LISTEN); \
+	if [ -n "$$pids" ]; then \
+		echo "Killing $$pids on port 5173..."; \
+		sudo kill -9 $$pids; \
+	else \
+		echo "No process found on port 5173."; \
+	fi
+
+	@echo "✅ Stop attempt complete."
+
 
 ## Run tests
 test:

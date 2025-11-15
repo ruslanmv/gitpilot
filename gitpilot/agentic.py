@@ -96,6 +96,23 @@ async def execute_plan(plan: PlanResult, repo_full_name: str) -> dict:
 
     owner, repo = repo_full_name.split("/")
     execution_steps = []
+    llm = build_llm()
+
+    # Create a Code Writer agent that generates actual content
+    code_writer = Agent(
+        role="Expert Code Writer",
+        goal="Generate high-quality, production-ready code and documentation based on requirements.",
+        backstory=(
+            "You are a senior software engineer with expertise in multiple programming languages. "
+            "You write clean, well-documented, and functional code. "
+            "You understand context and generate appropriate content for each file type. "
+            "For documentation files (README.md, docs, etc.), you write clear, comprehensive content. "
+            "For code files, you follow best practices and include proper comments."
+        ),
+        llm=llm,
+        verbose=False,
+        allow_delegation=False,
+    )
 
     for step in plan.steps:
         step_summary = f"Step {step.step_number}: {step.title}"
@@ -103,31 +120,114 @@ async def execute_plan(plan: PlanResult, repo_full_name: str) -> dict:
         for file in step.files:
             try:
                 if file.action == "CREATE":
-                    # Create a new file with placeholder content
-                    content = f"# File created by GitPilot\n# TODO: Implement {file.path}\n"
+                    # Use LLM to generate appropriate content for the new file
+                    create_task = Task(
+                        description=(
+                            f"Generate complete content for a new file: {file.path}\n\n"
+                            f"Overall Goal: {plan.goal}\n"
+                            f"Step Context: {step.description}\n\n"
+                            f"Requirements:\n"
+                            f"- Create production-ready content appropriate for {file.path}\n"
+                            f"- If it's a documentation file (.md, .txt, .rst), write comprehensive, well-structured documentation\n"
+                            f"- If it's a code file, include proper imports, comments, and follow best practices\n"
+                            f"- If it's a configuration file, include sensible defaults and comments\n"
+                            f"- Make the content complete and ready to use\n"
+                            f"- Do NOT include placeholder comments like 'TODO' or 'IMPLEMENT THIS'\n"
+                            f"- The content should be fully functional and informative\n\n"
+                            f"Return ONLY the file content, no explanations or markdown code blocks."
+                        ),
+                        expected_output=f"Complete, production-ready content for {file.path}",
+                        agent=code_writer,
+                    )
+
+                    def _create():
+                        crew = Crew(
+                            agents=[code_writer],
+                            tasks=[create_task],
+                            process=Process.sequential,
+                            verbose=False,
+                        )
+                        result = crew.kickoff()
+                        # Extract the raw output from CrewOutput
+                        if hasattr(result, 'raw'):
+                            return result.raw
+                        return str(result)
+
+                    content = await asyncio.to_thread(_create)
+
+                    # Clean up any markdown code blocks that might be included
+                    content = content.strip()
+                    if content.startswith("```"):
+                        lines = content.split("\n")
+                        # Remove first line (```language) and last line (```)
+                        if lines[-1].strip() == "```":
+                            content = "\n".join(lines[1:-1])
+                        else:
+                            content = "\n".join(lines[1:])
+
                     await put_file(
                         owner,
                         repo,
                         file.path,
                         content,
-                        f"GitPilot: Create {file.path} (Step {step.step_number})",
+                        f"GitPilot: Create {file.path} - {step.title}",
                     )
                     step_summary += f"\n  ✓ Created {file.path}"
 
                 elif file.action == "MODIFY":
-                    # Modify existing file by appending a comment
+                    # Use LLM to intelligently modify the existing file
                     try:
                         existing_content = await get_file(owner, repo, file.path)
-                        modified_content = (
-                            existing_content
-                            + f"\n# Modified by GitPilot - Step {step.step_number}: {step.title}\n"
+
+                        modify_task = Task(
+                            description=(
+                                f"Modify the existing file: {file.path}\n\n"
+                                f"Overall Goal: {plan.goal}\n"
+                                f"Step Context: {step.description}\n\n"
+                                f"Current File Content:\n"
+                                f"---\n{existing_content}\n---\n\n"
+                                f"Requirements:\n"
+                                f"- Make the changes described in the step context\n"
+                                f"- Preserve the existing structure and format\n"
+                                f"- For documentation: update or add relevant sections\n"
+                                f"- For code: add/modify functions, imports, or logic as needed\n"
+                                f"- Ensure the result is complete and functional\n"
+                                f"- Do NOT just add comments - make real, substantive changes\n\n"
+                                f"Return ONLY the complete modified file content, no explanations."
+                            ),
+                            expected_output=f"Complete, modified content for {file.path}",
+                            agent=code_writer,
                         )
+
+                        def _modify():
+                            crew = Crew(
+                                agents=[code_writer],
+                                tasks=[modify_task],
+                                process=Process.sequential,
+                                verbose=False,
+                            )
+                            result = crew.kickoff()
+                            if hasattr(result, 'raw'):
+                                return result.raw
+                            return str(result)
+
+                        modified_content = await asyncio.to_thread(_modify)
+
+                        # Clean up any markdown code blocks
+                        modified_content = modified_content.strip()
+                        if modified_content.startswith("```"):
+                            lines = modified_content.split("\n")
+                            if lines[-1].strip() == "```":
+                                modified_content = "\n".join(lines[1:-1])
+                            else:
+                                modified_content = "\n".join(lines[1:])
+
                         await put_file(
                             owner,
                             repo,
                             file.path,
                             modified_content,
-                            f"GitPilot: Modify {file.path} (Step {step.step_number})",
+                            f"GitPilot: Modify {file.path} - {step.title}",
                         )
                         step_summary += f"\n  ✓ Modified {file.path}"
                     except Exception as e:
@@ -147,7 +247,7 @@ async def execute_plan(plan: PlanResult, repo_full_name: str) -> dict:
                             repo,
                             file.path,
                             deprecated_content,
-                            f"GitPilot: Mark {file.path} for deletion (Step {step.step_number})",
+                            f"GitPilot: Mark {file.path} for deletion - {step.title}",
                         )
                         step_summary += f"\n  ✓ Marked {file.path} for deletion"
                     except Exception as e:

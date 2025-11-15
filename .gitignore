@@ -119,3 +119,8 @@ config.json
 # Frontend build artifacts (source - we keep gitpilot/web/ for packaging)
 frontend/dist/
 frontend/.vite/
+ copy *.*
+* copy *.*
+* copy *
+* copy
+* copy*.*
