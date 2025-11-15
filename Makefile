@@ -20,7 +20,7 @@ help:
 	@echo "  make frontend-install Install frontend npm dependencies"
 	@echo "  make frontend-build  Build React/Vite frontend into gitpilot/web"
 	@echo "  make dev             Alias for install"
-	@echo "  make run             Run GitPilot server via uv (opens UI on localhost)"
+	@echo "  make run             Run GitPilot backend + frontend dev server"
 	@echo "  make test            Run tests with pytest via uv"
 	@echo "  make lint            Lint codebase with ruff via uv"
 	@echo "  make fmt             Format codebase with ruff via uv"
@@ -57,10 +57,13 @@ frontend-build: frontend-install
 ## Developer convenience alias
 dev: install
 
-## Run GitPilot from the uv-managed environment
+## Run GitPilot from the uv-managed environment (backend + frontend)
 run:
-	@echo "🚀 Starting GitPilot on http://127.0.0.1:$(PORT)..."
-	@$(UV) run gitpilot serve --host 127.0.0.1 --port $(PORT)
+	@echo "🚀 Starting GitPilot backend on http://127.0.0.1:$(PORT)..."
+	@echo "🎨 Starting frontend dev server on http://localhost:5173..."
+	@trap 'kill 0' EXIT; \
+	$(UV) run gitpilot serve --host 127.0.0.1 --port $(PORT) & \
+	cd frontend && npm run dev
 
 ## Run tests
 test:

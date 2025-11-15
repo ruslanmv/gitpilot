@@ -14,9 +14,10 @@
 
 body {
   margin: 0;
+  overflow: hidden;
 }
 
-/* Custom scrollbar styling */
+/* Custom scrollbar styling - Claude Code style */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -29,21 +30,32 @@ body {
 ::-webkit-scrollbar-thumb {
   background: #272832;
   border-radius: 4px;
+  transition: background 0.2s ease;
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background: #3a3b4d;
 }
 
+/* App Root - Fixed height with footer accommodation */
 .app-root {
   display: flex;
+  flex-direction: column;
   height: 100vh;
   background: radial-gradient(circle at top, #171823 0, #050608 55%);
   color: #f5f5f7;
+  overflow: hidden;
+}
+
+/* Main content wrapper (sidebar + workspace) */
+.main-wrapper {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* Sidebar */
-
 .sidebar {
   width: 320px;
   padding: 16px 14px;
@@ -52,12 +64,26 @@ body {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .logo-row {
   display: flex;
   align-items: center;
   gap: 10px;
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .logo-square {
@@ -70,6 +96,11 @@ body {
   justify-content: center;
   font-weight: 700;
   color: #050608;
+  transition: transform 0.2s ease;
+}
+
+.logo-square:hover {
+  transform: scale(1.05);
 }
 
 .logo-title {
@@ -87,6 +118,18 @@ body {
   border-radius: 10px;
   background: #151622;
   border: 1px solid #272832;
+  animation: slideIn 0.3s ease;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .sidebar-repo-name {
@@ -109,14 +152,15 @@ body {
   padding: 8px 10px;
   cursor: pointer;
   font-size: 13px;
+  transition: all 0.2s ease;
 }
 
 .settings-button:hover {
   background: #222335;
+  transform: translateY(-1px);
 }
 
 /* Repo search */
-
 .repo-search-box {
   border-radius: 12px;
   background: #101117;
@@ -134,6 +178,13 @@ body {
   background: #050608;
   color: #f5f5f7;
   font-size: 13px;
+  transition: all 0.2s ease;
+}
+
+.repo-search-input:focus {
+  outline: none;
+  border-color: #ff7a3c;
+  background: #0a0b0f;
 }
 
 .repo-search-input::placeholder {
@@ -154,10 +205,12 @@ body {
   color: #f5f5f7;
   cursor: pointer;
   font-size: 13px;
+  transition: all 0.2s ease;
 }
 
 .repo-search-btn:hover {
   background: #222335;
+  transform: translateY(-1px);
 }
 
 .repo-list {
@@ -178,10 +231,12 @@ body {
   cursor: pointer;
   display: flex;
   flex-direction: column;
+  transition: all 0.15s ease;
 }
 
 .repo-item:hover {
   background: #1a1b26;
+  transform: translateX(2px);
 }
 
 .repo-name {
@@ -200,12 +255,13 @@ body {
 }
 
 /* Workspace */
-
 .workspace {
   flex: 1;
   display: flex;
   flex-direction: column;
   position: relative;
+  overflow: hidden;
+  min-height: 0;
 }
 
 .empty-state {
@@ -213,11 +269,22 @@ body {
   max-width: 420px;
   text-align: center;
   color: #c3c5dd;
+  animation: fadeIn 0.5s ease;
 }
 
 .empty-bot {
   font-size: 36px;
   margin-bottom: 12px;
+  animation: bounce 2s ease infinite;
+}
+
+@keyframes bounce {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
 }
 
 .empty-state h1 {
@@ -230,15 +297,17 @@ body {
   color: #9a9bb0;
 }
 
-/* Panels */
-
+/* Workspace grid - Properly constrained */
 .workspace-grid {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: 320px minmax(0, 1fr);
   height: 100%;
   overflow: hidden;
+  flex: 1;
+  min-height: 0;
 }
 
+/* Panels */
 .panel-header {
   height: 40px;
   padding: 0 16px;
@@ -261,18 +330,20 @@ body {
 }
 
 /* Files */
-
 .files-panel {
   border-right: 1px solid #272832;
   background: #101117;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .files-list {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 6px 4px;
+  min-height: 0;
 }
 
 .files-item {
@@ -288,10 +359,12 @@ body {
   border-radius: 6px;
   cursor: pointer;
   font-size: 12px;
+  transition: all 0.15s ease;
 }
 
 .files-item:hover {
   background: #1a1b26;
+  transform: translateX(2px);
 }
 
 .files-item-active {
@@ -300,6 +373,7 @@ body {
 
 .file-icon {
   width: 16px;
+  flex-shrink: 0;
 }
 
 .file-path {
@@ -315,7 +389,6 @@ body {
 }
 
 /* Chat panel */
-
 .editor-panel {
   display: flex;
   flex-direction: column;
@@ -325,7 +398,8 @@ body {
 .chat-container {
   display: flex;
   flex-direction: column;
-  height: calc(100% - 40px); /* Subtract panel header height */
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -335,7 +409,7 @@ body {
   overflow-y: auto;
   overflow-x: hidden;
   font-size: 13px;
-  min-height: 0; /* Important for flexbox scrolling */
+  min-height: 0;
   scroll-behavior: smooth;
 }
 
@@ -344,10 +418,34 @@ body {
   text-align: right;
   display: flex;
   justify-content: flex-end;
+  animation: slideInRight 0.3s ease;
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .chat-message-ai {
   margin-bottom: 16px;
+  animation: slideInLeft 0.3s ease;
+}
+
+@keyframes slideInLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .chat-message-user span,
@@ -383,6 +481,16 @@ body {
   font-size: 48px;
   margin-bottom: 16px;
   opacity: 0.6;
+  animation: pulse 2s ease infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 0.8;
+  }
 }
 
 .chat-empty-state p {
@@ -399,7 +507,7 @@ body {
   flex-direction: column;
   gap: 10px;
   background: #050608;
-  flex-shrink: 0; /* Prevent shrinking */
+  flex-shrink: 0;
   min-height: fit-content;
   box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.3);
 }
@@ -421,13 +529,14 @@ body {
   color: #f5f5f7;
   font-size: 13px;
   line-height: 1.5;
-  transition: border-color 0.2s, background 0.2s;
+  transition: all 0.2s ease;
 }
 
 .chat-input:focus {
   outline: none;
   border-color: #ff7a3c;
   background: #101117;
+  box-shadow: 0 0 0 3px rgba(255, 122, 60, 0.1);
 }
 
 .chat-input::placeholder {
@@ -444,7 +553,7 @@ body {
   cursor: pointer;
   font-size: 13px;
   font-weight: 600;
-  transition: background 0.2s, transform 0.1s;
+  transition: all 0.2s ease;
   white-space: nowrap;
   min-height: 40px;
 }
@@ -452,6 +561,7 @@ body {
 .chat-btn:hover:not(:disabled) {
   background: #ff8c52;
   transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(255, 122, 60, 0.3);
 }
 
 .chat-btn:active:not(:disabled) {
@@ -475,13 +585,13 @@ body {
 }
 
 /* Plan rendering */
-
 .plan-card {
   border-radius: 12px;
   background: #101117;
   border: 1px solid #272832;
   padding: 10px 12px;
   margin-top: 6px;
+  animation: fadeIn 0.3s ease;
 }
 
 .plan-steps {
@@ -495,7 +605,6 @@ body {
 }
 
 /* Modal */
-
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -504,6 +613,7 @@ body {
   align-items: center;
   justify-content: center;
   z-index: 20;
+  animation: fadeIn 0.2s ease;
 }
 
 .modal {
@@ -512,6 +622,18 @@ body {
   border: 1px solid #272832;
   padding: 16px 18px;
   width: 360px;
+  animation: scaleIn 0.3s ease;
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .modal-header {
@@ -532,6 +654,11 @@ body {
   background: transparent;
   color: #9a9bb0;
   cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+.modal-close:hover {
+  color: #ff7a3c;
 }
 
 .provider-list {
@@ -550,10 +677,16 @@ body {
   background: #151622;
   border: 1px solid #272832;
   font-size: 13px;
+  transition: all 0.2s ease;
+}
+
+.provider-item:hover {
+  border-color: #3a3b4d;
 }
 
 .provider-item.active {
   border-color: #ff7a3c;
+  background: rgba(255, 122, 60, 0.1);
 }
 
 .provider-name {
@@ -566,7 +699,6 @@ body {
 }
 
 /* Navigation */
-
 .main-nav {
   display: flex;
   flex-direction: column;
@@ -585,11 +717,12 @@ body {
   padding: 8px 10px;
   text-align: left;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.2s ease;
 }
 
 .nav-btn:hover {
   background: #1a1b26;
+  transform: translateX(2px);
 }
 
 .nav-btn-active {
@@ -599,7 +732,6 @@ body {
 }
 
 /* Settings page */
-
 .settings-root {
   padding: 20px 24px;
   overflow-y: auto;
@@ -628,6 +760,11 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  transition: all 0.2s ease;
+}
+
+.settings-card:hover {
+  border-color: #3a3b4d;
 }
 
 .settings-title {
@@ -652,13 +789,14 @@ body {
   color: #f5f5f7;
   font-size: 13px;
   font-family: inherit;
-  transition: border-color 0.2s;
+  transition: all 0.2s ease;
 }
 
 .settings-input:focus,
 .settings-select:focus {
   outline: none;
   border-color: #ff7a3c;
+  box-shadow: 0 0 0 3px rgba(255, 122, 60, 0.1);
 }
 
 .settings-input::placeholder {
@@ -688,12 +826,13 @@ body {
   cursor: pointer;
   color: #050608;
   font-weight: 600;
-  transition: all 0.2s;
+  transition: all 0.2s ease;
 }
 
 .settings-save-btn:hover {
   background: #ff8b52;
   transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(255, 122, 60, 0.3);
 }
 
 .settings-save-btn:disabled {
@@ -715,7 +854,6 @@ body {
 }
 
 /* Flow viewer */
-
 .flow-root {
   display: flex;
   flex-direction: column;
@@ -771,13 +909,13 @@ body {
 }
 
 /* Assistant Message Sections */
-
 .gp-section {
   margin-bottom: 16px;
   border-radius: 12px;
   background: #101117;
   border: 1px solid #272832;
   overflow: hidden;
+  animation: fadeIn 0.3s ease;
 }
 
 .gp-section-header {
@@ -809,7 +947,6 @@ body {
 }
 
 /* Plan View Enhanced */
-
 .plan-header {
   margin-bottom: 12px;
 }
@@ -839,6 +976,7 @@ body {
   border-radius: 6px;
   font-size: 11px;
   font-weight: 500;
+  animation: fadeIn 0.3s ease;
 }
 
 .plan-total-create {
@@ -945,7 +1083,6 @@ body {
 }
 
 /* Execution Log */
-
 .execution-steps {
   list-style: none;
   padding: 0;
@@ -972,8 +1109,7 @@ body {
   color: #c3c5dd;
 }
 
-/* Project Context Panel */
-
+/* Project Context Panel - Properly constrained */
 .gp-context {
   padding: 12px;
   height: 100%;
@@ -985,6 +1121,9 @@ body {
 .gp-context-column {
   background: #0a0b0f;
   border-right: 1px solid #272832;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .gp-chat-column {
@@ -1003,6 +1142,7 @@ body {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
 }
 
 .gp-card-header {
@@ -1012,6 +1152,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-shrink: 0;
 }
 
 .gp-card-header h2 {
@@ -1029,6 +1170,11 @@ body {
   font-size: 11px;
   color: #c3c5dd;
   font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.gp-badge:hover {
+  border-color: #ff7a3c;
 }
 
 .gp-context-meta {
@@ -1038,6 +1184,7 @@ body {
   gap: 6px;
   border-bottom: 1px solid #272832;
   flex-shrink: 0;
+  background: #0a0b0f;
 }
 
 .gp-context-meta-item {
@@ -1057,11 +1204,13 @@ body {
   font-weight: 500;
 }
 
+/* File tree - Properly scrollable */
 .gp-context-tree {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
   min-height: 0;
+  padding: 4px;
 }
 
 .gp-context-empty {
@@ -1071,23 +1220,12 @@ body {
   font-size: 12px;
 }
 
-/* Footer */
-
-.app-root {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-}
-
-.workspace {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  position: relative;
-  overflow: hidden;
-}
-
+/* Footer - Fixed at bottom */
 .gp-footer {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
   border-top: 1px solid #272832;
   padding: 8px 20px;
   display: flex;
@@ -1096,6 +1234,9 @@ body {
   font-size: 11px;
   color: #9a9bb0;
   background: #0a0b0f;
+  backdrop-filter: blur(10px);
+  z-index: 10;
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.2);
 }
 
 .gp-footer-left {
@@ -1115,18 +1256,15 @@ body {
 .gp-footer-right a {
   color: #9a9bb0;
   text-decoration: none;
-  transition: color 0.2s;
+  transition: all 0.2s ease;
 }
 
 .gp-footer-right a:hover {
   color: #ff7a3c;
+  transform: translateY(-1px);
 }
 
-/* Workspace grid update */
-
-.workspace-grid {
-  display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
-  height: 100%;
-  overflow: hidden;
+/* Adjust app-root to account for fixed footer */
+.app-root > .main-wrapper {
+  padding-bottom: 32px; /* Space for fixed footer */
 }
