@@ -322,6 +322,30 @@ body {
   color: #7f8091;
 }
 
+.github-logout-btn {
+  margin-top: 10px;
+  padding: 6px 14px;
+  background: #1a1b26;
+  color: #ff7a3c;
+  border: 1px solid #272832;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  width: 100%;
+}
+
+.github-logout-btn:hover:not(:disabled) {
+  background: #222335;
+  border-color: #ff7a3c;
+}
+
+.github-logout-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .github-connect-message {
   margin: 8px 0 0;
   padding: 6px 8px;
@@ -1448,75 +1472,93 @@ body {
 
 .setup-wizard-container {
   width: 90%;
-  max-width: 600px;
+  max-width: 520px;
   max-height: 90vh;
   overflow-y: auto;
   background: #101117;
   border-radius: 16px;
   border: 1px solid #272832;
-  padding: 32px;
+  padding: 40px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
   animation: scaleIn 0.3s ease;
 }
 
-/* Progress Bar */
+/* Progress */
+.setup-progress {
+  margin-bottom: 40px;
+}
+
 .setup-progress-bar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  margin-bottom: 32px;
-}
-
-.setup-progress-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
+  height: 4px;
   background: #272832;
-  border: 2px solid #3a3b4d;
-  transition: all 0.3s ease;
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 8px;
 }
 
-.setup-progress-dot.active {
-  background: #ff7a3c;
-  border-color: #ff7a3c;
-  box-shadow: 0 0 12px rgba(255, 122, 60, 0.4);
+.setup-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #ff7a3c, #ff8c52);
+  transition: width 0.3s ease;
 }
 
-.setup-progress-dot.completed {
-  background: #50ffa3;
-  border-color: #50ffa3;
+.setup-progress-text {
+  text-align: center;
+  font-size: 12px;
+  color: #7f8091;
+  font-weight: 500;
 }
 
 /* Setup Step */
-.setup-wizard-content {
-  min-height: 400px;
-}
-
 .setup-step {
   animation: slideInLeft 0.3s ease;
 }
 
-.setup-step-icon {
-  font-size: 48px;
+.setup-icon {
+  font-size: 56px;
   text-align: center;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
 }
 
-.setup-step-title {
+.setup-title {
   font-size: 28px;
   font-weight: 600;
   text-align: center;
-  margin: 0 0 8px;
+  margin: 0 0 12px;
   color: #f5f5f7;
 }
 
-.setup-step-description {
+.setup-description {
   font-size: 15px;
   color: #9a9bb0;
   text-align: center;
-  margin: 0 0 24px;
-  line-height: 1.6;
+  margin: 0 0 32px;
+  line-height: 1.5;
+}
+
+.setup-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 32px;
+}
+
+.setup-btn-link {
+  background: none;
+  border: none;
+  color: #9a9bb0;
+  font-size: 14px;
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+.setup-btn-link:hover:not(:disabled) {
+  color: #ff7a3c;
+}
+
+.setup-btn-link:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .setup-checklist {
@@ -1551,7 +1593,80 @@ body {
   font-style: italic;
 }
 
-/* Auth Modes */
+/* Options */
+.setup-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.setup-option-card {
+  background: #151622;
+  border: 2px solid #272832;
+  border-radius: 12px;
+  padding: 24px 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: center;
+}
+
+.setup-option-card:hover {
+  border-color: #3a3b4d;
+  transform: translateY(-2px);
+}
+
+.setup-option-card.active {
+  border-color: #ff7a3c;
+  background: rgba(255, 122, 60, 0.05);
+}
+
+.setup-option-icon {
+  font-size: 36px;
+  margin-bottom: 12px;
+}
+
+.setup-option-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #f5f5f7;
+  margin-bottom: 6px;
+}
+
+.setup-option-desc {
+  font-size: 12px;
+  color: #9a9bb0;
+}
+
+.setup-oauth-info {
+  padding: 16px;
+  background: rgba(100, 181, 246, 0.08);
+  border: 1px solid rgba(100, 181, 246, 0.2);
+  border-radius: 8px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: #c3c5dd;
+  line-height: 1.5;
+}
+
+.setup-ollama-info {
+  padding: 16px;
+  background: rgba(80, 255, 163, 0.08);
+  border: 1px solid rgba(80, 255, 163, 0.2);
+  border-radius: 8px;
+  font-size: 13px;
+  color: #c3c5dd;
+}
+
+.setup-ollama-info p {
+  margin: 0 0 8px;
+}
+
+.setup-ollama-info p:last-child {
+  margin: 0;
+}
+
+/* Auth Modes (deprecated - keep for backward compatibility) */
 .setup-auth-modes {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1596,7 +1711,42 @@ body {
   color: #9a9bb0;
 }
 
-/* Provider Tabs */
+/* Provider Grid */
+.setup-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+.setup-provider-btn {
+  background: #151622;
+  border: 1px solid #272832;
+  border-radius: 8px;
+  padding: 12px 8px;
+  color: #9a9bb0;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.setup-provider-btn:hover {
+  border-color: #3a3b4d;
+  color: #c3c5dd;
+}
+
+.setup-provider-btn.active {
+  background: rgba(255, 122, 60, 0.1);
+  border-color: #ff7a3c;
+  color: #ff7a3c;
+}
+
+.setup-provider-config {
+  min-height: 200px;
+}
+
+/* Provider Tabs (deprecated - keep for backward compat) */
 .setup-provider-tabs {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -1777,6 +1927,13 @@ body {
 .setup-btn-primary {
   background: #ff7a3c;
   color: #050608;
+  border: none;
+  padding: 12px 32px;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
 }
 
 .setup-btn-primary:hover:not(:disabled) {
@@ -1788,12 +1945,19 @@ body {
 .setup-btn-primary:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+  transform: none;
 }
 
 .setup-btn-secondary {
   background: #1a1b26;
   color: #f5f5f7;
   border: 1px solid #272832;
+  padding: 12px 24px;
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
 }
 
 .setup-btn-secondary:hover:not(:disabled) {

@@ -21,6 +21,7 @@ from .settings import (
     get_settings,
     set_provider,
     update_settings,
+    logout_github,
     LLMProvider,
     GitHubAuthMode,
     GitHubConfig,
@@ -106,6 +107,89 @@ class GithubStatus(BaseModel):
 
 class GithubAppInstallURL(BaseModel):
     url: str
+
+
+class GitHubOAuthURL(BaseModel):
+    url: str
+
+
+class GitHubOAuthCallback(BaseModel):
+    code: str
+
+
+@app.post("/api/github/logout")
+async def api_github_logout():
+    """Logout from GitHub (clear credentials)."""
+    logout_github()
+    return {"status": "logged_out"}
+
+
+@app.get("/api/github/oauth/url")
+async def api_github_oauth_url():
+    """Get GitHub OAuth authorization URL."""
+    settings = get_settings()
+    github_config = settings.github
+
+    # For OAuth, we can use a simple GitHub OAuth app or device flow
+    # For now, let's create a URL that prompts for PAT as a fallback
+    # In production, you'd register a GitHub OAuth app and use client_id
+
+    # Check if we have OAuth client_id
+    if github_config.app_client_id:
+        # Use GitHub OAuth flow
+        base_url = "https://github.com/login/oauth/authorize"
+        redirect_uri = f"{os.getenv('BASE_PUBLIC_URL', 'http://localhost:8000')}/api/github/oauth/callback"
+        scope = "repo,user"
+
+        oauth_url = f"{base_url}?client_id={github_config.app_client_id}&redirect_uri={redirect_uri}&scope={scope}"
+        return GitHubOAuthURL(url=oauth_url)
+    else:
+        # Fallback: Direct user to create PAT
+        return GitHubOAuthURL(url="https://github.com/settings/tokens/new?scopes=repo&description=GitPilot")
+
+
+@app.get("/api/github/oauth/callback")
+async def api_github_oauth_callback(code: str):
+    """Handle GitHub OAuth callback."""
+    from fastapi import HTTPException
+    from fastapi.responses import RedirectResponse
+
+    settings = get_settings()
+    github_config = settings.github
+
+    if not github_config.app_client_id or not github_config.app_client_secret:
+        raise HTTPException(500, "GitHub OAuth not configured")
+
+    # Exchange code for access token
+    async with httpx.AsyncClient() as client:
+        token_url = "https://github.com/login/oauth/access_token"
+        headers = {"Accept": "application/json"}
+        data = {
+            "client_id": github_config.app_client_id,
+            "client_secret": github_config.app_client_secret,
+            "code": code,
+        }
+
+        res = await client.post(token_url, headers=headers, data=data)
+        if res.status_code >= 400:
+            raise HTTPException(res.status_code, "Failed to exchange OAuth code")
+
+        token_data = res.json()
+        access_token = token_data.get("access_token")
+
+        if not access_token:
+            raise HTTPException(400, "No access token received")
+
+        # Save token to settings
+        update_settings({
+            "github": {
+                "auth_mode": "pat",
+                "personal_token": access_token,
+            }
+        })
+
+    # Redirect to home
+    return RedirectResponse(url="/")
 
 
 @app.get("/api/github/status", response_model=GithubStatus)

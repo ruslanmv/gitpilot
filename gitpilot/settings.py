@@ -38,7 +38,7 @@ class WatsonxConfig(BaseModel):
     api_key: str = Field(default="")
     project_id: str = Field(default="")
     model_id: str = Field(default="meta-llama/llama-3-1-70b-instruct")
-    base_url: str = Field(default="https://api.watsonx.ai/v1")
+    base_url: str = Field(default="https://us-south.ml.cloud.ibm.com")
 
 
 class OllamaConfig(BaseModel):
@@ -130,8 +130,8 @@ class AppSettings(BaseModel):
             settings.watsonx.project_id = os.getenv("WATSONX_PROJECT_ID")
         if os.getenv("GITPILOT_WATSONX_MODEL"):
             settings.watsonx.model_id = os.getenv("GITPILOT_WATSONX_MODEL")
-        if os.getenv("WATSONX_BASE_URL"):
-            settings.watsonx.base_url = os.getenv("WATSONX_BASE_URL")
+        if os.getenv("WATSONX_BASE_URL") or os.getenv("WATSONX_URL"):
+            settings.watsonx.base_url = os.getenv("WATSONX_BASE_URL") or os.getenv("WATSONX_URL")
 
         # Ollama
         if os.getenv("OLLAMA_BASE_URL"):
@@ -214,5 +214,13 @@ def update_settings(updates: dict) -> AppSettings:
     if "setup_completed" in updates:
         _settings.setup_completed = updates["setup_completed"]
 
+    _settings.save()
+    return _settings
+
+
+def logout_github() -> AppSettings:
+    """Clear GitHub credentials from settings."""
+    global _settings
+    _settings.github = GitHubConfig()  # Reset to defaults
     _settings.save()
     return _settings

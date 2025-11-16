@@ -27,6 +27,23 @@ export default function GithubConnectPanel() {
     }
   };
 
+  const handleLogout = async () => {
+    try {
+      setLoading(true);
+      const res = await fetch("/api/github/logout", { method: "POST" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      // Reload status
+      await loadStatus();
+      setError("Logged out successfully. You can reconnect anytime.");
+    } catch (e) {
+      console.error("Failed to logout:", e);
+      setError("Failed to logout");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleConnectClick = async () => {
     try {
       const res = await fetch("/api/github/app-install-url");
@@ -102,6 +119,14 @@ export default function GithubConnectPanel() {
               Installation ID: {status.app_installation_id}
             </div>
           )}
+          <button
+            type="button"
+            className="github-logout-btn"
+            onClick={handleLogout}
+            disabled={loading}
+          >
+            Logout
+          </button>
         </div>
       )}
 
