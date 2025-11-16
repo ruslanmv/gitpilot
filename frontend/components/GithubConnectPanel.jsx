@@ -31,7 +31,11 @@ export default function GithubConnectPanel() {
     try {
       const res = await fetch("/api/github/app-install-url");
       if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
+        // If app slug not configured, suggest going to admin panel
+        setError(
+          "GitHub App not configured. Please configure GitHub credentials in the Admin panel."
+        );
+        return;
       }
       const data = await res.json();
       // Open GitHub App installation in new window
@@ -43,7 +47,7 @@ export default function GithubConnectPanel() {
       );
     } catch (e) {
       console.error("Failed to get install URL:", e);
-      setError("Failed to get GitHub App installation URL. Please check configuration.");
+      setError("Please configure GitHub credentials in the Admin panel.");
     }
   };
 

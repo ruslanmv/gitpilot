@@ -8,25 +8,33 @@ from typing import Any, Dict, List, Optional
 import httpx
 from fastapi import HTTPException
 
+from .settings import get_settings, GitHubAuthMode
+
 GITHUB_API_BASE = "https://api.github.com"
 
-# GitHub App configuration
-GH_APP_ID = os.getenv("GITPILOT_GH_APP_ID")
-GH_APP_PRIVATE_KEY_B64 = os.getenv("GITPILOT_GH_APP_PRIVATE_KEY_BASE64")
-GH_APP_INSTALLATION_ID = os.getenv("GITPILOT_GH_APP_INSTALLATION_ID")
-GH_APP_CLIENT_ID = os.getenv("GITPILOT_GH_APP_CLIENT_ID")
-GH_APP_CLIENT_SECRET = os.getenv("GITPILOT_GH_APP_CLIENT_SECRET")
-GH_APP_SLUG = os.getenv("GITPILOT_GH_APP_SLUG")
+
+def _get_github_config():
+    """Get GitHub configuration from settings."""
+    return get_settings().github
 
 
 def _pat_token() -> str | None:
-    """Get personal access token from environment if available."""
+    """Get personal access token from settings or environment."""
+    config = _get_github_config()
+
+    # Try settings first
+    if config.personal_token:
+        return config.personal_token
+
+    # Fallback to environment variables
     return os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
 
 
 def _github_jwt() -> str:
     """Generate a JWT for GitHub App authentication."""
-    if not GH_APP_ID or not GH_APP_PRIVATE_KEY_B64:
+    config = _get_github_config()
+
+    if not config.app_id or not config.app_private_key_base64:
         raise HTTPException(500, "GitHub App not configured")
 
     try:
@@ -37,24 +45,26 @@ def _github_jwt() -> str:
             "PyJWT not installed. Run: pip install pyjwt[crypto]"
         )
 
-    private_key = base64.b64decode(GH_APP_PRIVATE_KEY_B64).decode("utf-8")
+    private_key = base64.b64decode(config.app_private_key_base64).decode("utf-8")
 
     now = int(time.time())
     payload = {
         "iat": now - 60,
         "exp": now + 9 * 60,
-        "iss": GH_APP_ID,
+        "iss": config.app_id,
     }
     return jwt.encode(payload, private_key, algorithm="RS256")
 
 
 async def _installation_access_token() -> str:
     """Get an installation access token for the GitHub App."""
-    if not GH_APP_INSTALLATION_ID:
+    config = _get_github_config()
+
+    if not config.app_installation_id:
         raise HTTPException(400, "GitHub App installation not set up")
 
     jwt_token = _github_jwt()
-    url = f"{GITHUB_API_BASE}/app/installations/{GH_APP_INSTALLATION_ID}/access_tokens"
+    url = f"{GITHUB_API_BASE}/app/installations/{config.app_installation_id}/access_tokens"
     async with httpx.AsyncClient() as client:
         res = await client.post(
             url,
@@ -135,8 +145,10 @@ async def list_installation_repos(query: str | None = None) -> List[Dict[str, An
 
 async def list_user_repos(query: str | None = None) -> List[Dict[str, Any]]:
     """List user repositories - uses GitHub App if configured, otherwise PAT."""
+    config = _get_github_config()
+
     # If using GitHub App, use installation repositories endpoint
-    if GH_APP_INSTALLATION_ID and not _pat_token():
+    if config.auth_mode == GitHubAuthMode.app and config.app_installation_id:
         return await list_installation_repos(query=query)
 
     # Otherwise use personal access token mode

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import GithubConnectPanel from "./components/GithubConnectPanel.jsx";
 import RepoSelector from "./components/RepoSelector.jsx";
 import ProjectContextPanel from "./components/ProjectContextPanel.jsx";
@@ -6,10 +6,59 @@ import ChatPanel from "./components/ChatPanel.jsx";
 import LlmSettings from "./components/LlmSettings.jsx";
 import FlowViewer from "./components/FlowViewer.jsx";
 import Footer from "./components/Footer.jsx";
+import SetupWizard from "./components/SetupWizard.jsx";
 
 export default function App() {
   const [repo, setRepo] = useState(null);
   const [activePage, setActivePage] = useState("workspace"); // "workspace" | "admin" | "flow"
+  const [showSetupWizard, setShowSetupWizard] = useState(false);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+
+  // Check if setup is needed on mount
+  useEffect(() => {
+    checkSetupStatus();
+  }, []);
+
+  const checkSetupStatus = async () => {
+    try {
+      setSettingsLoading(true);
+      const res = await fetch("/api/settings");
+      if (res.ok) {
+        const data = await res.json();
+        // Show wizard if setup not completed
+        setShowSetupWizard(!data.setup_completed);
+      }
+    } catch (e) {
+      console.error("Failed to load settings:", e);
+      // On error, show wizard to allow setup
+      setShowSetupWizard(true);
+    } finally {
+      setSettingsLoading(false);
+    }
+  };
+
+  const handleSetupComplete = () => {
+    setShowSetupWizard(false);
+    // Optionally reload the page to refresh all components with new settings
+    window.location.reload();
+  };
+
+  // Show loading state while checking setup status
+  if (settingsLoading) {
+    return (
+      <div className="app-root">
+        <div className="loading-screen">
+          <div className="loading-spinner" />
+          <p>Loading GitPilot...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show setup wizard if needed
+  if (showSetupWizard) {
+    return <SetupWizard onComplete={handleSetupComplete} />;
+  }
 
   return (
     <div className="app-root">

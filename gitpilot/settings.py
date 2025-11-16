@@ -46,9 +46,34 @@ class OllamaConfig(BaseModel):
     model: str = Field(default="llama3")
 
 
+class GitHubAuthMode(str, enum.Enum):
+    pat = "pat"  # Personal Access Token
+    app = "app"  # GitHub App
+
+
+class GitHubConfig(BaseModel):
+    """GitHub authentication configuration."""
+    auth_mode: GitHubAuthMode = Field(default=GitHubAuthMode.pat)
+
+    # Personal Access Token mode
+    personal_token: str = Field(default="")
+
+    # GitHub App mode
+    app_id: str = Field(default="")
+    app_private_key_base64: str = Field(default="")
+    app_installation_id: str = Field(default="")
+    app_client_id: str = Field(default="")
+    app_client_secret: str = Field(default="")
+    app_slug: str = Field(default="")
+
+
 class AppSettings(BaseModel):
     provider: LLMProvider = Field(default=LLMProvider.openai)
 
+    # GitHub configuration
+    github: GitHubConfig = Field(default_factory=GitHubConfig)
+
+    # LLM configurations
     openai: OpenAIConfig = Field(default_factory=OpenAIConfig)
     claude: ClaudeConfig = Field(default_factory=ClaudeConfig)
     watsonx: WatsonxConfig = Field(default_factory=WatsonxConfig)
@@ -57,6 +82,9 @@ class AppSettings(BaseModel):
     langflow_url: str = Field(default="http://localhost:7860")
     langflow_api_key: Optional[str] = None
     langflow_plan_flow_id: Optional[str] = None
+
+    # Track if initial setup has been completed
+    setup_completed: bool = Field(default=False)
 
     @classmethod
     def from_disk(cls) -> "AppSettings":
@@ -119,6 +147,27 @@ class AppSettings(BaseModel):
         if os.getenv("GITPILOT_LANGFLOW_PLAN_FLOW_ID"):
             settings.langflow_plan_flow_id = os.getenv("GITPILOT_LANGFLOW_PLAN_FLOW_ID")
 
+        # GitHub configuration
+        # Personal token
+        if os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN"):
+            settings.github.personal_token = os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
+            settings.github.auth_mode = GitHubAuthMode.pat
+
+        # GitHub App
+        if os.getenv("GITPILOT_GH_APP_ID"):
+            settings.github.app_id = os.getenv("GITPILOT_GH_APP_ID")
+            settings.github.auth_mode = GitHubAuthMode.app
+        if os.getenv("GITPILOT_GH_APP_PRIVATE_KEY_BASE64"):
+            settings.github.app_private_key_base64 = os.getenv("GITPILOT_GH_APP_PRIVATE_KEY_BASE64")
+        if os.getenv("GITPILOT_GH_APP_INSTALLATION_ID"):
+            settings.github.app_installation_id = os.getenv("GITPILOT_GH_APP_INSTALLATION_ID")
+        if os.getenv("GITPILOT_GH_APP_CLIENT_ID"):
+            settings.github.app_client_id = os.getenv("GITPILOT_GH_APP_CLIENT_ID")
+        if os.getenv("GITPILOT_GH_APP_CLIENT_SECRET"):
+            settings.github.app_client_secret = os.getenv("GITPILOT_GH_APP_CLIENT_SECRET")
+        if os.getenv("GITPILOT_GH_APP_SLUG"):
+            settings.github.app_slug = os.getenv("GITPILOT_GH_APP_SLUG")
+
         return settings
 
     def save(self) -> None:
@@ -147,6 +196,10 @@ def update_settings(updates: dict) -> AppSettings:
     if "provider" in updates:
         _settings.provider = LLMProvider(updates["provider"])
 
+    # Update GitHub config
+    if "github" in updates:
+        _settings.github = GitHubConfig(**updates["github"])
+
     # Update provider-specific configs
     if "openai" in updates:
         _settings.openai = OpenAIConfig(**updates["openai"])
@@ -156,6 +209,10 @@ def update_settings(updates: dict) -> AppSettings:
         _settings.watsonx = WatsonxConfig(**updates["watsonx"])
     if "ollama" in updates:
         _settings.ollama = OllamaConfig(**updates["ollama"])
+
+    # Update setup completion status
+    if "setup_completed" in updates:
+        _settings.setup_completed = updates["setup_completed"]
 
     _settings.save()
     return _settings

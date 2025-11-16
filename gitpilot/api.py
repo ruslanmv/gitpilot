@@ -15,10 +15,16 @@ from .github_api import (
     get_repo_tree,
     get_file,
     put_file,
-    GH_APP_INSTALLATION_ID,
-    GH_APP_SLUG,
 )
-from .settings import AppSettings, get_settings, set_provider, update_settings, LLMProvider
+from .settings import (
+    AppSettings,
+    get_settings,
+    set_provider,
+    update_settings,
+    LLMProvider,
+    GitHubAuthMode,
+    GitHubConfig,
+)
 from .agentic import generate_plan, execute_plan, PlanResult, get_flow_definition
 
 app = FastAPI(
@@ -66,12 +72,14 @@ class CommitResponse(BaseModel):
 class SettingsResponse(BaseModel):
     provider: LLMProvider
     providers: List[LLMProvider]
+    github: dict
     openai: dict
     claude: dict
     watsonx: dict
     ollama: dict
     langflow_url: str
     has_langflow_plan_flow: bool
+    setup_completed: bool
 
 
 class ProviderUpdate(BaseModel):
@@ -103,14 +111,17 @@ class GithubAppInstallURL(BaseModel):
 @app.get("/api/github/status", response_model=GithubStatus)
 async def api_github_status():
     """Get GitHub connection status."""
+    settings = get_settings()
+    github_config = settings.github
+
     # Check if PAT is configured
-    if os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN"):
+    if github_config.personal_token or os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN"):
         return GithubStatus(connected=True, mode="pat")
 
     # Check if GitHub App is configured
-    if GH_APP_INSTALLATION_ID:
+    if github_config.app_installation_id:
         return GithubStatus(
-            connected=True, mode="app", app_installation_id=GH_APP_INSTALLATION_ID
+            connected=True, mode="app", app_installation_id=github_config.app_installation_id
         )
 
     return GithubStatus(connected=False, mode="none")
@@ -119,13 +130,15 @@ async def api_github_status():
 @app.get("/api/github/app-install-url", response_model=GithubAppInstallURL)
 async def api_github_app_install_url():
     """Get GitHub App installation URL."""
-    if not GH_APP_SLUG:
+    settings = get_settings()
+    github_config = settings.github
+
+    if not github_config.app_slug:
         from fastapi import HTTPException
-        raise HTTPException(500, "GITPILOT_GH_APP_SLUG not configured")
+        raise HTTPException(500, "GitHub App slug not configured")
 
     base_url = "https://github.com/apps"
-    # Optional: add state parameter for callback verification
-    return GithubAppInstallURL(url=f"{base_url}/{GH_APP_SLUG}/installations/new")
+    return GithubAppInstallURL(url=f"{base_url}/{github_config.app_slug}/installations/new")
 
 
 @app.get("/api/repos", response_model=List[RepoSummary])
@@ -177,30 +190,51 @@ async def api_put_file(
 @app.get("/api/settings", response_model=SettingsResponse)
 async def api_get_settings():
     s: AppSettings = get_settings()
+    # Mask sensitive data in response
+    github_data = s.github.model_dump()
+    if github_data.get("personal_token"):
+        github_data["personal_token"] = "***" if github_data["personal_token"] else ""
+    if github_data.get("app_private_key_base64"):
+        github_data["app_private_key_base64"] = "***" if github_data["app_private_key_base64"] else ""
+    if github_data.get("app_client_secret"):
+        github_data["app_client_secret"] = "***" if github_data["app_client_secret"] else ""
+
     return SettingsResponse(
         provider=s.provider,
         providers=[LLMProvider.openai, LLMProvider.claude, LLMProvider.watsonx, LLMProvider.ollama],
+        github=github_data,
         openai=s.openai.model_dump(),
         claude=s.claude.model_dump(),
         watsonx=s.watsonx.model_dump(),
         ollama=s.ollama.model_dump(),
         langflow_url=s.langflow_url,
         has_langflow_plan_flow=bool(s.langflow_plan_flow_id),
+        setup_completed=s.setup_completed,
     )
 
 
 @app.post("/api/settings/provider", response_model=SettingsResponse)
 async def api_set_provider(update: ProviderUpdate):
     s = set_provider(update.provider)
+    github_data = s.github.model_dump()
+    if github_data.get("personal_token"):
+        github_data["personal_token"] = "***" if github_data["personal_token"] else ""
+    if github_data.get("app_private_key_base64"):
+        github_data["app_private_key_base64"] = "***" if github_data["app_private_key_base64"] else ""
+    if github_data.get("app_client_secret"):
+        github_data["app_client_secret"] = "***" if github_data["app_client_secret"] else ""
+
     return SettingsResponse(
         provider=s.provider,
         providers=[LLMProvider.openai, LLMProvider.claude, LLMProvider.watsonx, LLMProvider.ollama],
+        github=github_data,
         openai=s.openai.model_dump(),
         claude=s.claude.model_dump(),
         watsonx=s.watsonx.model_dump(),
         ollama=s.ollama.model_dump(),
         langflow_url=s.langflow_url,
         has_langflow_plan_flow=bool(s.langflow_plan_flow_id),
+        setup_completed=s.setup_completed,
     )
 
 
@@ -208,15 +242,25 @@ async def api_set_provider(update: ProviderUpdate):
 async def api_update_llm_settings(updates: dict):
     """Update full LLM settings including provider-specific configs."""
     s = update_settings(updates)
+    github_data = s.github.model_dump()
+    if github_data.get("personal_token"):
+        github_data["personal_token"] = "***" if github_data["personal_token"] else ""
+    if github_data.get("app_private_key_base64"):
+        github_data["app_private_key_base64"] = "***" if github_data["app_private_key_base64"] else ""
+    if github_data.get("app_client_secret"):
+        github_data["app_client_secret"] = "***" if github_data["app_client_secret"] else ""
+
     return SettingsResponse(
         provider=s.provider,
         providers=[LLMProvider.openai, LLMProvider.claude, LLMProvider.watsonx, LLMProvider.ollama],
+        github=github_data,
         openai=s.openai.model_dump(),
         claude=s.claude.model_dump(),
         watsonx=s.watsonx.model_dump(),
         ollama=s.ollama.model_dump(),
         langflow_url=s.langflow_url,
         has_langflow_plan_flow=bool(s.langflow_plan_flow_id),
+        setup_completed=s.setup_completed,
     )
 
 
