@@ -554,6 +554,9 @@ make publish
 
 ![](assets/2025-11-16-00-29-47.png)
 
+# Example of generation of files
+
+![](assets/2025-11-16-01-01-40.png)
 
 ---
 
