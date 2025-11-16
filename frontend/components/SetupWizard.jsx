@@ -115,12 +115,12 @@ export default function SetupWizard({ onComplete }) {
             <p className="setup-description">
               Let's get you set up. This will only take a minute.
             </p>
+            <p className="setup-description" style={{ fontSize: "14px", color: "#9a9ca8", marginTop: "8px" }}>
+              You'll need to connect your GitHub account to use GitPilot.
+            </p>
             <div className="setup-actions">
-              <button className="setup-btn-link" onClick={handleSkipSetup} disabled={saving}>
-                Skip setup
-              </button>
               <button className="setup-btn-primary" onClick={() => setStep(2)}>
-                Continue
+                Get Started
               </button>
             </div>
           </div>
@@ -339,6 +339,9 @@ export default function SetupWizard({ onComplete }) {
             <div className="setup-actions">
               <button className="setup-btn-secondary" onClick={() => setStep(2)}>
                 Back
+              </button>
+              <button className="setup-btn-link" onClick={handleSkipSetup} disabled={saving}>
+                Skip for now
               </button>
               <button
                 className="setup-btn-primary"

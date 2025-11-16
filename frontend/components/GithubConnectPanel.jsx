@@ -46,25 +46,18 @@ export default function GithubConnectPanel() {
 
   const handleConnectClick = async () => {
     try {
-      const res = await fetch("/api/github/app-install-url");
+      // Use OAuth URL endpoint for user login
+      const res = await fetch("/api/github/oauth/url");
       if (!res.ok) {
-        // If app slug not configured, suggest going to admin panel
-        setError(
-          "GitHub App not configured. Please configure GitHub credentials in the Admin panel."
-        );
-        return;
+        throw new Error(`HTTP ${res.status}`);
       }
       const data = await res.json();
-      // Open GitHub App installation in new window
-      window.open(data.url, "_blank", "noopener,noreferrer");
 
-      // Show a helper message
-      setError(
-        "After installing the app on GitHub, refresh this page to see the connection status."
-      );
+      // Redirect to GitHub OAuth or PAT creation page
+      window.location.href = data.url;
     } catch (e) {
-      console.error("Failed to get install URL:", e);
-      setError("Please configure GitHub credentials in the Admin panel.");
+      console.error("Failed to get GitHub URL:", e);
+      setError("Failed to connect to GitHub. Please try again or configure in Admin panel.");
     }
   };
 

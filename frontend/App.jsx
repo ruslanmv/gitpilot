@@ -22,14 +22,25 @@ export default function App() {
   const checkSetupStatus = async () => {
     try {
       setSettingsLoading(true);
-      const res = await fetch("/api/settings");
-      if (res.ok) {
-        const data = await res.json();
-        // Show wizard if setup not completed
-        setShowSetupWizard(!data.setup_completed);
+
+      // Check both settings AND GitHub connection status
+      const [settingsRes, githubRes] = await Promise.all([
+        fetch("/api/settings"),
+        fetch("/api/github/status")
+      ]);
+
+      if (settingsRes.ok && githubRes.ok) {
+        const settings = await settingsRes.json();
+        const github = await githubRes.json();
+
+        // Show wizard if setup not completed OR GitHub not connected
+        setShowSetupWizard(!settings.setup_completed || !github.connected);
+      } else {
+        // If API calls fail, show wizard to allow setup
+        setShowSetupWizard(true);
       }
     } catch (e) {
-      console.error("Failed to load settings:", e);
+      console.error("Failed to load status:", e);
       // On error, show wizard to allow setup
       setShowSetupWizard(true);
     } finally {
