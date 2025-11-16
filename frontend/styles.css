@@ -1796,3 +1796,246 @@ body {
   cursor: not-allowed;
   transform: none !important;
 }
+
+.setup-checklist {
+  list-style: none;
+  padding: 0;
+  margin: 20px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.setup-checklist li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+  color: #c3c5dd;
+}
+
+.setup-checklist-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(76, 175, 80, 0.2);
+  color: #81c784;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.setup-step-note {
+  font-size: 12px;
+  color: #9a9bb0;
+  text-align: center;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.setup-auth-modes {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  margin: 20px 0;
+}
+
+.setup-auth-mode {
+  background: #0a0b0f;
+  border: 2px solid #272832;
+  border-radius: 12px;
+  padding: 20px 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: center;
+  outline: none;
+}
+
+.setup-auth-mode:hover {
+  border-color: #3a3b4d;
+  background: #101117;
+}
+
+.setup-auth-mode.active {
+  border-color: #ff7a3c;
+  background: rgba(255, 122, 60, 0.1);
+}
+
+.setup-auth-mode-icon {
+  font-size: 32px;
+  margin-bottom: 8px;
+}
+
+.setup-auth-mode-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #f5f5f7;
+  margin-bottom: 4px;
+}
+
+.setup-auth-mode-desc {
+  font-size: 12px;
+  color: #9a9bb0;
+}
+
+.setup-form-group {
+  margin: 16px 0;
+}
+
+.setup-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: #c3c5dd;
+  margin-bottom: 8px;
+}
+
+.setup-label-required {
+  color: #ff7a3c;
+  margin-left: 4px;
+}
+
+.setup-input-with-toggle {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.setup-input {
+  width: 100%;
+  background: #0a0b0f;
+  border: 1px solid #272832;
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: #f5f5f7;
+  font-size: 13px;
+  font-family: inherit;
+  transition: all 0.2s ease;
+}
+
+.setup-input:focus {
+  outline: none;
+  border-color: #ff7a3c;
+  box-shadow: 0 0 0 3px rgba(255, 122, 60, 0.1);
+}
+
+.setup-input::placeholder {
+  color: #676883;
+}
+
+.setup-input-toggle {
+  position: absolute;
+  right: 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 4px;
+  opacity: 0.7;
+  transition: opacity 0.2s ease;
+}
+
+.setup-input-toggle:hover {
+  opacity: 1;
+}
+
+.setup-hint {
+  font-size: 11px;
+  color: #9a9bb0;
+  margin-top: 6px;
+  line-height: 1.5;
+}
+
+.setup-hint a {
+  color: #ff7a3c;
+  text-decoration: none;
+}
+
+.setup-hint a:hover {
+  text-decoration: underline;
+}
+
+.setup-hint code {
+  background: rgba(255, 122, 60, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+  font-size: 10px;
+  color: #ff7a3c;
+}
+
+.setup-error {
+  background: rgba(244, 67, 54, 0.1);
+  border: 1px solid rgba(244, 67, 54, 0.3);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: #e57373;
+  font-size: 12px;
+  margin-top: 12px;
+}
+
+.setup-provider-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 20px 0;
+  border-bottom: 1px solid #272832;
+  padding-bottom: 4px;
+}
+
+.setup-provider-tab {
+  background: transparent;
+  border: none;
+  outline: none;
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: #9a9bb0;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s ease;
+  margin-bottom: -1px;
+}
+
+.setup-provider-tab:hover {
+  color: #c3c5dd;
+}
+
+.setup-provider-tab.active {
+  color: #ff7a3c;
+  border-bottom-color: #ff7a3c;
+}
+
+.setup-complete-features {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin: 24px 0;
+}
+
+.setup-feature-card {
+  background: #0a0b0f;
+  border: 1px solid #272832;
+  border-radius: 10px;
+  padding: 16px 12px;
+  text-align: center;
+  transition: all 0.2s ease;
+}
+
+.setup-feature-card:hover {
+  border-color: #ff7a3c;
+  transform: translateY(-2px);
+}
+
+.setup-feature-icon {
+  font-size: 28px;
+  margin-bottom: 8px;
+}
+
+.setup-feature-label {
+  font-size: 12px;
+  color: #c3c5dd;
+  font-weight: 500;
+}
