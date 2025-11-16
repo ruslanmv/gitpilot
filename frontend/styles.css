@@ -254,6 +254,140 @@ body {
   padding: 2px 4px;
 }
 
+/* GitHub Connect Panel */
+.github-connect-card {
+  padding: 14px 14px 12px;
+  border-radius: 12px;
+  background: #121320;
+  border: 1px solid #262739;
+  margin-bottom: 12px;
+  animation: fadeIn 0.3s ease;
+}
+
+.github-connect-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.github-connect-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #d2d3e4;
+}
+
+.github-connect-status {
+  font-size: 11px;
+  color: #9a9bb0;
+}
+
+.github-connect-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid #35364a;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.github-connect-badge.connected {
+  background: rgba(80, 255, 163, 0.08);
+  border-color: #50ffa3;
+  color: #d5ffe7;
+}
+
+.github-connect-badge.disconnected {
+  background: rgba(255, 91, 91, 0.06);
+  border-color: #ff5b5b;
+  color: #ffdada;
+}
+
+.github-connect-text {
+  margin: 4px 0 10px;
+  font-size: 12px;
+  color: #a1a2b3;
+  line-height: 1.4;
+}
+
+.github-connect-info {
+  margin-top: 8px;
+}
+
+.github-connect-subtext {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: #7f8091;
+}
+
+.github-connect-message {
+  margin: 8px 0 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  background: rgba(33, 150, 243, 0.1);
+  border: 1px solid rgba(33, 150, 243, 0.3);
+  color: #64b5f6;
+  line-height: 1.4;
+}
+
+.primary-button {
+  border-radius: 8px;
+  border: none;
+  outline: none;
+  padding: 10px 16px;
+  background: #ff7a3c;
+  color: #050608;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.primary-button:hover:not(:disabled) {
+  background: #ff8c52;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(255, 122, 60, 0.3);
+}
+
+.primary-button:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.primary-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.primary-button.full-width {
+  width: 100%;
+}
+
+/* Sidebar Section */
+.sidebar-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sidebar-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px;
+}
+
+.sidebar-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #9a9bb0;
+}
+
 /* Workspace */
 .workspace {
   flex: 1;

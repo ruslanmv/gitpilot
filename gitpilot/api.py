@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import List, Optional
 
@@ -9,7 +10,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .version import __version__
-from .github_api import list_user_repos, get_repo_tree, get_file, put_file
+from .github_api import (
+    list_user_repos,
+    get_repo_tree,
+    get_file,
+    put_file,
+    GH_APP_INSTALLATION_ID,
+    GH_APP_SLUG,
+)
 from .settings import AppSettings, get_settings, set_provider, update_settings, LLMProvider
 from .agentic import generate_plan, execute_plan, PlanResult, get_flow_definition
 
@@ -80,6 +88,44 @@ class ExecutePlanRequest(BaseModel):
     repo_owner: str
     repo_name: str
     plan: PlanResult
+
+
+class GithubStatus(BaseModel):
+    connected: bool
+    mode: str  # "pat" or "app" or "none"
+    app_installation_id: Optional[str] = None
+
+
+class GithubAppInstallURL(BaseModel):
+    url: str
+
+
+@app.get("/api/github/status", response_model=GithubStatus)
+async def api_github_status():
+    """Get GitHub connection status."""
+    # Check if PAT is configured
+    if os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN"):
+        return GithubStatus(connected=True, mode="pat")
+
+    # Check if GitHub App is configured
+    if GH_APP_INSTALLATION_ID:
+        return GithubStatus(
+            connected=True, mode="app", app_installation_id=GH_APP_INSTALLATION_ID
+        )
+
+    return GithubStatus(connected=False, mode="none")
+
+
+@app.get("/api/github/app-install-url", response_model=GithubAppInstallURL)
+async def api_github_app_install_url():
+    """Get GitHub App installation URL."""
+    if not GH_APP_SLUG:
+        from fastapi import HTTPException
+        raise HTTPException(500, "GITPILOT_GH_APP_SLUG not configured")
+
+    base_url = "https://github.com/apps"
+    # Optional: add state parameter for callback verification
+    return GithubAppInstallURL(url=f"{base_url}/{GH_APP_SLUG}/installations/new")
 
 
 @app.get("/api/repos", response_model=List[RepoSummary])
