@@ -1,14 +1,102 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import RepoSelector from "./components/RepoSelector.jsx";
 import ProjectContextPanel from "./components/ProjectContextPanel.jsx";
 import ChatPanel from "./components/ChatPanel.jsx";
 import LlmSettings from "./components/LlmSettings.jsx";
 import FlowViewer from "./components/FlowViewer.jsx";
 import Footer from "./components/Footer.jsx";
+import WelcomePage from "./components/WelcomePage.jsx";
+import SetupWizard from "./components/SetupWizard.jsx";
+import UserMenu from "./components/UserMenu.jsx";
 
 export default function App() {
   const [repo, setRepo] = useState(null);
   const [activePage, setActivePage] = useState("workspace"); // "workspace" | "admin" | "flow"
+  const [authState, setAuthState] = useState({
+    loading: true,
+    authenticated: false,
+    user: null,
+    setupCompleted: false,
+  });
+
+  useEffect(() => {
+    checkAuthStatus();
+  }, []);
+
+  const checkAuthStatus = async () => {
+    try {
+      const res = await fetch("/api/auth/status");
+      if (res.ok) {
+        const data = await res.json();
+        setAuthState({
+          loading: false,
+          authenticated: data.authenticated,
+          user: data.user,
+          setupCompleted: data.setup_completed,
+        });
+      } else {
+        setAuthState({
+          loading: false,
+          authenticated: false,
+          user: null,
+          setupCompleted: false,
+        });
+      }
+    } catch (e) {
+      console.error("Failed to check auth status:", e);
+      setAuthState({
+        loading: false,
+        authenticated: false,
+        user: null,
+        setupCompleted: false,
+      });
+    }
+  };
+
+  const handleLoginSuccess = (data) => {
+    setAuthState({
+      loading: false,
+      authenticated: true,
+      user: data.user,
+      setupCompleted: data.setup_completed,
+    });
+  };
+
+  const handleLogout = () => {
+    setAuthState({
+      loading: false,
+      authenticated: false,
+      user: null,
+      setupCompleted: false,
+    });
+  };
+
+  const handleSetupComplete = () => {
+    setAuthState({
+      ...authState,
+      setupCompleted: true,
+    });
+  };
+
+  // Show loading state
+  if (authState.loading) {
+    return (
+      <div className="app-loading">
+        <div className="loading-spinner"></div>
+        <p>Loading GitPilot...</p>
+      </div>
+    );
+  }
+
+  // Show welcome/login page if not authenticated
+  if (!authState.authenticated) {
+    return <WelcomePage onLoginSuccess={handleLoginSuccess} />;
+  }
+
+  // Show setup wizard if not completed
+  if (!authState.setupCompleted) {
+    return <SetupWizard onComplete={handleSetupComplete} />;
+  }
 
   return (
     <div className="app-root">
@@ -21,6 +109,12 @@ export default function App() {
               <div className="logo-subtitle">Agentic GitHub copilot</div>
             </div>
           </div>
+
+          {authState.user && (
+            <div className="sidebar-user-section">
+              <UserMenu user={authState.user} onLogout={handleLogout} />
+            </div>
+          )}
 
           <div className="main-nav">
             <button
