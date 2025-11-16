@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import GithubConnectPanel from "./components/GithubConnectPanel.jsx";
 import RepoSelector from "./components/RepoSelector.jsx";
 import ProjectContextPanel from "./components/ProjectContextPanel.jsx";
 import ChatPanel from "./components/ChatPanel.jsx";
@@ -54,7 +55,14 @@ export default function App() {
 
           {activePage === "workspace" && (
             <>
-              <RepoSelector onSelect={setRepo} />
+              <GithubConnectPanel />
+
+              <div className="sidebar-section">
+                <div className="sidebar-section-header">
+                  <span className="sidebar-section-title">Repository</span>
+                </div>
+                <RepoSelector onSelect={setRepo} />
+              </div>
 
               {repo && (
                 <div className="sidebar-repo-info">
