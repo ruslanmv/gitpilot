@@ -2,7 +2,7 @@
 Agent Tools for GitPilot Multi-Agent System
 
 Provides CrewAI-compatible tools for agents to explore and analyze repositories,
-repository exploration capabilities.
+similar to Claude Code's repository exploration capabilities.
 """
 
 from __future__ import annotations
@@ -32,6 +32,85 @@ def get_repo_context() -> tuple[str, str]:
     if not owner or not repo:
         raise ValueError("Repository context not set. Call set_repo_context first.")
     return owner, repo
+
+
+async def get_repository_context_summary(owner: str, repo: str) -> Dict[str, Any]:
+    """
+    Programmatically gather repository context without using agent tools.
+    This ensures we have actual repository state before planning.
+
+    Returns:
+        Dictionary with repository information:
+        - all_files: list of all file paths
+        - total_files: count of files
+        - extensions: dict of extension -> count
+        - directories: set of top-level directories
+        - key_files: list of important files (README, etc.)
+    """
+    try:
+        tree = await get_repo_tree(owner, repo)
+
+        if not tree:
+            return {
+                "all_files": [],
+                "total_files": 0,
+                "extensions": {},
+                "directories": set(),
+                "key_files": [],
+            }
+
+        all_files = [item["path"] for item in tree]
+        extensions: Dict[str, int] = {}
+        directories: set = set()
+        key_files: List[str] = []
+
+        for item in tree:
+            path = item["path"]
+
+            # Count extensions
+            if "." in path:
+                ext = "." + path.rsplit(".", 1)[1]
+                extensions[ext] = extensions.get(ext, 0) + 1
+
+            # Track directories
+            if "/" in path:
+                dir_path = path.rsplit("/", 1)[0]
+                directories.add(dir_path.split("/")[0])
+
+            # Identify key files
+            path_lower = path.lower()
+            if any(
+                key in path_lower
+                for key in [
+                    "readme",
+                    "license",
+                    "makefile",
+                    "dockerfile",
+                    "requirements",
+                    "package.json",
+                    ".gitignore",
+                ]
+            ):
+                key_files.append(path)
+
+        return {
+            "all_files": all_files,
+            "total_files": len(all_files),
+            "extensions": extensions,
+            "directories": directories,
+            "key_files": key_files,
+        }
+
+    except Exception as e:
+        print(f"[Error] Failed to get repository context: {str(e)}")
+        return {
+            "all_files": [],
+            "total_files": 0,
+            "extensions": {},
+            "directories": set(),
+            "key_files": [],
+            "error": str(e),
+        }
 
 
 @tool("List all files in repository")
