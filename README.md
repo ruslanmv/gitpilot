@@ -246,6 +246,8 @@ docker run -p 8000:8000 -e GITHUB_TOKEN=your_token ruslanmv/gitpilot
 
 ### 1. Configure GitHub Access
 
+**Option A: Personal Access Token (Quick Start)**
+
 Create a **GitHub Personal Access Token** at https://github.com/settings/tokens with `repo` scope:
 
 ```bash
@@ -253,6 +255,22 @@ export GITPILOT_GITHUB_TOKEN="ghp_XXXXXXXXXXXXXXXXXXXX"
 # or
 export GITHUB_TOKEN="ghp_XXXXXXXXXXXXXXXXXXXX"
 ```
+
+**Option B: GitHub App (Enterprise - Recommended for Production)**
+
+For enterprise deployments with better security and repository access control:
+
+1. **Create a GitHub App** - Follow our [GitHub App Setup Guide](docs/GITHUB_APP_SETUP.md)
+2. **Configure GitPilot** - Add credentials to `.env`:
+   ```bash
+   GITPILOT_GITHUB_AUTH_MODE=app
+   GITPILOT_GH_APP_ID=123456
+   GITPILOT_GH_APP_INSTALLATION_ID=12345678
+   GITPILOT_GH_APP_PRIVATE_KEY_BASE64=LS0tLS...
+   ```
+3. **Login** - Authenticate with: `gitpilot login`
+
+📖 **See full documentation:** [GitHub App Setup Guide](docs/GITHUB_APP_SETUP.md) | [Authentication Guide](AUTHENTICATION.md)
 
 ### 2. Configure LLM Provider
 
