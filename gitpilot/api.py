@@ -10,8 +10,9 @@ from pydantic import BaseModel, Field
 
 from .version import __version__
 from .github_api import list_user_repos, get_repo_tree, get_file, put_file
-from .settings import AppSettings, get_settings, set_provider, update_settings, LLMProvider
+from .settings import AppSettings, get_settings, set_provider, update_settings, LLMProvider, GitHubAuthMode
 from .agentic import generate_plan, execute_plan, PlanResult, get_flow_definition
+from .auth import get_auth_manager
 
 app = FastAPI(
     title="GitPilot API",
@@ -193,6 +194,116 @@ async def api_get_flow():
     """Return the current agent flow definition as a graph."""
     flow = await get_flow_definition()
     return flow
+
+
+# ============================================================================
+# Authentication Endpoints
+# ============================================================================
+
+
+class AuthStatusResponse(BaseModel):
+    authenticated: bool
+    auth_mode: GitHubAuthMode
+    has_user_token: bool
+    has_app_config: bool
+    setup_completed: bool
+    username: Optional[str] = None
+
+
+class GitHubAppInstallUrlResponse(BaseModel):
+    install_url: str
+
+
+class LoginResponse(BaseModel):
+    success: bool
+    message: str
+
+
+@app.get("/api/auth/status", response_model=AuthStatusResponse)
+async def api_auth_status():
+    """Get current authentication status."""
+    settings = get_settings()
+    auth_manager = get_auth_manager()
+
+    user_token = auth_manager.get_user_token()
+    has_user_token = user_token is not None
+    has_app_config = bool(
+        settings.github.app.app_id and settings.github.app.installation_id
+    )
+
+    # Get username if authenticated
+    username = None
+    if has_user_token:
+        try:
+            import httpx
+            response = await httpx.AsyncClient().get(
+                "https://api.github.com/user",
+                headers={"Authorization": f"Bearer {user_token.access_token}"}
+            )
+            if response.status_code == 200:
+                data = response.json()
+                username = data.get("login")
+        except Exception:
+            pass
+
+    return AuthStatusResponse(
+        authenticated=has_user_token or has_app_config,
+        auth_mode=settings.github.auth_mode,
+        has_user_token=has_user_token,
+        has_app_config=has_app_config,
+        setup_completed=settings.setup_completed,
+        username=username,
+    )
+
+
+@app.post("/api/auth/login", response_model=LoginResponse)
+async def api_auth_login():
+    """
+    Initiate GitHub OAuth login flow.
+    For CLI, this returns instructions.
+    For web, this should be handled by frontend redirecting to GitHub.
+    """
+    settings = get_settings()
+
+    if not settings.github.oauth.client_id:
+        return LoginResponse(
+            success=False,
+            message="GitHub OAuth not configured. Please set GITPILOT_OAUTH_CLIENT_ID."
+        )
+
+    # For web-based OAuth, frontend should redirect to:
+    # https://github.com/login/oauth/authorize?client_id=XXX&scope=repo,read:user
+
+    return LoginResponse(
+        success=True,
+        message="Please complete OAuth flow via CLI: gitpilot login"
+    )
+
+
+@app.post("/api/auth/logout", response_model=LoginResponse)
+async def api_auth_logout():
+    """Logout user by clearing stored credentials."""
+    auth_manager = get_auth_manager()
+    auth_manager.logout()
+
+    return LoginResponse(
+        success=True,
+        message="Successfully logged out"
+    )
+
+
+@app.get("/api/auth/github-app-install-url", response_model=GitHubAppInstallUrlResponse)
+async def api_github_app_install_url():
+    """Get GitHub App installation URL."""
+    settings = get_settings()
+
+    if not settings.github.app.slug:
+        # Return generic URL
+        install_url = "https://github.com/apps/gitpilot"
+    else:
+        install_url = f"https://github.com/apps/{settings.github.app.slug}/installations/new"
+
+    return GitHubAppInstallUrlResponse(install_url=install_url)
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "web"

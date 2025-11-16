@@ -22,6 +22,14 @@ class LLMProvider(str, enum.Enum):
     ollama = "ollama"
 
 
+class GitHubAuthMode(str, enum.Enum):
+    """GitHub authentication mode."""
+    pat = "pat"  # Personal Access Token
+    oauth = "oauth"  # User OAuth
+    app = "app"  # GitHub App
+    hybrid = "hybrid"  # OAuth + App (recommended for enterprise)
+
+
 class OpenAIConfig(BaseModel):
     api_key: str = Field(default="")
     model: str = Field(default="gpt-4o-mini")
@@ -46,6 +54,30 @@ class OllamaConfig(BaseModel):
     model: str = Field(default="llama3")
 
 
+class GitHubOAuthConfig(BaseModel):
+    """GitHub OAuth configuration for user authentication."""
+    client_id: str = Field(default="")
+    client_secret: str = Field(default="")
+
+
+class GitHubAppConfig(BaseModel):
+    """GitHub App configuration for repository access."""
+    app_id: str = Field(default="")
+    installation_id: str = Field(default="")
+    private_key_base64: str = Field(default="")  # Base64-encoded private key
+    client_id: str = Field(default="")  # For OAuth flow
+    client_secret: str = Field(default="")  # For OAuth flow
+    slug: str = Field(default="")  # App slug for installation URL
+
+
+class GitHubConfig(BaseModel):
+    """GitHub authentication configuration."""
+    auth_mode: GitHubAuthMode = Field(default=GitHubAuthMode.hybrid)
+    personal_token: str = Field(default="")  # For PAT mode (fallback)
+    oauth: GitHubOAuthConfig = Field(default_factory=GitHubOAuthConfig)
+    app: GitHubAppConfig = Field(default_factory=GitHubAppConfig)
+
+
 class AppSettings(BaseModel):
     provider: LLMProvider = Field(default=LLMProvider.openai)
 
@@ -53,6 +85,13 @@ class AppSettings(BaseModel):
     claude: ClaudeConfig = Field(default_factory=ClaudeConfig)
     watsonx: WatsonxConfig = Field(default_factory=WatsonxConfig)
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
+
+    # GitHub configuration
+    github: GitHubConfig = Field(default_factory=GitHubConfig)
+
+    # Setup state
+    setup_completed: bool = Field(default=False)
+    welcome_shown: bool = Field(default=False)
 
     langflow_url: str = Field(default="http://localhost:7860")
     langflow_api_key: Optional[str] = None
@@ -119,6 +158,39 @@ class AppSettings(BaseModel):
         if os.getenv("GITPILOT_LANGFLOW_PLAN_FLOW_ID"):
             settings.langflow_plan_flow_id = os.getenv("GITPILOT_LANGFLOW_PLAN_FLOW_ID")
 
+        # GitHub authentication
+        if os.getenv("GITPILOT_GITHUB_AUTH_MODE"):
+            try:
+                settings.github.auth_mode = GitHubAuthMode(os.getenv("GITPILOT_GITHUB_AUTH_MODE"))
+            except ValueError:
+                pass
+
+        # GitHub OAuth
+        if os.getenv("GITPILOT_OAUTH_CLIENT_ID"):
+            settings.github.oauth.client_id = os.getenv("GITPILOT_OAUTH_CLIENT_ID")
+        if os.getenv("GITPILOT_OAUTH_CLIENT_SECRET"):
+            settings.github.oauth.client_secret = os.getenv("GITPILOT_OAUTH_CLIENT_SECRET")
+
+        # GitHub App
+        if os.getenv("GITPILOT_GH_APP_ID"):
+            settings.github.app.app_id = os.getenv("GITPILOT_GH_APP_ID")
+        if os.getenv("GITPILOT_GH_APP_INSTALLATION_ID"):
+            settings.github.app.installation_id = os.getenv("GITPILOT_GH_APP_INSTALLATION_ID")
+        if os.getenv("GITPILOT_GH_APP_PRIVATE_KEY_BASE64"):
+            settings.github.app.private_key_base64 = os.getenv("GITPILOT_GH_APP_PRIVATE_KEY_BASE64")
+        if os.getenv("GITPILOT_GH_APP_CLIENT_ID"):
+            settings.github.app.client_id = os.getenv("GITPILOT_GH_APP_CLIENT_ID")
+        if os.getenv("GITPILOT_GH_APP_CLIENT_SECRET"):
+            settings.github.app.client_secret = os.getenv("GITPILOT_GH_APP_CLIENT_SECRET")
+        if os.getenv("GITPILOT_GH_APP_SLUG"):
+            settings.github.app.slug = os.getenv("GITPILOT_GH_APP_SLUG")
+
+        # GitHub PAT (fallback)
+        if os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN"):
+            settings.github.personal_token = (
+                os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN") or ""
+            )
+
         return settings
 
     def save(self) -> None:
@@ -157,5 +229,21 @@ def update_settings(updates: dict) -> AppSettings:
     if "ollama" in updates:
         _settings.ollama = OllamaConfig(**updates["ollama"])
 
+    # Update GitHub config
+    if "github" in updates:
+        _settings.github = GitHubConfig(**updates["github"])
+
+    # Update setup state
+    if "setup_completed" in updates:
+        _settings.setup_completed = updates["setup_completed"]
+    if "welcome_shown" in updates:
+        _settings.welcome_shown = updates["welcome_shown"]
+
     _settings.save()
     return _settings
+
+
+def get_github_oauth_client_id() -> Optional[str]:
+    """Get GitHub OAuth client ID from settings or environment."""
+    settings = get_settings()
+    return settings.github.oauth.client_id or os.getenv("GITPILOT_OAUTH_CLIENT_ID")

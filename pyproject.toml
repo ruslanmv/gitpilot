@@ -53,6 +53,9 @@ dependencies = [
   "ibm-watsonx-ai>=1.1.0",
   "langchain-ibm>=0.3.0",
   "rich>=13.0.0",
+  "keyring>=25.0.0",
+  "PyJWT>=2.8.0",
+  "cryptography>=42.0.0",
 ]
 
 [project.urls]

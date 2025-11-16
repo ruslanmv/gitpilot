@@ -15,6 +15,7 @@ from rich.table import Table
 
 from .version import __version__
 from .settings import get_settings, LLMProvider
+from .auth import get_auth_manager
 
 cli = typer.Typer(add_completion=False, help="GitPilot - Agentic AI assistant for GitHub")
 console = Console()
@@ -245,6 +246,168 @@ def config():
 def version():
     """Show GitPilot version."""
     console.print(f"GitPilot [cyan]v{__version__}[/cyan]")
+
+
+@cli.command()
+def login():
+    """Authenticate with GitHub using OAuth device flow."""
+    console.print()
+    console.print(Panel.fit(
+        "[bold cyan]GitPilot Login[/bold cyan]\n"
+        "[white]Authenticate with GitHub[/white]",
+        border_style="cyan"
+    ))
+    console.print()
+
+    # Check if already logged in
+    auth_manager = get_auth_manager()
+    if auth_manager.is_user_authenticated():
+        console.print("[yellow]⚠️  You are already logged in![/yellow]")
+        console.print()
+
+        # Get current user info
+        user_token = auth_manager.get_user_token()
+        if user_token:
+            console.print("[dim]Use 'gitpilot logout' to log out first.[/dim]")
+        console.print()
+        return
+
+    # Start OAuth device flow
+    console.print("[bold]Starting OAuth device flow...[/bold]")
+    console.print()
+
+    try:
+        import asyncio
+
+        async def do_login():
+            return await auth_manager.login_device_flow()
+
+        # Run async login
+        loop = asyncio.get_event_loop()
+        token = loop.run_until_complete(do_login())
+
+        console.print()
+        console.print("[bold green]✓ Successfully logged in![/bold green]")
+        console.print()
+        console.print("[dim]Your credentials are securely stored in your system keyring.[/dim]")
+        console.print()
+
+    except ValueError as e:
+        console.print()
+        console.print(f"[bold red]✗ Login failed:[/bold red] {e}")
+        console.print()
+        console.print("[yellow]Please make sure:[/yellow]")
+        console.print("  • GITPILOT_OAUTH_CLIENT_ID is set in your .env file")
+        console.print("  • You have internet connectivity")
+        console.print()
+        sys.exit(1)
+    except KeyboardInterrupt:
+        console.print()
+        console.print("[yellow]Login cancelled[/yellow]")
+        console.print()
+        sys.exit(0)
+    except Exception as e:
+        console.print()
+        console.print(f"[bold red]✗ Unexpected error:[/bold red] {e}")
+        console.print()
+        sys.exit(1)
+
+
+@cli.command()
+def logout():
+    """Logout from GitHub and remove stored credentials."""
+    console.print()
+    console.print(Panel.fit(
+        "[bold cyan]GitPilot Logout[/bold cyan]\n"
+        "[white]Remove stored credentials[/white]",
+        border_style="cyan"
+    ))
+    console.print()
+
+    # Check if logged in
+    auth_manager = get_auth_manager()
+    if not auth_manager.is_user_authenticated():
+        console.print("[yellow]⚠️  You are not logged in.[/yellow]")
+        console.print()
+        return
+
+    # Logout
+    auth_manager.logout()
+    console.print("[bold green]✓ Successfully logged out![/bold green]")
+    console.print()
+    console.print("[dim]Your credentials have been removed from the system keyring.[/dim]")
+    console.print()
+
+
+@cli.command()
+def whoami():
+    """Show current authentication status."""
+    console.print()
+    console.print(Panel.fit(
+        "[bold cyan]GitPilot Authentication Status[/bold cyan]",
+        border_style="cyan"
+    ))
+    console.print()
+
+    auth_manager = get_auth_manager()
+    settings = get_settings()
+
+    # Create status table
+    table = Table(show_header=False, box=None, padding=(0, 2))
+    table.add_column("Key", style="cyan")
+    table.add_column("Value", style="white")
+
+    # User authentication status
+    user_token = auth_manager.get_user_token()
+    if user_token:
+        table.add_row("User OAuth", "✅ Authenticated")
+
+        # Try to get username
+        try:
+            import httpx
+            import asyncio
+
+            async def get_user():
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        "https://api.github.com/user",
+                        headers={"Authorization": f"Bearer {user_token.access_token}"}
+                    )
+                    if response.status_code == 200:
+                        return response.json().get("login")
+                return None
+
+            loop = asyncio.get_event_loop()
+            username = loop.run_until_complete(get_user())
+            if username:
+                table.add_row("GitHub Username", username)
+        except Exception:
+            pass
+    else:
+        table.add_row("User OAuth", "❌ Not authenticated")
+
+    # GitHub App status
+    app_config = settings.github.app
+    if app_config.app_id and app_config.installation_id:
+        table.add_row("GitHub App", "✅ Configured")
+        table.add_row("App ID", app_config.app_id)
+        table.add_row("Installation ID", app_config.installation_id)
+    else:
+        table.add_row("GitHub App", "❌ Not configured")
+
+    # Auth mode
+    table.add_row("Auth Mode", settings.github.auth_mode.value)
+
+    console.print(table)
+    console.print()
+
+    if not user_token and not (app_config.app_id and app_config.installation_id):
+        console.print("[yellow]⚠️  No authentication configured[/yellow]")
+        console.print()
+        console.print("[bold]To get started:[/bold]")
+        console.print("  • Run '[cyan]gitpilot login[/cyan]' to authenticate with GitHub")
+        console.print("  • Or set GITPILOT_GITHUB_TOKEN in your .env file")
+        console.print()
 
 
 def main():

@@ -6,20 +6,82 @@ from typing import Any, Dict, List, Optional
 import httpx
 from fastapi import HTTPException
 
+from .auth import get_auth_manager
+from .settings import get_settings, GitHubAuthMode
+
 GITHUB_API_BASE = "https://api.github.com"
 
 
-def _github_token() -> str:
+async def _github_token() -> str:
+    """
+    Get GitHub token based on configured authentication mode.
+
+    Priority:
+    1. User OAuth token (from keyring)
+    2. GitHub App installation token
+    3. Personal Access Token (PAT) from environment
+
+    Returns:
+        GitHub API token string
+
+    Raises:
+        HTTPException: If no valid authentication is configured
+    """
+    settings = get_settings()
+    auth_manager = get_auth_manager()
+
+    # Try OAuth token first (if mode is oauth or hybrid)
+    if settings.github.auth_mode in [GitHubAuthMode.oauth, GitHubAuthMode.hybrid]:
+        user_token = auth_manager.get_user_token()
+        if user_token:
+            return user_token.access_token
+
+    # Try GitHub App token (if mode is app or hybrid)
+    if settings.github.auth_mode in [GitHubAuthMode.app, GitHubAuthMode.hybrid]:
+        app_config = settings.github.app
+        if app_config.app_id and app_config.installation_id:
+            # Try to get private key from keyring first, then from settings
+            private_key = auth_manager.get_app_private_key() or app_config.private_key_base64
+            if private_key:
+                try:
+                    token = await auth_manager.get_installation_token(
+                        app_config.app_id,
+                        app_config.installation_id,
+                        private_key,
+                    )
+                    return token
+                except Exception:
+                    pass  # Fall through to PAT
+
+    # Fall back to Personal Access Token
+    if settings.github.personal_token:
+        return settings.github.personal_token
+
+    # Last resort: environment variables
     token = os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
-    if not token:
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "GitHub token not configured. "
-                "Set GITPILOT_GITHUB_TOKEN or GITHUB_TOKEN in your environment."
-            ),
-        )
-    return token
+    if token:
+        return token
+
+    # No authentication configured
+    raise HTTPException(
+        status_code=401,
+        detail=(
+            "GitHub authentication not configured. "
+            "Please run 'gitpilot login' to authenticate, "
+            "or set GITPILOT_GITHUB_TOKEN in your environment."
+        ),
+    )
+
+
+def _github_token_sync() -> str:
+    """Synchronous version for CLI usage."""
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(_github_token())
 
 
 async def github_request(
@@ -29,7 +91,7 @@ async def github_request(
     json: Optional[Dict[str, Any]] = None,
     params: Optional[Dict[str, Any]] = None,
 ) -> Any:
-    token = _github_token()
+    token = await _github_token()
 
     headers = {
         "Authorization": f"Bearer {token}",
@@ -54,6 +116,45 @@ async def github_request(
 
 
 async def list_user_repos(query: str | None = None) -> List[Dict[str, Any]]:
+    """
+    List repositories accessible to the authenticated user.
+
+    For OAuth/PAT: Lists user's repositories
+    For GitHub App: Lists repositories where app is installed
+    """
+    settings = get_settings()
+    auth_manager = get_auth_manager()
+
+    # If using GitHub App, list installation repositories
+    if settings.github.auth_mode in [GitHubAuthMode.app, GitHubAuthMode.hybrid]:
+        app_config = settings.github.app
+        if app_config.app_id and app_config.installation_id:
+            private_key = auth_manager.get_app_private_key() or app_config.private_key_base64
+            if private_key:
+                try:
+                    repos_data = await auth_manager.list_installation_repos(
+                        app_config.app_id,
+                        app_config.installation_id,
+                        private_key,
+                    )
+                    repos = [
+                        {
+                            "id": r["id"],
+                            "name": r["name"],
+                            "full_name": r["full_name"],
+                            "private": r["private"],
+                            "owner": r["owner"]["login"],
+                        }
+                        for r in repos_data
+                    ]
+                    if query:
+                        q = query.lower()
+                        repos = [r for r in repos if q in r["full_name"].lower()]
+                    return repos
+                except Exception:
+                    pass  # Fall through to user repos
+
+    # Default: List user repos
     params = {
         "per_page": 100,
         "affiliation": "owner,collaborator,organization_member",
