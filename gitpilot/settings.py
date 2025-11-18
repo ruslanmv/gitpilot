@@ -24,10 +24,8 @@ class LLMProvider(str, enum.Enum):
 
 class GitHubAuthMode(str, enum.Enum):
     """GitHub authentication mode."""
-    pat = "pat"  # Personal Access Token
-    oauth = "oauth"  # User OAuth
-    app = "app"  # GitHub App
-    hybrid = "hybrid"  # OAuth + App (recommended for enterprise)
+    pat = "pat"  # Personal Access Token (for development)
+    app = "app"  # GitHub App (recommended for production)
 
 
 class OpenAIConfig(BaseModel):
@@ -72,9 +70,9 @@ class GitHubAppConfig(BaseModel):
 
 class GitHubConfig(BaseModel):
     """GitHub authentication configuration."""
-    auth_mode: GitHubAuthMode = Field(default=GitHubAuthMode.hybrid)
+    auth_mode: GitHubAuthMode = Field(default=GitHubAuthMode.app)
     personal_token: str = Field(default="")  # For PAT mode (fallback)
-    oauth: GitHubOAuthConfig = Field(default_factory=GitHubOAuthConfig)
+    oauth: GitHubOAuthConfig = Field(default_factory=GitHubOAuthConfig)  # Legacy support
     app: GitHubAppConfig = Field(default_factory=GitHubAppConfig)
 
 
@@ -243,7 +241,3 @@ def update_settings(updates: dict) -> AppSettings:
     return _settings
 
 
-def get_github_oauth_client_id() -> Optional[str]:
-    """Get GitHub OAuth client ID from settings or environment."""
-    settings = get_settings()
-    return settings.github.oauth.client_id or os.getenv("GITPILOT_OAUTH_CLIENT_ID")

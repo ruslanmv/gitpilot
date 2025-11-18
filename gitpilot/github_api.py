@@ -17,9 +17,8 @@ async def _github_token() -> str:
     Get GitHub token based on configured authentication mode.
 
     Priority:
-    1. User OAuth token (from keyring)
-    2. GitHub App installation token
-    3. Personal Access Token (PAT) from environment
+    1. GitHub App installation token (recommended)
+    2. Personal Access Token (PAT) from settings or environment
 
     Returns:
         GitHub API token string
@@ -30,14 +29,8 @@ async def _github_token() -> str:
     settings = get_settings()
     auth_manager = get_auth_manager()
 
-    # Try OAuth token first (if mode is oauth or hybrid)
-    if settings.github.auth_mode in [GitHubAuthMode.oauth, GitHubAuthMode.hybrid]:
-        user_token = auth_manager.get_user_token()
-        if user_token:
-            return user_token.access_token
-
-    # Try GitHub App token (if mode is app or hybrid)
-    if settings.github.auth_mode in [GitHubAuthMode.app, GitHubAuthMode.hybrid]:
+    # Try GitHub App token (primary method)
+    if settings.github.auth_mode == GitHubAuthMode.app:
         app_config = settings.github.app
         if app_config.app_id and app_config.installation_id:
             # Try to get private key from keyring first, then from settings
@@ -67,7 +60,7 @@ async def _github_token() -> str:
         status_code=401,
         detail=(
             "GitHub authentication not configured. "
-            "Please run 'gitpilot login' to authenticate, "
+            "Please run 'gitpilot login' to configure your GitHub App credentials, "
             "or set GITPILOT_GITHUB_TOKEN in your environment."
         ),
     )
@@ -119,14 +112,14 @@ async def list_user_repos(query: str | None = None) -> List[Dict[str, Any]]:
     """
     List repositories accessible to the authenticated user.
 
-    For OAuth/PAT: Lists user's repositories
+    For PAT: Lists user's repositories
     For GitHub App: Lists repositories where app is installed
     """
     settings = get_settings()
     auth_manager = get_auth_manager()
 
     # If using GitHub App, list installation repositories
-    if settings.github.auth_mode in [GitHubAuthMode.app, GitHubAuthMode.hybrid]:
+    if settings.github.auth_mode == GitHubAuthMode.app:
         app_config = settings.github.app
         if app_config.app_id and app_config.installation_id:
             private_key = auth_manager.get_app_private_key() or app_config.private_key_base64
@@ -154,7 +147,7 @@ async def list_user_repos(query: str | None = None) -> List[Dict[str, Any]]:
                 except Exception:
                     pass  # Fall through to user repos
 
-    # Default: List user repos
+    # Default: List user repos (PAT mode)
     params = {
         "per_page": 100,
         "affiliation": "owner,collaborator,organization_member",

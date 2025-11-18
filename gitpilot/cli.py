@@ -250,72 +250,109 @@ def version():
 
 @cli.command()
 def login():
-    """Authenticate with GitHub using OAuth device flow."""
+    """Configure GitHub App credentials interactively."""
     console.print()
     console.print(Panel.fit(
-        "[bold cyan]GitPilot Login[/bold cyan]\n"
-        "[white]Authenticate with GitHub[/white]",
+        "[bold cyan]GitPilot Setup[/bold cyan]\n"
+        "[white]Configure GitHub App Authentication[/white]",
         border_style="cyan"
     ))
     console.print()
 
-    # Check if already logged in
+    # Check current configuration
+    settings = get_settings()
     auth_manager = get_auth_manager()
-    if auth_manager.is_user_authenticated():
-        console.print("[yellow]⚠️  You are already logged in![/yellow]")
+
+    if settings.github.app.app_id and settings.github.app.installation_id:
+        console.print("[yellow]⚠️  GitHub App is already configured![/yellow]")
+        console.print()
+        console.print(f"  App ID: {settings.github.app.app_id}")
+        console.print(f"  Installation ID: {settings.github.app.installation_id}")
         console.print()
 
-        # Get current user info
-        user_token = auth_manager.get_user_token()
-        if user_token:
-            console.print("[dim]Use 'gitpilot logout' to log out first.[/dim]")
-        console.print()
-        return
+        response = typer.confirm("Do you want to reconfigure?")
+        if not response:
+            console.print("[dim]Configuration unchanged.[/dim]")
+            console.print()
+            return
 
-    # Start OAuth device flow
-    console.print("[bold]Starting OAuth device flow...[/bold]")
+    console.print("[bold]Follow these steps to set up GitHub App authentication:[/bold]")
+    console.print()
+    console.print("1. Create a GitHub App:")
+    console.print("   [cyan]https://github.com/settings/apps/new[/cyan]")
+    console.print()
+    console.print("2. Configure the app:")
+    console.print("   • Name: [cyan]GitPilota[/cyan] (or custom name)")
+    console.print("   • Permissions: Contents (read/write), Issues, Pull requests")
+    console.print("   • Generate and download private key")
+    console.print()
+    console.print("3. Install the app on your repositories")
+    console.print()
+    console.print("4. Run this configuration wizard:")
     console.print()
 
     try:
-        import asyncio
+        # Get App ID
+        app_id = typer.prompt("Enter your GitHub App ID")
 
-        async def do_login():
-            return await auth_manager.login_device_flow()
+        # Get Installation ID
+        console.print()
+        console.print("[dim]Find Installation ID in URL:[/dim]")
+        console.print("[dim]https://github.com/settings/installations/[bold]12345678[/bold][/dim]")
+        installation_id = typer.prompt("Enter Installation ID")
 
-        # Run async login
-        loop = asyncio.get_event_loop()
-        token = loop.run_until_complete(do_login())
+        # Get private key file
+        console.print()
+        private_key_path = typer.prompt("Enter path to private key file (.pem)")
+
+        # Read and encode private key
+        from pathlib import Path
+        import base64
+
+        key_file = Path(private_key_path).expanduser()
+        if not key_file.exists():
+            console.print(f"[bold red]✗ File not found:[/bold red] {private_key_path}")
+            sys.exit(1)
+
+        private_key_content = key_file.read_text()
+        private_key_b64 = base64.b64encode(private_key_content.encode()).decode()
+
+        # Store in keyring for security
+        auth_manager.save_app_private_key(private_key_content)
+
+        # Update settings
+        settings.github.auth_mode = GitHubAuthMode.app
+        settings.github.app.app_id = app_id
+        settings.github.app.installation_id = installation_id
+        settings.github.app.private_key_base64 = private_key_b64
+        settings.save()
 
         console.print()
-        console.print("[bold green]✓ Successfully logged in![/bold green]")
+        console.print("[bold green]✓ GitHub App configured successfully![/bold green]")
         console.print()
-        console.print("[dim]Your credentials are securely stored in your system keyring.[/dim]")
+        console.print("[dim]Configuration saved to ~/.gitpilot/settings.json[/dim]")
+        console.print("[dim]Private key stored securely in system keyring[/dim]")
+        console.print()
+        console.print("[bold]Next steps:[/bold]")
+        console.print("  1. Run: [cyan]gitpilot[/cyan] to start the server")
+        console.print("  2. Open: [cyan]http://localhost:8000[/cyan]")
         console.print()
 
-    except ValueError as e:
-        console.print()
-        console.print(f"[bold red]✗ Login failed:[/bold red] {e}")
-        console.print()
-        console.print("[yellow]Please make sure:[/yellow]")
-        console.print("  • GITPILOT_OAUTH_CLIENT_ID is set in your .env file")
-        console.print("  • You have internet connectivity")
-        console.print()
-        sys.exit(1)
     except KeyboardInterrupt:
         console.print()
-        console.print("[yellow]Login cancelled[/yellow]")
+        console.print("[yellow]Setup cancelled[/yellow]")
         console.print()
         sys.exit(0)
     except Exception as e:
         console.print()
-        console.print(f"[bold red]✗ Unexpected error:[/bold red] {e}")
+        console.print(f"[bold red]✗ Setup failed:[/bold red] {e}")
         console.print()
         sys.exit(1)
 
 
 @cli.command()
 def logout():
-    """Logout from GitHub and remove stored credentials."""
+    """Remove GitHub App configuration."""
     console.print()
     console.print(Panel.fit(
         "[bold cyan]GitPilot Logout[/bold cyan]\n"
@@ -324,18 +361,28 @@ def logout():
     ))
     console.print()
 
-    # Check if logged in
+    # Check if configured
+    settings = get_settings()
     auth_manager = get_auth_manager()
-    if not auth_manager.is_user_authenticated():
-        console.print("[yellow]⚠️  You are not logged in.[/yellow]")
+
+    if not (settings.github.app.app_id or auth_manager.get_app_private_key()):
+        console.print("[yellow]⚠️  No GitHub App configuration found.[/yellow]")
         console.print()
         return
 
-    # Logout
-    auth_manager.logout()
-    console.print("[bold green]✓ Successfully logged out![/bold green]")
+    # Clear configuration
+    auth_manager.delete_app_private_key()
+    settings.github.app.app_id = ""
+    settings.github.app.installation_id = ""
+    settings.github.app.private_key_base64 = ""
+    settings.save()
+
+    console.print("[bold green]✓ GitHub App configuration removed![/bold green]")
     console.print()
-    console.print("[dim]Your credentials have been removed from the system keyring.[/dim]")
+    console.print("[dim]Credentials have been cleared from the system keyring.[/dim]")
+    console.print()
+    console.print("[bold]To reconnect:[/bold]")
+    console.print("  Run: [cyan]gitpilot login[/cyan]")
     console.print()
 
 
@@ -349,42 +396,16 @@ def whoami():
     ))
     console.print()
 
-    auth_manager = get_auth_manager()
     settings = get_settings()
+    auth_manager = get_auth_manager()
 
     # Create status table
     table = Table(show_header=False, box=None, padding=(0, 2))
     table.add_column("Key", style="cyan")
     table.add_column("Value", style="white")
 
-    # User authentication status
-    user_token = auth_manager.get_user_token()
-    if user_token:
-        table.add_row("User OAuth", "✅ Authenticated")
-
-        # Try to get username
-        try:
-            import httpx
-            import asyncio
-
-            async def get_user():
-                async with httpx.AsyncClient() as client:
-                    response = await client.get(
-                        "https://api.github.com/user",
-                        headers={"Authorization": f"Bearer {user_token.access_token}"}
-                    )
-                    if response.status_code == 200:
-                        return response.json().get("login")
-                return None
-
-            loop = asyncio.get_event_loop()
-            username = loop.run_until_complete(get_user())
-            if username:
-                table.add_row("GitHub Username", username)
-        except Exception:
-            pass
-    else:
-        table.add_row("User OAuth", "❌ Not authenticated")
+    # Auth mode
+    table.add_row("Auth Mode", settings.github.auth_mode.value.upper())
 
     # GitHub App status
     app_config = settings.github.app
@@ -392,21 +413,32 @@ def whoami():
         table.add_row("GitHub App", "✅ Configured")
         table.add_row("App ID", app_config.app_id)
         table.add_row("Installation ID", app_config.installation_id)
+
+        has_key = bool(auth_manager.get_app_private_key() or app_config.private_key_base64)
+        table.add_row("Private Key", "✅ Stored" if has_key else "❌ Missing")
     else:
         table.add_row("GitHub App", "❌ Not configured")
 
-    # Auth mode
-    table.add_row("Auth Mode", settings.github.auth_mode.value)
+    # PAT fallback
+    has_pat = bool(settings.github.personal_token or os.getenv("GITPILOT_GITHUB_TOKEN"))
+    if has_pat:
+        table.add_row("Personal Token", "✅ Available (fallback)")
 
     console.print(table)
     console.print()
 
-    if not user_token and not (app_config.app_id and app_config.installation_id):
+    if not (app_config.app_id and app_config.installation_id) and not has_pat:
         console.print("[yellow]⚠️  No authentication configured[/yellow]")
         console.print()
-        console.print("[bold]To get started:[/bold]")
-        console.print("  • Run '[cyan]gitpilot login[/cyan]' to authenticate with GitHub")
-        console.print("  • Or set GITPILOT_GITHUB_TOKEN in your .env file")
+        console.print("[bold]To get started (choose one):[/bold]")
+        console.print()
+        console.print("  [bold]Option 1: GitHub App (Recommended)[/bold]")
+        console.print("    Run: [cyan]gitpilot login[/cyan]")
+        console.print("    Follow the interactive setup")
+        console.print()
+        console.print("  [bold]Option 2: Personal Access Token (Quick)[/bold]")
+        console.print("    1. Create token: [cyan]https://github.com/settings/tokens[/cyan]")
+        console.print("    2. Set in .env: [cyan]GITPILOT_GITHUB_TOKEN=your_token[/cyan]")
         console.print()
 
 

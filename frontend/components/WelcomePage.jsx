@@ -119,24 +119,24 @@ export default function WelcomePage({ onAuthComplete }) {
               <div className="welcome-content">
                 <h2 className="section-title">Secure Authentication Required</h2>
                 <p className="section-description">
-                  GitPilot uses enterprise-grade authentication to securely connect with your GitHub repositories.
+                  GitPilot uses GitHub App authentication for secure, granular access to your repositories.
                 </p>
 
                 <div className="auth-methods">
                   <div className="auth-method primary">
                     <div className="method-icon">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M12 2a5 5 0 00-5 5v3H6a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2v-8a2 2 0 00-2-2h-1V7a5 5 0 00-5-5z" />
+                      <svg viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
                       </svg>
                     </div>
                     <div className="method-content">
-                      <h3>GitHub OAuth</h3>
-                      <p>Authenticate with your GitHub account for full enterprise features</p>
+                      <h3>GitHub App (Recommended)</h3>
+                      <p>Enterprise-grade authentication with granular repository permissions</p>
                       <button className="btn-primary" onClick={handleLogin}>
-                        <svg viewBox="0 0 16 16" fill="currentColor" width="16" height="16">
-                          <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                          <path d="M12 2a5 5 0 00-5 5v3H6a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2v-8a2 2 0 00-2-2h-1V7a5 5 0 00-5-5z" />
                         </svg>
-                        Continue with GitHub
+                        Setup GitHub App
                       </button>
                     </div>
                   </div>
@@ -148,7 +148,7 @@ export default function WelcomePage({ onAuthComplete }) {
                   <div className="auth-method secondary">
                     <div className="method-icon">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M7 7h10M7 12h10M7 17h10" />
+                        <path d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
                       </svg>
                     </div>
                     <div className="method-content">
@@ -159,6 +159,7 @@ export default function WelcomePage({ onAuthComplete }) {
                         <ol>
                           <li>Create a token at <a href="https://github.com/settings/tokens/new" target="_blank" rel="noopener noreferrer">github.com/settings/tokens</a></li>
                           <li>Add to <code>.env</code>: <code>GITPILOT_GITHUB_TOKEN=your_token</code></li>
+                          <li>Set auth mode: <code>GITPILOT_GITHUB_AUTH_MODE=pat</code></li>
                           <li>Restart GitPilot server</li>
                         </ol>
                       </details>
@@ -192,7 +193,7 @@ export default function WelcomePage({ onAuthComplete }) {
                     Support
                   </a>
                 </div>
-                <p className="footer-text">Enterprise-grade security with GitHub OAuth and App authentication</p>
+                <p className="footer-text">Enterprise-grade security with GitHub App authentication</p>
               </div>
             </>
           ) : (
@@ -204,15 +205,21 @@ export default function WelcomePage({ onAuthComplete }) {
                 Back
               </button>
 
-              <h2>Login via Command Line</h2>
-              <p className="instructions-description">Follow these steps to authenticate GitPilot with your GitHub account:</p>
+              <h2>GitHub App Setup</h2>
+              <p className="instructions-description">Follow these steps to configure GitPilot with your GitHub App:</p>
 
               <div className="step-list">
                 <div className="step">
                   <div className="step-number">1</div>
                   <div className="step-content">
-                    <h3>Open your terminal</h3>
-                    <p>Launch your preferred terminal application</p>
+                    <h3>Create and install GitHub App</h3>
+                    <p>Follow the <a href="https://github.com/ruslanmv/gitpilot/blob/main/docs/GITHUB_APP_SETUP.md" target="_blank" rel="noopener noreferrer">setup guide</a> to create your GitHub App</p>
+                    <button className="btn-secondary" onClick={handleSetupGitHubApp} style={{marginTop: '0.75rem'}}>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                        <path d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                      </svg>
+                      Install GitHub App
+                    </button>
                   </div>
                 </div>
 
@@ -220,6 +227,7 @@ export default function WelcomePage({ onAuthComplete }) {
                   <div className="step-number">2</div>
                   <div className="step-content">
                     <h3>Run the login command</h3>
+                    <p>The CLI will prompt you for your App ID, Installation ID, and private key</p>
                     <div className="code-block">
                       <code>gitpilot login</code>
                       <button className="copy-btn" onClick={() => navigator.clipboard.writeText('gitpilot login')}>
@@ -235,16 +243,8 @@ export default function WelcomePage({ onAuthComplete }) {
                 <div className="step">
                   <div className="step-number">3</div>
                   <div className="step-content">
-                    <h3>Complete GitHub authentication</h3>
-                    <p>Follow the prompts to authenticate with GitHub</p>
-                  </div>
-                </div>
-
-                <div className="step">
-                  <div className="step-number">4</div>
-                  <div className="step-content">
                     <h3>Refresh this page</h3>
-                    <p>Once authenticated, refresh to access GitPilot</p>
+                    <p>Once configured, refresh to access GitPilot</p>
                   </div>
                 </div>
               </div>
@@ -689,6 +689,30 @@ export default function WelcomePage({ onAuthComplete }) {
           background: linear-gradient(180deg, #2ea043 0%, #238636 100%);
           transform: translateY(-1px);
           box-shadow: 0 4px 12px rgba(46, 160, 67, 0.3);
+        }
+
+        .btn-secondary {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 0.5rem;
+          width: 100%;
+          padding: 0.625rem 1rem;
+          background: transparent;
+          color: #8893ff;
+          border: 1px solid #30363d;
+          border-radius: 6px;
+          font-size: 13px;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all 0.2s;
+          font-family: inherit;
+        }
+
+        .btn-secondary:hover {
+          background: #21262d;
+          border-color: #8893ff;
+          transform: translateY(-1px);
         }
 
         @media (max-width: 640px) {
