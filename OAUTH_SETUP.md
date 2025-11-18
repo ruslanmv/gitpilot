@@ -1,19 +1,19 @@
-# GitPilot OAuth Authentication Setup
+# GitPilota OAuth Authentication Setup
 
-This document explains how to set up GitHub OAuth authentication for GitPilot, enabling enterprise-grade user login and repository access control.
+This document explains how to set up GitHub OAuth authentication for GitPilota, enabling enterprise-grade user login and repository access control.
 
 ## Overview
 
-GitPilot uses a two-layer authentication system:
+GitPilota uses a two-layer authentication system:
 
 1. **User Authentication (OAuth)**: Users sign in with their GitHub account via OAuth
-2. **Repository Access (GitHub App)**: Users grant the GitPilot GitHub App access to specific repositories
+2. **Repository Access (GitHub App)**: Users grant the GitPilota GitHub App access to specific repositories
 
 ## Prerequisites
 
 - A GitHub account
 - Admin access to create a GitHub App
-- GitPilot installed and configured
+- GitPilota installed and configured
 
 ## Setup Process
 
@@ -22,7 +22,7 @@ GitPilot uses a two-layer authentication system:
 1. Go to [GitHub Developer Settings](https://github.com/settings/apps)
 2. Click **"New GitHub App"**
 3. Fill in the required fields:
-   - **GitHub App name**: `gitpilot-[your-org]` (must be globally unique)
+   - **GitHub App name**: `gitpilota-[your-org]` (must be globally unique)
    - **Homepage URL**: `http://localhost:8000` (or your production URL)
    - **Callback URL**: `http://localhost:8000/auth/callback`
    - **Setup URL** (optional): Leave blank
@@ -66,7 +66,7 @@ export GITPILOT_GH_APP_CLIENT_SECRET="xxxxxxxxxxxxxxxxxxxxx"
 
 # GitHub App credentials
 export GITPILOT_GH_APP_ID="123456"
-export GITPILOT_GH_APP_SLUG="gitpilot-yourorg"
+export GITPILOT_GH_APP_SLUG="gitpilota-yourorg"
 
 # Convert private key to base64
 export GITPILOT_GH_APP_PRIVATE_KEY_BASE64=$(cat path/to/your-app.pem | base64 -w 0)
@@ -81,7 +81,7 @@ Or add them to your `.env` file:
 GITPILOT_GH_APP_CLIENT_ID=Iv1.xxxxxxxxxxxxx
 GITPILOT_GH_APP_CLIENT_SECRET=xxxxxxxxxxxxxxxxxxxxx
 GITPILOT_GH_APP_ID=123456
-GITPILOT_GH_APP_SLUG=gitpilot-yourorg
+GITPILOT_GH_APP_SLUG=gitpilota-yourorg
 GITPILOT_GH_APP_PRIVATE_KEY_BASE64=<base64-encoded-private-key>
 GITPILOT_OAUTH_REDIRECT_URI=http://localhost:8000/auth/callback
 ```
@@ -90,7 +90,7 @@ GITPILOT_OAUTH_REDIRECT_URI=http://localhost:8000/auth/callback
 
 After users log in via OAuth, they need to install your GitHub App to grant repository access:
 
-1. The user logs in to GitPilot using GitHub OAuth
+1. The user logs in to GitPilota using GitHub OAuth
 2. They navigate to the GitHub connection panel
 3. Click **"Connect with GitHub"** to install the app
 4. Select which repositories to grant access to:
@@ -115,12 +115,12 @@ export GITPILOT_GH_APP_INSTALLATION_ID="12345678"
 ### User Login Flow
 
 ```
-1. User visits GitPilot → Welcome page shown
+1. User visits GitPilota → Welcome page shown
 2. User clicks "Sign in with GitHub"
 3. Redirected to GitHub OAuth authorization
 4. User approves access
 5. GitHub redirects back to /auth/callback
-6. GitPilot creates session and stores access token
+6. GitPilota creates session and stores access token
 7. User is logged in and sees main app
 ```
 
@@ -130,7 +130,7 @@ export GITPILOT_GH_APP_INSTALLATION_ID="12345678"
 1. User installs GitHub App
 2. Selects repositories to grant access
 3. GitHub creates installation
-4. GitPilot uses installation token for API calls
+4. GitPilota uses installation token for API calls
 ```
 
 ## API Endpoints
@@ -177,18 +177,18 @@ For production deployments:
 
 1. Update OAuth callback URL to your production domain:
    ```
-   https://gitpilot.yourdomain.com/auth/callback
+   https://gitpilota.yourdomain.com/auth/callback
    ```
 
 2. Update environment variables:
    ```bash
-   export GITPILOT_OAUTH_REDIRECT_URI="https://gitpilot.yourdomain.com/auth/callback"
+   export GITPILOT_OAUTH_REDIRECT_URI="https://gitpilota.yourdomain.com/auth/callback"
    ```
 
 3. Enable secure cookies in `auth.py`:
    ```python
    response.set_cookie(
-       key="gitpilot_session",
+       key="gitpilota_session",
        value=session_id,
        max_age=max_age,
        httponly=True,
@@ -257,7 +257,7 @@ For production deployments:
 
 ## CLI Authentication
 
-For CLI usage, GitPilot also supports Personal Access Token (PAT) authentication:
+For CLI usage, GitPilota also supports Personal Access Token (PAT) authentication:
 
 ```bash
 # Set PAT for CLI usage
@@ -277,11 +277,11 @@ After setting up authentication:
 1. Configure LLM providers (OpenAI, Claude, Watsonx, or Ollama)
 2. Complete the setup wizard
 3. Select repositories to work with
-4. Start using GitPilot's AI-powered features
+4. Start using GitPilota's AI-powered features
 
 ## Support
 
 For issues or questions:
 
-- [GitHub Issues](https://github.com/ruslanmv/gitpilot/issues)
-- [Documentation](https://github.com/ruslanmv/gitpilot#readme)
+- [GitHub Issues](https://github.com/ruslanmv/gitpilota/issues)
+- [Documentation](https://github.com/ruslanmv/gitpilota#readme)

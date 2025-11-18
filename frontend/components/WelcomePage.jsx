@@ -90,7 +90,7 @@ export default function WelcomePage({ onLoginSuccess }) {
           <div className="welcome-logo">
             <div className="logo-square large">GP</div>
           </div>
-          <h1 className="welcome-title">Welcome to GitPilot</h1>
+          <h1 className="welcome-title">Welcome to GitPilota</h1>
           <p className="welcome-subtitle">
             Your AI-powered assistant for GitHub repositories
           </p>
@@ -123,8 +123,8 @@ export default function WelcomePage({ onLoginSuccess }) {
                 credentials in the environment or settings.
               </p>
               <p className="notice-hint">
-                Set <code>GITPILOT_GH_APP_CLIENT_ID</code> and{" "}
-                <code>GITPILOT_GH_APP_CLIENT_SECRET</code>
+                Set <code>GITPILOTA_GH_APP_CLIENT_ID</code> and{" "}
+                <code>GITPILOTA_GH_APP_CLIENT_SECRET</code>
               </p>
             </div>
           ) : (
@@ -156,7 +156,7 @@ export default function WelcomePage({ onLoginSuccess }) {
               )}
 
               <p className="welcome-privacy">
-                By signing in, you authorize GitPilot to access your selected
+                By signing in, you authorize GitPilota to access your selected
                 repositories. We never store your GitHub credentials.
               </p>
             </>
@@ -165,9 +165,9 @@ export default function WelcomePage({ onLoginSuccess }) {
 
         <div className="welcome-footer">
           <p>
-            New to GitPilot?{" "}
+            New to GitPilota?{" "}
             <a
-              href="https://github.com/ruslanmv/gitpilot"
+              href="https://github.com/ruslanmv/gitpilota"
               target="_blank"
               rel="noopener noreferrer"
             >

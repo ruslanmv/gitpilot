@@ -90,12 +90,12 @@ body {
   width: 32px;
   height: 32px;
   border-radius: 8px;
-  background: #ff7a3c;
+  background: #5B8DEE;
   display: flex;
   align-items: center;
   justify-content: center;
   font-weight: 700;
-  color: #050608;
+  color: #ffffff;
   transition: transform 0.2s ease;
 }
 
@@ -183,7 +183,7 @@ body {
 
 .repo-search-input:focus {
   outline: none;
-  border-color: #ff7a3c;
+  border-color: #5B8DEE;
   background: #0a0b0f;
 }
 
@@ -534,7 +534,7 @@ body {
 
 .chat-input:focus {
   outline: none;
-  border-color: #ff7a3c;
+  border-color: #5B8DEE;
   background: #101117;
   box-shadow: 0 0 0 3px rgba(255, 122, 60, 0.1);
 }
@@ -548,8 +548,8 @@ body {
   border: none;
   outline: none;
   padding: 10px 16px;
-  background: #ff7a3c;
-  color: #050608;
+  background: #5B8DEE;
+  color: #ffffff;
   cursor: pointer;
   font-size: 13px;
   font-weight: 600;
@@ -559,7 +559,7 @@ body {
 }
 
 .chat-btn:hover:not(:disabled) {
-  background: #ff8c52;
+  background: #6B9EFF;
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(255, 122, 60, 0.3);
 }
@@ -658,7 +658,7 @@ body {
 }
 
 .modal-close:hover {
-  color: #ff7a3c;
+  color: #5B8DEE;
 }
 
 .provider-list {
@@ -685,7 +685,7 @@ body {
 }
 
 .provider-item.active {
-  border-color: #ff7a3c;
+  border-color: #5B8DEE;
   background: rgba(255, 122, 60, 0.1);
 }
 
@@ -795,7 +795,7 @@ body {
 .settings-input:focus,
 .settings-select:focus {
   outline: none;
-  border-color: #ff7a3c;
+  border-color: #5B8DEE;
   box-shadow: 0 0 0 3px rgba(255, 122, 60, 0.1);
 }
 
@@ -817,20 +817,20 @@ body {
 }
 
 .settings-save-btn {
-  background: #ff7a3c;
+  background: #5B8DEE;
   border-radius: 999px;
   border: none;
   outline: none;
   padding: 9px 18px;
   font-size: 13px;
   cursor: pointer;
-  color: #050608;
+  color: #ffffff;
   font-weight: 600;
   transition: all 0.2s ease;
 }
 
 .settings-save-btn:hover {
-  background: #ff8b52;
+  background: #6B9EFF;
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(255, 122, 60, 0.3);
 }
@@ -1072,7 +1072,7 @@ body {
   margin-top: 8px;
   padding: 6px 8px;
   background: rgba(255, 152, 0, 0.1);
-  border-left: 2px solid #ff9800;
+  border-left: 2px solid #7BA5FF;
   border-radius: 4px;
   font-size: 11px;
   color: #ffb74d;
@@ -1100,7 +1100,7 @@ body {
 }
 
 .execution-step-number {
-  color: #ff7a3c;
+  color: #5B8DEE;
   font-weight: 600;
   margin-right: 8px;
 }
@@ -1174,7 +1174,7 @@ body {
 }
 
 .gp-badge:hover {
-  border-color: #ff7a3c;
+  border-color: #5B8DEE;
 }
 
 .gp-context-meta {
@@ -1260,7 +1260,7 @@ body {
 }
 
 .gp-footer-right a:hover {
-  color: #ff7a3c;
+  color: #5B8DEE;
   transform: translateY(-1px);
 }
 
@@ -1288,7 +1288,7 @@ body {
   width: 48px;
   height: 48px;
   border: 4px solid #272832;
-  border-top-color: #ff7a3c;
+  border-top-color: #5B8DEE;
   border-radius: 50%;
   animation: spin 1s linear infinite;
   margin-bottom: 16px;
@@ -1343,7 +1343,7 @@ body {
   font-size: 42px;
   margin: 0 0 12px;
   font-weight: 700;
-  background: linear-gradient(135deg, #f5f5f7 0%, #ff7a3c 100%);
+  background: linear-gradient(135deg, #f5f5f7 0%, #5B8DEE 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -1372,7 +1372,7 @@ body {
 }
 
 .feature-item:hover {
-  border-color: #ff7a3c;
+  border-color: #5B8DEE;
   transform: translateY(-4px);
   box-shadow: 0 8px 24px rgba(255, 122, 60, 0.15);
 }
@@ -1420,12 +1420,12 @@ body {
 }
 
 .welcome-btn-primary {
-  background: #ff7a3c;
-  color: #050608;
+  background: #5B8DEE;
+  color: #ffffff;
 }
 
 .welcome-btn-primary:hover:not(:disabled) {
-  background: #ff8c52;
+  background: #6B9EFF;
   transform: translateY(-2px);
   box-shadow: 0 8px 24px rgba(255, 122, 60, 0.4);
 }
@@ -1444,7 +1444,7 @@ body {
   width: 16px;
   height: 16px;
   border: 2px solid rgba(5, 6, 8, 0.3);
-  border-top-color: #050608;
+  border-top-color: #ffffff;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -1484,7 +1484,7 @@ body {
 
 .notice-hint {
   font-size: 12px !important;
-  color: #ff9800 !important;
+  color: #7BA5FF !important;
 }
 
 .notice-hint code {
@@ -1527,13 +1527,13 @@ body {
 }
 
 .welcome-footer a {
-  color: #ff7a3c;
+  color: #5B8DEE;
   text-decoration: none;
   transition: color 0.2s ease;
 }
 
 .welcome-footer a:hover {
-  color: #ff8c52;
+  color: #6B9EFF;
   text-decoration: underline;
 }
 
@@ -1580,11 +1580,11 @@ body {
 }
 
 .user-avatar-placeholder {
-  background: #ff7a3c;
+  background: #5B8DEE;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #050608;
+  color: #ffffff;
   font-weight: 700;
   font-size: 13px;
 }
@@ -1711,7 +1711,7 @@ body {
 }
 
 .setup-progress-dot.active {
-  background: #ff7a3c;
+  background: #5B8DEE;
   transform: scale(1.2);
 }
 
@@ -1770,12 +1770,12 @@ body {
 }
 
 .setup-btn-primary {
-  background: #ff7a3c;
-  color: #050608;
+  background: #5B8DEE;
+  color: #ffffff;
 }
 
 .setup-btn-primary:hover:not(:disabled) {
-  background: #ff8c52;
+  background: #6B9EFF;
   transform: translateY(-2px);
   box-shadow: 0 4px 16px rgba(255, 122, 60, 0.3);
 }
@@ -1860,7 +1860,7 @@ body {
 }
 
 .setup-auth-mode.active {
-  border-color: #ff7a3c;
+  border-color: #5B8DEE;
   background: rgba(255, 122, 60, 0.1);
 }
 
@@ -1894,7 +1894,7 @@ body {
 }
 
 .setup-label-required {
-  color: #ff7a3c;
+  color: #5B8DEE;
   margin-left: 4px;
 }
 
@@ -1918,7 +1918,7 @@ body {
 
 .setup-input:focus {
   outline: none;
-  border-color: #ff7a3c;
+  border-color: #5B8DEE;
   box-shadow: 0 0 0 3px rgba(255, 122, 60, 0.1);
 }
 
@@ -1950,7 +1950,7 @@ body {
 }
 
 .setup-hint a {
-  color: #ff7a3c;
+  color: #5B8DEE;
   text-decoration: none;
 }
 
@@ -1964,7 +1964,7 @@ body {
   border-radius: 4px;
   font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
   font-size: 10px;
-  color: #ff7a3c;
+  color: #5B8DEE;
 }
 
 .setup-error {
@@ -2004,8 +2004,8 @@ body {
 }
 
 .setup-provider-tab.active {
-  color: #ff7a3c;
-  border-bottom-color: #ff7a3c;
+  color: #5B8DEE;
+  border-bottom-color: #5B8DEE;
 }
 
 .setup-complete-features {
@@ -2025,7 +2025,7 @@ body {
 }
 
 .setup-feature-card:hover {
-  border-color: #ff7a3c;
+  border-color: #5B8DEE;
   transform: translateY(-2px);
 }
 

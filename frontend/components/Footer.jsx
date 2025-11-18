@@ -7,16 +7,16 @@ export default function Footer() {
         ⭐ Star our GitHub project
       </div>
       <div className="gp-footer-right">
-        <span>© 2025 GitPilot</span>
+        <span>© 2025 GitPilota</span>
         <a
-          href="https://github.com/ruslanmv/gitpilot"
+          href="https://github.com/ruslanmv/gitpilota"
           target="_blank"
           rel="noreferrer"
         >
           Docs
         </a>
         <a
-          href="https://github.com/ruslanmv/gitpilot"
+          href="https://github.com/ruslanmv/gitpilota"
           target="_blank"
           rel="noreferrer"
         >

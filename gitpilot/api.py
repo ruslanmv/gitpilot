@@ -30,7 +30,7 @@ from .auth import (
 )
 
 app = FastAPI(
-    title="GitPilot API",
+    title="GitPilota API",
     version=__version__,
     description="Agentic AI assistant for GitHub repositories.",
 )
@@ -440,7 +440,7 @@ async def index():
         return FileResponse(index_file)
     return JSONResponse(
         {
-            "message": "GitPilot UI not built. The static files directory is missing."
+            "message": "GitPilota UI not built. The static files directory is missing."
         },
         status_code=500,
     )

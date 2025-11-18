@@ -105,8 +105,8 @@ export default function App() {
           <div className="logo-row">
             <div className="logo-square">GP</div>
             <div>
-              <div className="logo-title">GitPilot</div>
-              <div className="logo-subtitle">Agentic GitHub copilot</div>
+              <div className="logo-title">GitPilota</div>
+              <div className="logo-subtitle">Agentic GitHub Assistant</div>
             </div>
           </div>
 

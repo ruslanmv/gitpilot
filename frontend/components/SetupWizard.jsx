@@ -154,7 +154,7 @@ function WelcomeStep({ onNext, onSkip, saving }) {
   return (
     <div className="setup-step">
       <div className="setup-step-icon">🚀</div>
-      <h1 className="setup-step-title">Welcome to GitPilot</h1>
+      <h1 className="setup-step-title">Welcome to GitPilota</h1>
       <p className="setup-step-description">
         Let's get you set up in just a few steps. You'll need:
       </p>
@@ -507,7 +507,7 @@ function CompleteStep({ onComplete, onPrevious, saving, error }) {
       <h1 className="setup-step-title">Ready to Go!</h1>
       <p className="setup-step-description">
         Your configuration is complete. Click "Finish Setup" to start using
-        GitPilot.
+        GitPilota.
       </p>
 
       <div className="setup-complete-features">
