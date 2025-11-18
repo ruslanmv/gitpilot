@@ -8,6 +8,14 @@ export default function WelcomePage({ onAuthComplete }) {
 
   useEffect(() => {
     checkAuthStatus();
+
+    // Poll for authentication status every 3 seconds (like Claude Code)
+    // This automatically detects when user completes 'gitpilot login' in CLI
+    const pollInterval = setInterval(() => {
+      checkAuthStatus();
+    }, 3000);
+
+    return () => clearInterval(pollInterval);
   }, []);
 
   const checkAuthStatus = async () => {
@@ -17,7 +25,7 @@ export default function WelcomePage({ onAuthComplete }) {
       setAuthStatus(data);
       setLoading(false);
 
-      // If authenticated, notify parent
+      // If authenticated, notify parent to proceed to main app
       if (data.authenticated) {
         onAuthComplete?.();
       }
@@ -207,6 +215,11 @@ export default function WelcomePage({ onAuthComplete }) {
 
               <h2>GitHub App Setup</h2>
               <p className="instructions-description">Follow these steps to configure GitPilot with your GitHub App:</p>
+
+              <div className="polling-status">
+                <div className="polling-indicator"></div>
+                <span>Waiting for authentication... (auto-refreshing)</span>
+              </div>
 
               <div className="step-list">
                 <div className="step">
@@ -713,6 +726,36 @@ export default function WelcomePage({ onAuthComplete }) {
           background: #21262d;
           border-color: #8893ff;
           transform: translateY(-1px);
+        }
+
+        .polling-status {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+          padding: 0.875rem 1rem;
+          margin-bottom: 1.5rem;
+          background: rgba(136, 147, 255, 0.08);
+          border: 1px solid rgba(136, 147, 255, 0.2);
+          border-radius: 6px;
+          font-size: 13px;
+          color: #8893ff;
+        }
+
+        .polling-indicator {
+          width: 8px;
+          height: 8px;
+          background: #8893ff;
+          border-radius: 50%;
+          animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+
+        @keyframes pulse {
+          0%, 100% {
+            opacity: 1;
+          }
+          50% {
+            opacity: 0.3;
+          }
         }
 
         @media (max-width: 640px) {

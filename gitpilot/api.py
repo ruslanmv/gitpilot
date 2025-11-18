@@ -222,34 +222,75 @@ class LoginResponse(BaseModel):
 @app.get("/api/auth/status", response_model=AuthStatusResponse)
 async def api_auth_status():
     """Get current authentication status."""
-    settings = get_settings()
+    # Reload settings from disk to pick up changes from CLI
+    from .settings import AppSettings
+    settings = AppSettings.from_disk()
     auth_manager = get_auth_manager()
 
-    user_token = auth_manager.get_user_token()
-    has_user_token = user_token is not None
-    has_app_config = bool(
-        settings.github.app.app_id and settings.github.app.installation_id
-    )
-
-    # Get username if authenticated
+    # Check for GitHub App authentication
+    has_app_config = False
+    authenticated = False
     username = None
-    if has_user_token:
-        try:
-            import httpx
-            response = await httpx.AsyncClient().get(
-                "https://api.github.com/user",
-                headers={"Authorization": f"Bearer {user_token.access_token}"}
-            )
-            if response.status_code == 200:
-                data = response.json()
-                username = data.get("login")
-        except Exception:
-            pass
+
+    if settings.github.auth_mode == GitHubAuthMode.app:
+        # Check if GitHub App is configured
+        app_config = settings.github.app
+        if app_config.app_id and app_config.installation_id:
+            # Check if private key is available
+            private_key = auth_manager.get_app_private_key() or app_config.private_key_base64
+            if private_key:
+                has_app_config = True
+                # Try to get installation token to verify authentication works
+                try:
+                    token = await auth_manager.get_installation_token(
+                        app_config.app_id,
+                        app_config.installation_id,
+                        private_key,
+                    )
+                    authenticated = True
+
+                    # Get username from GitHub API using the installation token
+                    try:
+                        import httpx
+                        response = await httpx.AsyncClient().get(
+                            "https://api.github.com/user/installations",
+                            headers={
+                                "Authorization": f"Bearer {token}",
+                                "Accept": "application/vnd.github+json"
+                            }
+                        )
+                        if response.status_code == 200:
+                            data = response.json()
+                            # Get the account username from installations
+                            if data.get("total_count", 0) > 0 and data.get("installations"):
+                                username = data["installations"][0]["account"]["login"]
+                    except Exception:
+                        pass
+                except Exception:
+                    # Authentication configured but not working
+                    authenticated = False
+    elif settings.github.auth_mode == GitHubAuthMode.pat:
+        # Check for PAT authentication
+        if settings.github.personal_token:
+            authenticated = True
+            has_app_config = False
+            # Get username from PAT
+            try:
+                import httpx
+                response = await httpx.AsyncClient().get(
+                    "https://api.github.com/user",
+                    headers={"Authorization": f"Bearer {settings.github.personal_token}"}
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    username = data.get("login")
+            except Exception:
+                pass
 
     return AuthStatusResponse(
-        authenticated=has_user_token or has_app_config,
+        authenticated=authenticated,
         auth_mode=settings.github.auth_mode,
-        has_user_token=has_user_token,
+        has_user_token=False,  # OAuth removed
         has_app_config=has_app_config,
         setup_completed=settings.setup_completed,
         username=username,
