@@ -298,8 +298,8 @@ async def api_github_app_install_url():
     settings = get_settings()
 
     if not settings.github.app.slug:
-        # Return generic URL
-        install_url = "https://github.com/apps/gitpilot"
+        # Return generic URL (default to gitpilota)
+        install_url = "https://github.com/apps/gitpilota/installations/new"
     else:
         install_url = f"https://github.com/apps/{settings.github.app.slug}/installations/new"
 

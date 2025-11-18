@@ -2,6 +2,8 @@
 
 This tutorial will guide you through creating your own GitHub App to enable GitPilot's enterprise authentication system. This allows you to control which repositories GitPilot can access and provides a secure, auditable authentication mechanism.
 
+> **Note:** The GitHub App name "GitPilot" is already taken on GitHub. Use "**GitPilota**" or a custom name like "GitPilot-YourName".
+
 ## Table of Contents
 
 - [Why Create a GitHub App?](#why-create-a-github-app)
@@ -61,12 +63,12 @@ You'll see a form with several sections. Fill them in as follows:
 
 **GitHub App Name:**
 ```
-GitPilot
+GitPilota
 ```
-> **Note:** This name must be globally unique across all of GitHub. If "GitPilot" is taken, try:
-> - `GitPilot-YourName`
-> - `GitPilot-YourOrg`
-> - `YourOrg-GitPilot`
+> **Note:** This name must be globally unique across all of GitHub. The name "GitPilot" is already taken, so we recommend "GitPilota" (with an 'a'). Alternatives:
+> - `GitPilota-YourName`
+> - `GitPilota-YourOrg`
+> - `YourOrg-GitPilota`
 
 **Description:** (optional but recommended)
 ```
@@ -178,7 +180,7 @@ While on the app settings page, copy these values (you'll need them later):
 | **App ID** | Top of the page, under the app name | `123456` |
 | **Client ID** | In the "Basic information" section | `Iv1.a1b2c3d4e5f6g7h8` |
 | **Client Secret** | Click "Generate a new client secret" | `abc123def456...` |
-| **App Slug** | In the URL and app name | `gitpilot-yourname` |
+| **App Slug** | In the URL and app name | `gitpilota-yourname` |
 
 **To generate Client Secret:**
 1. Find the **"Client secrets"** section
@@ -246,7 +248,7 @@ Now you need to install the app on your repositories.
 ```
 https://github.com/apps/YOUR-APP-SLUG/installations/new
 ```
-Replace `YOUR-APP-SLUG` with your actual app slug (e.g., `gitpilot-yourname`)
+Replace `YOUR-APP-SLUG` with your actual app slug (e.g., `gitpilota-yourname`)
 
 #### Step 2: Select Repositories
 
@@ -330,7 +332,7 @@ GITPILOT_GH_APP_CLIENT_ID=Iv1.a1b2c3d4e5f6g7h8
 GITPILOT_GH_APP_CLIENT_SECRET=abc123def456ghi789jkl012mno345pqr678stu901
 
 # App Slug (your app name in URL)
-GITPILOT_GH_APP_SLUG=gitpilot-yourname
+GITPILOT_GH_APP_SLUG=gitpilota-yourname
 ```
 
 **📝 Example Complete Configuration:**
@@ -342,7 +344,7 @@ GITPILOT_GH_APP_INSTALLATION_ID=12345678
 GITPILOT_GH_APP_PRIVATE_KEY_BASE64=LS0tLS1CRUdJTi....(very long string)
 GITPILOT_GH_APP_CLIENT_ID=Iv1.a1b2c3d4e5f6g7h8
 GITPILOT_GH_APP_CLIENT_SECRET=abc123def456ghi789jkl012mno345pqr678stu901
-GITPILOT_GH_APP_SLUG=gitpilot-yourname
+GITPILOT_GH_APP_SLUG=gitpilota-yourname
 
 # Also configure your LLM provider
 GITPILOT_PROVIDER=openai

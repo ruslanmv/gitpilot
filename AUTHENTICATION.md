@@ -496,7 +496,7 @@ Get GitHub App installation URL.
 **Response:**
 ```json
 {
-  "install_url": "https://github.com/apps/gitpilot/installations/new"
+  "install_url": "https://github.com/apps/gitpilota/installations/new"
 }
 ```
 
