@@ -17,9 +17,11 @@ from .agentic import generate_plan, execute_plan, PlanResult, get_flow_definitio
 from .auth import (
     session_store,
     get_oauth_config,
+    is_oauth_configured,
     get_github_oauth_url,
     exchange_code_for_token,
     get_github_user,
+    verify_github_token,
     create_session_token,
     create_csrf_token,
     set_session_cookie,
@@ -123,6 +125,10 @@ class GithubAppInstallURL(BaseModel):
     url: str
 
 
+class PATLoginRequest(BaseModel):
+    token: str
+
+
 # ============================================================================
 # Authentication Endpoints
 # ============================================================================
@@ -169,6 +175,47 @@ async def api_auth_login():
             status_code=e.status_code,
             content={"error": e.detail}
         )
+
+
+@app.post("/api/auth/login-pat")
+async def api_auth_login_pat(request: Request, response: Response, payload: PATLoginRequest):
+    """Login with GitHub Personal Access Token."""
+    try:
+        # Verify the token and get user info
+        github_user = await verify_github_token(payload.token)
+
+        # Create session
+        session_id = create_session_token()
+        user_session = UserSession(
+            user_id=github_user["id"],
+            username=github_user["login"],
+            email=github_user.get("email"),
+            avatar_url=github_user.get("avatar_url"),
+            access_token=payload.token,
+            auth_method="pat",
+            created_at=time.time(),
+            expires_at=time.time() + 86400 * 30,  # 30 days
+        )
+
+        session_store.create_session(session_id, user_session)
+
+        # Set session cookie
+        set_session_cookie(response, session_id)
+
+        return {
+            "success": True,
+            "user": {
+                "user_id": github_user["id"],
+                "username": github_user["login"],
+                "email": github_user.get("email"),
+                "avatar_url": github_user.get("avatar_url"),
+            }
+        }
+
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Login failed: {str(e)}")
 
 
 @app.get("/api/auth/callback")

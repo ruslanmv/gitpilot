@@ -33,6 +33,7 @@ class UserSession(BaseModel):
     email: Optional[str] = None
     avatar_url: Optional[str] = None
     access_token: str
+    auth_method: str = "oauth"  # "oauth" or "pat"
     created_at: float
     expires_at: Optional[float] = None
 
@@ -92,6 +93,13 @@ class SessionStore:
 session_store = SessionStore()
 
 
+def is_oauth_configured() -> bool:
+    """Check if OAuth is configured without raising an exception."""
+    settings = get_settings()
+    github_config = settings.github
+    return bool(github_config.app_client_id and github_config.app_client_secret)
+
+
 def get_oauth_config() -> OAuthConfig:
     """Get OAuth configuration from settings or environment."""
     settings = get_settings()
@@ -113,6 +121,27 @@ def get_oauth_config() -> OAuthConfig:
         client_secret=github_config.app_client_secret,
         redirect_uri=redirect_uri,
     )
+
+
+async def verify_github_token(token: str) -> Dict[str, Any]:
+    """Verify a GitHub Personal Access Token and get user info."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            "https://api.github.com/user",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+            },
+            timeout=10.0,
+        )
+
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid GitHub token. Please check your Personal Access Token."
+        )
+
+    return response.json()
 
 
 def get_github_oauth_url(state: str) -> str:

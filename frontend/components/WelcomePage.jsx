@@ -3,7 +3,9 @@ import React, { useState, useEffect } from "react";
 export default function WelcomePage({ onLoginSuccess }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [isConfigured, setIsConfigured] = useState(false);
+  const [isOAuthConfigured, setIsOAuthConfigured] = useState(false);
+  const [patToken, setPatToken] = useState("");
+  const [showToken, setShowToken] = useState(false);
 
   useEffect(() => {
     checkOAuthConfig();
@@ -15,14 +17,56 @@ export default function WelcomePage({ onLoginSuccess }) {
       if (res.ok) {
         const data = await res.json();
         const hasOAuth = data.github?.app_client_id && data.github?.app_client_secret;
-        setIsConfigured(hasOAuth);
+        setIsOAuthConfigured(hasOAuth);
       }
     } catch (e) {
       console.error("Failed to check OAuth config:", e);
     }
   };
 
-  const handleLogin = async () => {
+  const handlePATLogin = async (e) => {
+    e.preventDefault();
+
+    if (!patToken.trim()) {
+      setError("Please enter your GitHub Personal Access Token");
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setError(null);
+
+      const res = await fetch("/api/auth/login-pat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ token: patToken }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.detail || "Invalid token");
+      }
+
+      const data = await res.json();
+
+      // Check auth status to trigger app reload
+      const authRes = await fetch("/api/auth/status");
+      if (authRes.ok) {
+        const authData = await authRes.json();
+        if (authData.authenticated) {
+          onLoginSuccess(authData);
+        }
+      }
+    } catch (e) {
+      console.error("Login error:", e);
+      setError(e.message || "Failed to login. Please check your token.");
+      setLoading(false);
+    }
+  };
+
+  const handleOAuthLogin = async () => {
     try {
       setLoading(true);
       setError(null);
@@ -43,7 +87,7 @@ export default function WelcomePage({ onLoginSuccess }) {
 
       const authWindow = window.open(
         data.url,
-        "GitPilot Login",
+        "GitPilota Login",
         `width=${width},height=${height},left=${left},top=${top}`
       );
 
@@ -63,7 +107,7 @@ export default function WelcomePage({ onLoginSuccess }) {
       }, 500);
 
     } catch (e) {
-      console.error("Login error:", e);
+      console.error("OAuth login error:", e);
       setError(e.message || "Failed to login");
       setLoading(false);
     }
@@ -110,57 +154,99 @@ export default function WelcomePage({ onLoginSuccess }) {
           <div className="feature-item">
             <div className="feature-icon">🔒</div>
             <h3>Secure GitHub Integration</h3>
-            <p>OAuth-based authentication with granular repository access</p>
+            <p>Simple and secure authentication</p>
           </div>
         </div>
 
         <div className="welcome-actions">
-          {!isConfigured ? (
-            <div className="welcome-setup-notice">
-              <div className="notice-icon">⚠️</div>
-              <p>
-                GitHub OAuth is not configured. Please set up your GitHub App
-                credentials in the environment or settings.
-              </p>
-              <p className="notice-hint">
-                Set <code>GITPILOTA_GH_APP_CLIENT_ID</code> and{" "}
-                <code>GITPILOTA_GH_APP_CLIENT_SECRET</code>
+          <form onSubmit={handlePATLogin} className="pat-login-form">
+            <div className="form-group">
+              <label htmlFor="pat-token" className="form-label">
+                GitHub Personal Access Token
+              </label>
+              <div className="input-with-toggle">
+                <input
+                  id="pat-token"
+                  type={showToken ? "text" : "password"}
+                  className="form-input"
+                  placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+                  value={patToken}
+                  onChange={(e) => setPatToken(e.target.value)}
+                  disabled={loading}
+                  autoComplete="off"
+                />
+                <button
+                  type="button"
+                  className="input-toggle-btn"
+                  onClick={() => setShowToken(!showToken)}
+                  disabled={loading}
+                  title={showToken ? "Hide token" : "Show token"}
+                >
+                  {showToken ? "👁️" : "👁️‍🗨️"}
+                </button>
+              </div>
+              <p className="form-hint">
+                Get your token at{" "}
+                <a
+                  href="https://github.com/settings/tokens/new?description=GitPilota&scopes=repo"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  github.com/settings/tokens
+                </a>
+                <br />
+                Required scope: <code>repo</code>
               </p>
             </div>
-          ) : (
-            <>
-              <button
-                type="button"
-                className="welcome-btn welcome-btn-primary"
-                onClick={handleLogin}
-                disabled={loading}
-              >
-                {loading ? (
-                  <>
-                    <span className="spinner"></span>
-                    Connecting...
-                  </>
-                ) : (
-                  <>
-                    <span className="btn-icon">🔗</span>
-                    Sign in with GitHub
-                  </>
-                )}
-              </button>
 
-              {error && (
-                <div className="welcome-error">
-                  <span className="error-icon">❌</span>
-                  {error}
-                </div>
+            <button
+              type="submit"
+              className="welcome-btn welcome-btn-primary"
+              disabled={loading || !patToken.trim()}
+            >
+              {loading ? (
+                <>
+                  <span className="spinner"></span>
+                  Signing in...
+                </>
+              ) : (
+                <>
+                  <span className="btn-icon">🔑</span>
+                  Sign in with Token
+                </>
               )}
+            </button>
+          </form>
 
-              <p className="welcome-privacy">
-                By signing in, you authorize GitPilota to access your selected
-                repositories. We never store your GitHub credentials.
-              </p>
-            </>
+          {isOAuthConfigured && (
+            <div className="login-divider">
+              <span>or</span>
+            </div>
           )}
+
+          {isOAuthConfigured && (
+            <button
+              type="button"
+              className="welcome-btn welcome-btn-secondary"
+              onClick={handleOAuthLogin}
+              disabled={loading}
+            >
+              <span className="btn-icon">🔗</span>
+              Sign in with GitHub OAuth
+            </button>
+          )}
+
+          {error && (
+            <div className="welcome-error">
+              <span className="error-icon">❌</span>
+              {error}
+            </div>
+          )}
+
+          <p className="welcome-privacy">
+            By signing in, you authorize GitPilota to access your repositories.
+            We never store your credentials.
+          </p>
         </div>
 
         <div className="welcome-footer">
