@@ -39,6 +39,26 @@ export default function WelcomePage({ onAuthComplete }) {
     setShowInstructions(true);
   };
 
+  const handleUseEnvCredentials = async () => {
+    try {
+      await fetch("/api/auth/use-env", { method: "POST" });
+      // Refresh auth status to proceed to app
+      checkAuthStatus();
+    } catch (err) {
+      setError("Failed to use .env credentials");
+    }
+  };
+
+  const handleUseCustomCredentials = async () => {
+    try {
+      await fetch("/api/auth/use-custom", { method: "POST" });
+      // Show login instructions
+      setShowInstructions(true);
+    } catch (err) {
+      setError("Failed to switch to custom credentials");
+    }
+  };
+
   const handleSetupGitHubApp = async () => {
     try {
       const response = await fetch("/api/auth/github-app-install-url");
@@ -125,55 +145,113 @@ export default function WelcomePage({ onAuthComplete }) {
           {!showInstructions ? (
             <>
               <div className="welcome-content">
-                <h2 className="section-title">Secure Authentication Required</h2>
-                <p className="section-description">
-                  GitPilot uses GitHub App authentication for secure, granular access to your repositories.
-                </p>
+                {authStatus?.has_env_credentials ? (
+                  <>
+                    <h2 className="section-title">Welcome Back!</h2>
+                    <p className="section-description">
+                      Credentials detected in .env file. Choose how you'd like to proceed:
+                    </p>
 
-                <div className="auth-methods">
-                  <div className="auth-method primary">
-                    <div className="method-icon">
-                      <svg viewBox="0 0 16 16" fill="currentColor">
-                        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
-                      </svg>
-                    </div>
-                    <div className="method-content">
-                      <h3>GitHub App (Recommended)</h3>
-                      <p>Enterprise-grade authentication with granular repository permissions</p>
-                      <button className="btn-primary" onClick={handleLogin}>
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
-                          <path d="M12 2a5 5 0 00-5 5v3H6a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2v-8a2 2 0 00-2-2h-1V7a5 5 0 00-5-5z" />
-                        </svg>
-                        Setup GitHub App
-                      </button>
-                    </div>
-                  </div>
+                    <div className="auth-methods">
+                      <div className="auth-method primary">
+                        <div className="method-icon">
+                          <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                          </svg>
+                        </div>
+                        <div className="method-content">
+                          <h3>Continue with .env credentials</h3>
+                          {authStatus?.env_username && (
+                            <p>Logged in as: <strong>@{authStatus.env_username}</strong></p>
+                          )}
+                          {!authStatus?.env_username && (
+                            <p>Use the credentials configured in your .env file</p>
+                          )}
+                          <button className="btn-primary" onClick={handleUseEnvCredentials}>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                              <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            Continue
+                          </button>
+                        </div>
+                      </div>
 
-                  <div className="divider">
-                    <span>or</span>
-                  </div>
+                      <div className="divider">
+                        <span>or</span>
+                      </div>
 
-                  <div className="auth-method secondary">
-                    <div className="method-icon">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-                      </svg>
+                      <div className="auth-method secondary">
+                        <div className="method-icon">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                          </svg>
+                        </div>
+                        <div className="method-content">
+                          <h3>Login with different account</h3>
+                          <p>Configure custom GitHub App credentials for a different user</p>
+                          <button className="btn-secondary-action" onClick={handleUseCustomCredentials}>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                              <path d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+                            </svg>
+                            Login as Different User
+                          </button>
+                        </div>
+                      </div>
                     </div>
-                    <div className="method-content">
-                      <h3>Personal Access Token</h3>
-                      <p>Quick setup for development and testing</p>
-                      <details className="pat-details">
-                        <summary>Setup instructions</summary>
-                        <ol>
-                          <li>Create a token at <a href="https://github.com/settings/tokens/new" target="_blank" rel="noopener noreferrer">github.com/settings/tokens</a></li>
-                          <li>Add to <code>.env</code>: <code>GITPILOT_GITHUB_TOKEN=your_token</code></li>
-                          <li>Set auth mode: <code>GITPILOT_GITHUB_AUTH_MODE=pat</code></li>
-                          <li>Restart GitPilot server</li>
-                        </ol>
-                      </details>
+                  </>
+                ) : (
+                  <>
+                    <h2 className="section-title">Secure Authentication Required</h2>
+                    <p className="section-description">
+                      GitPilot uses GitHub App authentication for secure, granular access to your repositories.
+                    </p>
+
+                    <div className="auth-methods">
+                      <div className="auth-method primary">
+                        <div className="method-icon">
+                          <svg viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+                          </svg>
+                        </div>
+                        <div className="method-content">
+                          <h3>GitHub App (Recommended)</h3>
+                          <p>Enterprise-grade authentication with granular repository permissions</p>
+                          <button className="btn-primary" onClick={handleLogin}>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                              <path d="M12 2a5 5 0 00-5 5v3H6a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2v-8a2 2 0 00-2-2h-1V7a5 5 0 00-5-5z" />
+                            </svg>
+                            Setup GitHub App
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="divider">
+                        <span>or</span>
+                      </div>
+
+                      <div className="auth-method secondary">
+                        <div className="method-icon">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                          </svg>
+                        </div>
+                        <div className="method-content">
+                          <h3>Personal Access Token</h3>
+                          <p>Quick setup for development and testing</p>
+                          <details className="pat-details">
+                            <summary>Setup instructions</summary>
+                            <ol>
+                              <li>Create a token at <a href="https://github.com/settings/tokens/new" target="_blank" rel="noopener noreferrer">github.com/settings/tokens</a></li>
+                              <li>Add to <code>.env</code>: <code>GITPILOT_GITHUB_TOKEN=your_token</code></li>
+                              <li>Set auth mode: <code>GITPILOT_GITHUB_AUTH_MODE=pat</code></li>
+                              <li>Restart GitPilot server</li>
+                            </ol>
+                          </details>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </div>
+                  </>
+                )}
 
                 {error && (
                   <div className="error-banner">
@@ -725,6 +803,31 @@ export default function WelcomePage({ onAuthComplete }) {
         .btn-secondary:hover {
           background: #21262d;
           border-color: #8893ff;
+          transform: translateY(-1px);
+        }
+
+        .btn-secondary-action {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 0.5rem;
+          width: 100%;
+          padding: 0.75rem 1rem;
+          background: transparent;
+          color: #8b949e;
+          border: 1px solid #30363d;
+          border-radius: 6px;
+          font-size: 14px;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all 0.2s;
+          font-family: inherit;
+        }
+
+        .btn-secondary-action:hover {
+          background: #161b22;
+          border-color: #8893ff;
+          color: #c9d1d9;
           transform: translateY(-1px);
         }
 

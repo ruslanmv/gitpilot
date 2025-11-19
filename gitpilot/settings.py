@@ -90,6 +90,7 @@ class AppSettings(BaseModel):
     # Setup state
     setup_completed: bool = Field(default=False)
     welcome_shown: bool = Field(default=False)
+    use_custom_auth: bool = Field(default=False)  # If True, use custom credentials instead of .env
 
     langflow_url: str = Field(default="http://localhost:7860")
     langflow_api_key: Optional[str] = None
@@ -236,6 +237,8 @@ def update_settings(updates: dict) -> AppSettings:
         _settings.setup_completed = updates["setup_completed"]
     if "welcome_shown" in updates:
         _settings.welcome_shown = updates["welcome_shown"]
+    if "use_custom_auth" in updates:
+        _settings.use_custom_auth = updates["use_custom_auth"]
 
     _settings.save()
     return _settings

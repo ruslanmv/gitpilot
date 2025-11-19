@@ -208,6 +208,9 @@ class AuthStatusResponse(BaseModel):
     has_app_config: bool
     setup_completed: bool
     username: Optional[str] = None
+    has_env_credentials: bool = False  # True if .env has credentials
+    env_username: Optional[str] = None  # Username from .env credentials
+    use_custom_auth: bool = False  # True if user chose custom auth over .env
 
 
 class GitHubAppInstallUrlResponse(BaseModel):
@@ -224,34 +227,43 @@ async def api_auth_status():
     """Get current authentication status."""
     # Reload settings from disk to pick up changes from CLI
     from .settings import AppSettings
+    import os
     settings = AppSettings.from_disk()
     auth_manager = get_auth_manager()
 
-    # Check for GitHub App authentication
-    has_app_config = False
-    authenticated = False
-    username = None
+    # Check for .env credentials (environment variables)
+    has_env_credentials = False
+    env_username = None
 
-    if settings.github.auth_mode == GitHubAuthMode.app:
-        # Check if GitHub App is configured
-        app_config = settings.github.app
-        if app_config.app_id and app_config.installation_id:
-            # Check if private key is available
-            private_key = auth_manager.get_app_private_key() or app_config.private_key_base64
-            if private_key:
-                has_app_config = True
-                # Try to get installation token to verify authentication works
-                try:
-                    token = await auth_manager.get_installation_token(
-                        app_config.app_id,
-                        app_config.installation_id,
-                        private_key,
-                    )
-                    authenticated = True
+    # Check for .env GitHub App credentials
+    if os.getenv("GITPILOT_GH_APP_ID") and os.getenv("GITPILOT_GH_APP_INSTALLATION_ID") and os.getenv("GITPILOT_GH_APP_PRIVATE_KEY_BASE64"):
+        has_env_credentials = True
+    # Check for .env PAT credentials
+    elif os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN"):
+        has_env_credentials = True
 
-                    # Get username from GitHub API using the installation token
+    # Get username from .env credentials if they exist and we're not using custom auth
+    if has_env_credentials and not settings.use_custom_auth:
+        try:
+            import httpx
+            # Try to get token from environment
+            env_token = os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
+            if env_token:
+                response = await httpx.AsyncClient().get(
+                    "https://api.github.com/user",
+                    headers={"Authorization": f"Bearer {env_token}"}
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    env_username = data.get("login")
+            # Try GitHub App from .env
+            elif os.getenv("GITPILOT_GH_APP_ID") and os.getenv("GITPILOT_GH_APP_INSTALLATION_ID"):
+                app_id = os.getenv("GITPILOT_GH_APP_ID")
+                installation_id = os.getenv("GITPILOT_GH_APP_INSTALLATION_ID")
+                private_key = os.getenv("GITPILOT_GH_APP_PRIVATE_KEY_BASE64")
+                if private_key:
                     try:
-                        import httpx
+                        token = await auth_manager.get_installation_token(app_id, installation_id, private_key)
                         response = await httpx.AsyncClient().get(
                             "https://api.github.com/user/installations",
                             headers={
@@ -261,31 +273,78 @@ async def api_auth_status():
                         )
                         if response.status_code == 200:
                             data = response.json()
-                            # Get the account username from installations
                             if data.get("total_count", 0) > 0 and data.get("installations"):
-                                username = data["installations"][0]["account"]["login"]
+                                env_username = data["installations"][0]["account"]["login"]
                     except Exception:
                         pass
+        except Exception:
+            pass
+
+    # Check for custom/configured GitHub App authentication
+    has_app_config = False
+    authenticated = False
+    username = None
+
+    # If user chose custom auth, ignore .env and use configured credentials
+    if settings.use_custom_auth or not has_env_credentials:
+        if settings.github.auth_mode == GitHubAuthMode.app:
+            # Check if GitHub App is configured
+            app_config = settings.github.app
+            if app_config.app_id and app_config.installation_id:
+                # Check if private key is available
+                private_key = auth_manager.get_app_private_key() or app_config.private_key_base64
+                if private_key:
+                    has_app_config = True
+                    # Try to get installation token to verify authentication works
+                    try:
+                        token = await auth_manager.get_installation_token(
+                            app_config.app_id,
+                            app_config.installation_id,
+                            private_key,
+                        )
+                        authenticated = True
+
+                        # Get username from GitHub API using the installation token
+                        try:
+                            import httpx
+                            response = await httpx.AsyncClient().get(
+                                "https://api.github.com/user/installations",
+                                headers={
+                                    "Authorization": f"Bearer {token}",
+                                    "Accept": "application/vnd.github+json"
+                                }
+                            )
+                            if response.status_code == 200:
+                                data = response.json()
+                                # Get the account username from installations
+                                if data.get("total_count", 0) > 0 and data.get("installations"):
+                                    username = data["installations"][0]["account"]["login"]
+                        except Exception:
+                            pass
+                    except Exception:
+                        # Authentication configured but not working
+                        authenticated = False
+        elif settings.github.auth_mode == GitHubAuthMode.pat:
+            # Check for PAT authentication
+            if settings.github.personal_token:
+                authenticated = True
+                has_app_config = False
+                # Get username from PAT
+                try:
+                    import httpx
+                    response = await httpx.AsyncClient().get(
+                        "https://api.github.com/user",
+                        headers={"Authorization": f"Bearer {settings.github.personal_token}"}
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+                        username = data.get("login")
                 except Exception:
-                    # Authentication configured but not working
-                    authenticated = False
-    elif settings.github.auth_mode == GitHubAuthMode.pat:
-        # Check for PAT authentication
-        if settings.github.personal_token:
-            authenticated = True
-            has_app_config = False
-            # Get username from PAT
-            try:
-                import httpx
-                response = await httpx.AsyncClient().get(
-                    "https://api.github.com/user",
-                    headers={"Authorization": f"Bearer {settings.github.personal_token}"}
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    username = data.get("login")
-            except Exception:
-                pass
+                    pass
+    else:
+        # Use .env credentials - they're already authenticated
+        authenticated = True
+        username = env_username
 
     return AuthStatusResponse(
         authenticated=authenticated,
@@ -294,6 +353,9 @@ async def api_auth_status():
         has_app_config=has_app_config,
         setup_completed=settings.setup_completed,
         username=username,
+        has_env_credentials=has_env_credentials,
+        env_username=env_username,
+        use_custom_auth=settings.use_custom_auth,
     )
 
 
@@ -321,6 +383,38 @@ async def api_auth_login():
     )
 
 
+@app.post("/api/auth/use-env", response_model=LoginResponse)
+async def api_auth_use_env():
+    """Switch to using .env credentials."""
+    from .settings import AppSettings
+    settings = AppSettings.from_disk()
+
+    # Set flag to use .env credentials
+    settings.use_custom_auth = False
+    settings.save()
+
+    return LoginResponse(
+        success=True,
+        message="Switched to .env credentials"
+    )
+
+
+@app.post("/api/auth/use-custom", response_model=LoginResponse)
+async def api_auth_use_custom():
+    """Switch to using custom credentials."""
+    from .settings import AppSettings
+    settings = AppSettings.from_disk()
+
+    # Set flag to use custom credentials
+    settings.use_custom_auth = True
+    settings.save()
+
+    return LoginResponse(
+        success=True,
+        message="Ready for custom authentication"
+    )
+
+
 @app.post("/api/auth/logout", response_model=LoginResponse)
 async def api_auth_logout():
     """Logout user by clearing stored credentials."""
@@ -337,6 +431,9 @@ async def api_auth_logout():
     settings.github.app.installation_id = ""
     settings.github.app.private_key_base64 = ""
     settings.github.personal_token = ""
+
+    # Reset to .env credentials if available
+    settings.use_custom_auth = False
     settings.save()
 
     return LoginResponse(
