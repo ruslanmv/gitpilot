@@ -4,8 +4,7 @@ export default function WelcomePage({ onLoginSuccess }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [isOAuthConfigured, setIsOAuthConfigured] = useState(false);
-  const [patToken, setPatToken] = useState("");
-  const [showToken, setShowToken] = useState(false);
+  const [checkingConfig, setCheckingConfig] = useState(true);
 
   useEffect(() => {
     checkOAuthConfig();
@@ -21,52 +20,12 @@ export default function WelcomePage({ onLoginSuccess }) {
       }
     } catch (e) {
       console.error("Failed to check OAuth config:", e);
+    } finally {
+      setCheckingConfig(false);
     }
   };
 
-  const handlePATLogin = async (e) => {
-    e.preventDefault();
-
-    if (!patToken.trim()) {
-      setError("Please enter your GitHub Personal Access Token");
-      return;
-    }
-
-    try {
-      setLoading(true);
-      setError(null);
-
-      const res = await fetch("/api/auth/login-pat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ token: patToken }),
-      });
-
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.detail || "Invalid token");
-      }
-
-      const data = await res.json();
-
-      // Check auth status to trigger app reload
-      const authRes = await fetch("/api/auth/status");
-      if (authRes.ok) {
-        const authData = await authRes.json();
-        if (authData.authenticated) {
-          onLoginSuccess(authData);
-        }
-      }
-    } catch (e) {
-      console.error("Login error:", e);
-      setError(e.message || "Failed to login. Please check your token.");
-      setLoading(false);
-    }
-  };
-
-  const handleOAuthLogin = async () => {
+  const handleConnectGitHub = async () => {
     try {
       setLoading(true);
       setError(null);
@@ -107,8 +66,8 @@ export default function WelcomePage({ onLoginSuccess }) {
       }, 500);
 
     } catch (e) {
-      console.error("OAuth login error:", e);
-      setError(e.message || "Failed to login");
+      console.error("Login error:", e);
+      setError(e.message || "Failed to connect to GitHub");
       setLoading(false);
     }
   };
@@ -136,128 +95,174 @@ export default function WelcomePage({ onLoginSuccess }) {
           </div>
           <h1 className="welcome-title">Welcome to GitPilota</h1>
           <p className="welcome-subtitle">
-            Your AI-powered assistant for GitHub repositories
+            AI-powered assistant for GitHub repositories
           </p>
         </div>
 
         <div className="welcome-features">
           <div className="feature-item">
             <div className="feature-icon">🤖</div>
-            <h3>AI-Powered Code Assistant</h3>
-            <p>Get intelligent suggestions and automated code changes</p>
+            <h3>AI-Powered Analysis</h3>
+            <p>Intelligent code understanding and automated suggestions</p>
           </div>
           <div className="feature-item">
             <div className="feature-icon">🔄</div>
             <h3>Multi-Agent Workflows</h3>
-            <p>Leverage advanced AI agents for complex tasks</p>
+            <p>Advanced AI agents working together on complex tasks</p>
           </div>
           <div className="feature-item">
             <div className="feature-icon">🔒</div>
-            <h3>Secure GitHub Integration</h3>
-            <p>Simple and secure authentication</p>
+            <h3>Secure Integration</h3>
+            <p>Enterprise-grade GitHub authentication and access control</p>
           </div>
         </div>
 
-        <div className="welcome-actions">
-          <form onSubmit={handlePATLogin} className="pat-login-form">
-            <div className="form-group">
-              <label htmlFor="pat-token" className="form-label">
-                GitHub Personal Access Token
-              </label>
-              <div className="input-with-toggle">
-                <input
-                  id="pat-token"
-                  type={showToken ? "text" : "password"}
-                  className="form-input"
-                  placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
-                  value={patToken}
-                  onChange={(e) => setPatToken(e.target.value)}
-                  disabled={loading}
-                  autoComplete="off"
-                />
-                <button
-                  type="button"
-                  className="input-toggle-btn"
-                  onClick={() => setShowToken(!showToken)}
-                  disabled={loading}
-                  title={showToken ? "Hide token" : "Show token"}
-                >
-                  {showToken ? "👁️" : "👁️‍🗨️"}
-                </button>
-              </div>
-              <p className="form-hint">
-                Get your token at{" "}
-                <a
-                  href="https://github.com/settings/tokens/new?description=GitPilota&scopes=repo"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  github.com/settings/tokens
-                </a>
-                <br />
-                Required scope: <code>repo</code>
+        {checkingConfig ? (
+          <div className="welcome-actions">
+            <div className="checking-status">
+              <span className="spinner"></span>
+              <p>Checking configuration...</p>
+            </div>
+          </div>
+        ) : !isOAuthConfigured ? (
+          <div className="welcome-actions">
+            <div className="setup-required-card">
+              <div className="setup-icon">⚙️</div>
+              <h3>Setup Required</h3>
+              <p>
+                GitPilota requires a GitHub App to connect to your repositories.
+                Please configure your GitHub App credentials to get started.
               </p>
-            </div>
 
-            <button
-              type="submit"
-              className="welcome-btn welcome-btn-primary"
-              disabled={loading || !patToken.trim()}
-            >
-              {loading ? (
-                <>
-                  <span className="spinner"></span>
-                  Signing in...
-                </>
-              ) : (
-                <>
-                  <span className="btn-icon">🔑</span>
-                  Sign in with Token
-                </>
+              <div className="setup-steps">
+                <div className="setup-step">
+                  <div className="step-number">1</div>
+                  <div className="step-content">
+                    <h4>Create GitHub App</h4>
+                    <p>Go to GitHub Settings → Developer settings → GitHub Apps</p>
+                    <a
+                      href="https://github.com/settings/apps/new"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="setup-link"
+                    >
+                      Create GitHub App →
+                    </a>
+                  </div>
+                </div>
+
+                <div className="setup-step">
+                  <div className="step-number">2</div>
+                  <div className="step-content">
+                    <h4>Configure App Settings</h4>
+                    <p>Set callback URL: <code>http://localhost:8000/auth/callback</code></p>
+                    <p>Request permissions: <code>repo</code> (read & write)</p>
+                  </div>
+                </div>
+
+                <div className="setup-step">
+                  <div className="step-number">3</div>
+                  <div className="step-content">
+                    <h4>Set Environment Variables</h4>
+                    <p>Add to your <code>.env</code> file:</p>
+                    <pre className="env-example">
+GITPILOTA_GH_APP_CLIENT_ID=your_client_id
+GITPILOTA_GH_APP_CLIENT_SECRET=your_client_secret
+                    </pre>
+                  </div>
+                </div>
+
+                <div className="setup-step">
+                  <div className="step-number">4</div>
+                  <div className="step-content">
+                    <h4>Restart GitPilota</h4>
+                    <p>Restart the application to apply the changes</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="setup-help">
+                <p>
+                  <strong>Need help?</strong> Check our{" "}
+                  <a
+                    href="https://github.com/ruslanmv/gitpilota#setup"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    setup guide
+                  </a>
+                  {" "}for detailed instructions.
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="welcome-actions">
+            <div className="connect-card">
+              <h3>Connect to GitHub</h3>
+              <p>
+                GitPilota will request access to your GitHub repositories.
+                You'll be able to select which repositories to grant access to.
+              </p>
+
+              <button
+                type="button"
+                className="welcome-btn welcome-btn-primary"
+                onClick={handleConnectGitHub}
+                disabled={loading}
+              >
+                {loading ? (
+                  <>
+                    <span className="spinner"></span>
+                    Connecting...
+                  </>
+                ) : (
+                  <>
+                    <span className="btn-icon">🔗</span>
+                    Connect with GitHub
+                  </>
+                )}
+              </button>
+
+              {error && (
+                <div className="welcome-error">
+                  <span className="error-icon">❌</span>
+                  {error}
+                </div>
               )}
-            </button>
-          </form>
 
-          {isOAuthConfigured && (
-            <div className="login-divider">
-              <span>or</span>
+              <div className="connect-info">
+                <div className="info-item">
+                  <span className="info-icon">✓</span>
+                  <span>Secure OAuth 2.0 authentication</span>
+                </div>
+                <div className="info-item">
+                  <span className="info-icon">✓</span>
+                  <span>Choose which repositories to access</span>
+                </div>
+                <div className="info-item">
+                  <span className="info-icon">✓</span>
+                  <span>Revoke access anytime from GitHub</span>
+                </div>
+              </div>
             </div>
-          )}
 
-          {isOAuthConfigured && (
-            <button
-              type="button"
-              className="welcome-btn welcome-btn-secondary"
-              onClick={handleOAuthLogin}
-              disabled={loading}
-            >
-              <span className="btn-icon">🔗</span>
-              Sign in with GitHub OAuth
-            </button>
-          )}
-
-          {error && (
-            <div className="welcome-error">
-              <span className="error-icon">❌</span>
-              {error}
-            </div>
-          )}
-
-          <p className="welcome-privacy">
-            By signing in, you authorize GitPilota to access your repositories.
-            We never store your credentials.
-          </p>
-        </div>
+            <p className="welcome-privacy">
+              By connecting, you authorize GitPilota to access your selected repositories.
+              We never store your GitHub password. Your credentials remain secure with GitHub.
+            </p>
+          </div>
+        )}
 
         <div className="welcome-footer">
           <p>
-            New to GitPilota?{" "}
+            Enterprise solution for AI-powered repository management •{" "}
             <a
               href="https://github.com/ruslanmv/gitpilota"
               target="_blank"
               rel="noopener noreferrer"
             >
-              Read the documentation
+              Documentation
             </a>
           </p>
         </div>
