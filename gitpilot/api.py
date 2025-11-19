@@ -324,8 +324,20 @@ async def api_auth_login():
 @app.post("/api/auth/logout", response_model=LoginResponse)
 async def api_auth_logout():
     """Logout user by clearing stored credentials."""
+    # Reload settings to ensure we have the latest state
+    from .settings import AppSettings
+    settings = AppSettings.from_disk()
     auth_manager = get_auth_manager()
+
+    # Clear keyring credentials
     auth_manager.logout()
+
+    # Clear settings file (like CLI logout does)
+    settings.github.app.app_id = ""
+    settings.github.app.installation_id = ""
+    settings.github.app.private_key_base64 = ""
+    settings.github.personal_token = ""
+    settings.save()
 
     return LoginResponse(
         success=True,
