@@ -5,12 +5,17 @@ export default function WelcomePage({ onAuthComplete }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showInstructions, setShowInstructions] = useState(false);
+  const [showCredentialsForm, setShowCredentialsForm] = useState(false);
+  const [appId, setAppId] = useState("");
+  const [installationId, setInstallationId] = useState("");
+  const [privateKey, setPrivateKey] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     checkAuthStatus();
 
     // Poll for authentication status every 3 seconds (like Claude Code)
-    // This automatically detects when user completes 'gitpilot login' in CLI
+    // This automatically detects when user completes authentication
     const pollInterval = setInterval(() => {
       checkAuthStatus();
     }, 3000);
@@ -37,6 +42,46 @@ export default function WelcomePage({ onAuthComplete }) {
 
   const handleLogin = () => {
     setShowInstructions(true);
+  };
+
+  const handleShowCredentialsForm = () => {
+    setShowCredentialsForm(true);
+    setShowInstructions(false);
+  };
+
+  const handleSubmitCredentials = async (e) => {
+    e.preventDefault();
+    setSubmitting(true);
+    setError(null);
+
+    try {
+      // Base64 encode the private key
+      const privateKeyBase64 = btoa(privateKey);
+
+      const response = await fetch("/api/auth/configure-app", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          app_id: appId,
+          installation_id: installationId,
+          private_key_base64: privateKeyBase64,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        // Success! Refresh auth status
+        checkAuthStatus();
+        setShowCredentialsForm(false);
+      } else {
+        setError(data.message || "Failed to configure GitHub App");
+      }
+    } catch (err) {
+      setError("Network error: " + err.message);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleUseEnvCredentials = async () => {
@@ -282,6 +327,77 @@ export default function WelcomePage({ onAuthComplete }) {
                 <p className="footer-text">Enterprise-grade security with GitHub App authentication</p>
               </div>
             </>
+          ) : showCredentialsForm ? (
+            <div className="credentials-form-panel">
+              <button className="back-button" onClick={() => {setShowCredentialsForm(false); setShowInstructions(false);}}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="20" height="20">
+                  <path d="M19 12H5m7-7l-7 7 7 7"/>
+                </svg>
+                Back
+              </button>
+
+              <h2>Configure GitHub App</h2>
+              <p className="instructions-description">Enter your GitHub App credentials to continue:</p>
+
+              <form onSubmit={handleSubmitCredentials} className="credentials-form">
+                <div className="form-group">
+                  <label htmlFor="appId">App ID</label>
+                  <input
+                    id="appId"
+                    type="text"
+                    value={appId}
+                    onChange={(e) => setAppId(e.target.value)}
+                    placeholder="e.g., 2313985"
+                    required
+                  />
+                  <small>Find this at the top of your GitHub App settings page</small>
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="installationId">Installation ID</label>
+                  <input
+                    id="installationId"
+                    type="text"
+                    value={installationId}
+                    onChange={(e) => setInstallationId(e.target.value)}
+                    placeholder="e.g., 12345678"
+                    required
+                  />
+                  <small>
+                    Find this at: <code>https://github.com/settings/installations</code>
+                  </small>
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="privateKey">Private Key (PEM format)</label>
+                  <textarea
+                    id="privateKey"
+                    value={privateKey}
+                    onChange={(e) => setPrivateKey(e.target.value)}
+                    placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;...&#10;-----END RSA PRIVATE KEY-----"
+                    rows="8"
+                    required
+                  />
+                  <small>Paste the entire private key file contents here</small>
+                </div>
+
+                <button type="submit" className="btn-primary" disabled={submitting}>
+                  {submitting ? (
+                    <>
+                      <div className="spinner-small"></div>
+                      Configuring...
+                    </>
+                  ) : (
+                    <>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                        <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      Save & Continue
+                    </>
+                  )}
+                </button>
+              </form>
+            </div>
           ) : (
             <div className="instructions-panel">
               <button className="back-button" onClick={() => setShowInstructions(false)}>
@@ -292,19 +408,28 @@ export default function WelcomePage({ onAuthComplete }) {
               </button>
 
               <h2>GitHub App Setup</h2>
-              <p className="instructions-description">Follow these steps to configure GitPilot with your GitHub App:</p>
-
-              <div className="polling-status">
-                <div className="polling-indicator"></div>
-                <span>Waiting for authentication... (auto-refreshing)</span>
-              </div>
+              <p className="instructions-description">Follow these steps to authenticate with GitHub:</p>
 
               <div className="step-list">
                 <div className="step">
                   <div className="step-number">1</div>
                   <div className="step-content">
-                    <h3>Create and install GitHub App</h3>
-                    <p>Follow the <a href="https://github.com/ruslanmv/gitpilot/blob/main/docs/GITHUB_APP_SETUP.md" target="_blank" rel="noopener noreferrer">setup guide</a> to create your GitHub App</p>
+                    <h3>Create GitHub App with Permissions</h3>
+                    <p>Create a new GitHub App and configure these <strong>required permissions</strong>:</p>
+                    <ul className="permission-list">
+                      <li><strong>Contents:</strong> Read and write</li>
+                      <li><strong>Issues:</strong> Read and write</li>
+                      <li><strong>Pull requests:</strong> Read and write</li>
+                    </ul>
+                    <p><a href="https://github.com/settings/apps/new" target="_blank" rel="noopener noreferrer">Create GitHub App →</a></p>
+                  </div>
+                </div>
+
+                <div className="step">
+                  <div className="step-number">2</div>
+                  <div className="step-content">
+                    <h3>Install App on Repositories</h3>
+                    <p>After creating the app, install it and select which repositories it can access.</p>
                     <button className="btn-secondary" onClick={handleSetupGitHubApp} style={{marginTop: '0.75rem'}}>
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
                         <path d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
@@ -315,38 +440,19 @@ export default function WelcomePage({ onAuthComplete }) {
                 </div>
 
                 <div className="step">
-                  <div className="step-number">2</div>
-                  <div className="step-content">
-                    <h3>Run the login command</h3>
-                    <p>The CLI will prompt you for your App ID, Installation ID, and private key</p>
-                    <div className="code-block">
-                      <code>gitpilot login</code>
-                      <button className="copy-btn" onClick={() => navigator.clipboard.writeText('gitpilot login')}>
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
-                          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-                          <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="step">
                   <div className="step-number">3</div>
                   <div className="step-content">
-                    <h3>Refresh this page</h3>
-                    <p>Once configured, refresh to access GitPilot</p>
+                    <h3>Enter Credentials</h3>
+                    <p>Provide your App ID, Installation ID, and private key</p>
+                    <button className="btn-primary" onClick={handleShowCredentialsForm} style={{marginTop: '0.75rem'}}>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                        <path d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                      </svg>
+                      Configure Credentials
+                    </button>
                   </div>
                 </div>
               </div>
-
-              <button className="btn-refresh" onClick={() => window.location.reload()}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="20" height="20">
-                  <path d="M1 4v6h6M23 20v-6h-6"/>
-                  <path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/>
-                </svg>
-                Refresh Page
-              </button>
             </div>
           )}
         </div>
@@ -829,6 +935,94 @@ export default function WelcomePage({ onAuthComplete }) {
           border-color: #8893ff;
           color: #c9d1d9;
           transform: translateY(-1px);
+        }
+
+        .credentials-form-panel {
+          padding: 2rem;
+        }
+
+        .credentials-form {
+          display: flex;
+          flex-direction: column;
+          gap: 1.5rem;
+        }
+
+        .form-group {
+          display: flex;
+          flex-direction: column;
+          gap: 0.5rem;
+        }
+
+        .form-group label {
+          font-size: 14px;
+          font-weight: 600;
+          color: #f0f6fc;
+        }
+
+        .form-group input,
+        .form-group textarea {
+          padding: 0.75rem 1rem;
+          background: #0d1117;
+          border: 1px solid #30363d;
+          border-radius: 6px;
+          color: #c9d1d9;
+          font-size: 14px;
+          font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+          transition: all 0.2s;
+        }
+
+        .form-group input:focus,
+        .form-group textarea:focus {
+          outline: none;
+          border-color: #8893ff;
+          background: #161b22;
+        }
+
+        .form-group textarea {
+          resize: vertical;
+          min-height: 120px;
+        }
+
+        .form-group small {
+          font-size: 12px;
+          color: #8b949e;
+        }
+
+        .form-group small code {
+          padding: 0.2rem 0.4rem;
+          background: #0d1117;
+          border: 1px solid #30363d;
+          border-radius: 3px;
+          font-size: 11px;
+        }
+
+        .permission-list {
+          margin: 0.75rem 0;
+          padding-left: 1.5rem;
+          font-size: 13px;
+          color: #c9d1d9;
+          line-height: 1.8;
+        }
+
+        .permission-list li {
+          margin-bottom: 0.5rem;
+        }
+
+        .permission-list strong {
+          color: #8893ff;
+        }
+
+        .spinner-small {
+          width: 16px;
+          height: 16px;
+          border: 2px solid rgba(255, 255, 255, 0.3);
+          border-top-color: white;
+          border-radius: 50%;
+          animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+          to { transform: rotate(360deg); }
         }
 
         .polling-status {

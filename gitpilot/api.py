@@ -415,6 +415,65 @@ async def api_auth_use_custom():
     )
 
 
+class ConfigureAppRequest(BaseModel):
+    app_id: str
+    installation_id: str
+    private_key_base64: str
+
+
+@app.post("/api/auth/configure-app", response_model=LoginResponse)
+async def api_auth_configure_app(request: ConfigureAppRequest):
+    """Configure GitHub App credentials via web form."""
+    from .settings import AppSettings
+    settings = AppSettings.from_disk()
+    auth_manager = get_auth_manager()
+
+    try:
+        # Decode and validate private key
+        import base64
+        try:
+            private_key_pem = base64.b64decode(request.private_key_base64).decode('utf-8')
+        except Exception as e:
+            return LoginResponse(
+                success=False,
+                message=f"Invalid private key format: {str(e)}"
+            )
+
+        # Verify the credentials work by trying to get an installation token
+        try:
+            token = await auth_manager.get_installation_token(
+                request.app_id,
+                request.installation_id,
+                request.private_key_base64
+            )
+            # If we get here, credentials are valid
+        except Exception as e:
+            return LoginResponse(
+                success=False,
+                message=f"Failed to authenticate with GitHub: {str(e)}"
+            )
+
+        # Store credentials
+        auth_manager.save_app_private_key(request.private_key_base64)
+        settings.github.app.app_id = request.app_id
+        settings.github.app.installation_id = request.installation_id
+        settings.github.app.private_key_base64 = request.private_key_base64
+        settings.github.auth_mode = GitHubAuthMode.app
+        settings.use_custom_auth = True
+        settings.save()
+
+        return LoginResponse(
+            success=True,
+            message="GitHub App configured successfully"
+        )
+
+    except Exception as e:
+        return LoginResponse(
+            success=False,
+            message=f"Configuration failed: {str(e)}"
+        )
+
+
 @app.post("/api/auth/logout", response_model=LoginResponse)
 async def api_auth_logout():
     """Logout user by clearing stored credentials."""
