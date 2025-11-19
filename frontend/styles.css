@@ -1537,161 +1537,9 @@ body {
   text-decoration: underline;
 }
 
-/* Setup Required Card */
-.checking-status {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  padding: 24px;
-  color: #9a9bb0;
-}
-
-.checking-status p {
-  margin: 0;
-  font-size: 14px;
-}
-
-.setup-required-card {
-  background: #101117;
-  border: 1px solid #272832;
-  border-radius: 16px;
-  padding: 32px;
-  max-width: 700px;
-  margin: 0 auto;
-  text-align: left;
-}
-
-.setup-icon {
-  font-size: 48px;
-  text-align: center;
-  margin-bottom: 16px;
-}
-
-.setup-required-card h3 {
-  font-size: 24px;
-  margin: 0 0 12px;
-  color: #f5f5f7;
-  text-align: center;
-}
-
-.setup-required-card > p {
-  font-size: 14px;
-  color: #9a9bb0;
-  text-align: center;
-  margin: 0 0 32px;
-  line-height: 1.6;
-}
-
-.setup-steps {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-  margin-bottom: 24px;
-}
-
-.setup-step {
-  display: flex;
-  gap: 16px;
-  align-items: flex-start;
-}
-
-.step-number {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: rgba(91, 141, 238, 0.15);
-  color: #5B8DEE;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  font-size: 14px;
-  flex-shrink: 0;
-}
-
-.step-content {
-  flex: 1;
-}
-
-.step-content h4 {
-  font-size: 16px;
-  margin: 0 0 8px;
-  color: #f5f5f7;
-}
-
-.step-content p {
-  font-size: 13px;
-  color: #9a9bb0;
-  margin: 0 0 8px;
-  line-height: 1.5;
-}
-
-.step-content code {
-  background: rgba(91, 141, 238, 0.15);
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
-  font-size: 12px;
-  color: #7BA5FF;
-}
-
-.env-example {
-  background: #050608;
-  border: 1px solid #272832;
-  border-radius: 8px;
-  padding: 12px;
-  font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
-  font-size: 12px;
-  color: #7BA5FF;
-  margin: 8px 0;
-  overflow-x: auto;
-  white-space: pre;
-}
-
-.setup-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: #5B8DEE;
-  text-decoration: none;
-  font-size: 13px;
-  font-weight: 600;
-  transition: color 0.2s ease;
-}
-
-.setup-link:hover {
-  color: #6B9EFF;
-  text-decoration: underline;
-}
-
-.setup-help {
-  background: rgba(91, 141, 238, 0.05);
-  border: 1px solid rgba(91, 141, 238, 0.2);
-  border-radius: 12px;
-  padding: 16px;
-  text-align: center;
-}
-
-.setup-help p {
-  margin: 0;
-  font-size: 13px;
-  color: #9a9bb0;
-}
-
-.setup-help a {
-  color: #5B8DEE;
-  text-decoration: none;
-  font-weight: 600;
-  transition: color 0.2s ease;
-}
-
-.setup-help a:hover {
-  color: #6B9EFF;
-  text-decoration: underline;
-}
-
-/* Connect Card */
+/* ============================================================================
+   Connect Card
+   ============================================================================ */
 .connect-card {
   background: #101117;
   border: 1px solid #272832;
@@ -1735,6 +1583,17 @@ body {
   color: #4ade80;
   font-weight: 700;
   font-size: 14px;
+  flex-shrink: 0;
+}
+
+.connect-note {
+  margin-top: 20px;
+  font-size: 12px;
+  color: #7a7b8e;
+  line-height: 1.5;
+}
+
+.btn-icon svg {
   flex-shrink: 0;
 }
 

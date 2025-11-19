@@ -3,27 +3,6 @@ import React, { useState, useEffect } from "react";
 export default function WelcomePage({ onLoginSuccess }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [isOAuthConfigured, setIsOAuthConfigured] = useState(false);
-  const [checkingConfig, setCheckingConfig] = useState(true);
-
-  useEffect(() => {
-    checkOAuthConfig();
-  }, []);
-
-  const checkOAuthConfig = async () => {
-    try {
-      const res = await fetch("/api/settings");
-      if (res.ok) {
-        const data = await res.json();
-        const hasOAuth = data.github?.app_client_id && data.github?.app_client_secret;
-        setIsOAuthConfigured(hasOAuth);
-      }
-    } catch (e) {
-      console.error("Failed to check OAuth config:", e);
-    } finally {
-      setCheckingConfig(false);
-    }
-  };
 
   const handleConnectGitHub = async () => {
     try {
@@ -33,56 +12,18 @@ export default function WelcomePage({ onLoginSuccess }) {
       const res = await fetch("/api/auth/login");
       if (!res.ok) {
         const data = await res.json();
-        throw new Error(data.error || "Failed to initiate login");
+        throw new Error(data.error || "Failed to connect to GitHub");
       }
 
       const data = await res.json();
 
-      // Open OAuth flow in a new window
-      const width = 600;
-      const height = 700;
-      const left = window.screen.width / 2 - width / 2;
-      const top = window.screen.height / 2 - height / 2;
-
-      const authWindow = window.open(
-        data.url,
-        "GitPilota Login",
-        `width=${width},height=${height},left=${left},top=${top}`
-      );
-
-      // Poll for auth completion
-      const pollInterval = setInterval(() => {
-        try {
-          // Check if window is closed
-          if (authWindow.closed) {
-            clearInterval(pollInterval);
-            setLoading(false);
-            // Check auth status
-            checkAuthStatus();
-          }
-        } catch (e) {
-          // Ignore errors from cross-origin access
-        }
-      }, 500);
+      // Open OAuth flow in current window for seamless experience
+      window.location.href = data.url;
 
     } catch (e) {
       console.error("Login error:", e);
       setError(e.message || "Failed to connect to GitHub");
       setLoading(false);
-    }
-  };
-
-  const checkAuthStatus = async () => {
-    try {
-      const res = await fetch("/api/auth/status");
-      if (res.ok) {
-        const data = await res.json();
-        if (data.authenticated) {
-          onLoginSuccess(data);
-        }
-      }
-    } catch (e) {
-      console.error("Failed to check auth status:", e);
     }
   };
 
@@ -95,7 +36,7 @@ export default function WelcomePage({ onLoginSuccess }) {
           </div>
           <h1 className="welcome-title">Welcome to GitPilota</h1>
           <p className="welcome-subtitle">
-            AI-powered assistant for GitHub repositories
+            AI-powered assistant for your GitHub repositories
           </p>
         </div>
 
@@ -113,150 +54,71 @@ export default function WelcomePage({ onLoginSuccess }) {
           <div className="feature-item">
             <div className="feature-icon">🔒</div>
             <h3>Secure Integration</h3>
-            <p>Enterprise-grade GitHub authentication and access control</p>
+            <p>Enterprise-grade GitHub authentication</p>
           </div>
         </div>
 
-        {checkingConfig ? (
-          <div className="welcome-actions">
-            <div className="checking-status">
-              <span className="spinner"></span>
-              <p>Checking configuration...</p>
-            </div>
-          </div>
-        ) : !isOAuthConfigured ? (
-          <div className="welcome-actions">
-            <div className="setup-required-card">
-              <div className="setup-icon">⚙️</div>
-              <h3>Setup Required</h3>
-              <p>
-                GitPilota requires a GitHub App to connect to your repositories.
-                Please configure your GitHub App credentials to get started.
-              </p>
+        <div className="welcome-actions">
+          <div className="connect-card">
+            <h3>Connect Your GitHub Account</h3>
+            <p>
+              GitPilota integrates with your GitHub repositories to provide
+              AI-powered assistance. You'll choose which repositories to grant access to.
+            </p>
 
-              <div className="setup-steps">
-                <div className="setup-step">
-                  <div className="step-number">1</div>
-                  <div className="step-content">
-                    <h4>Create GitHub App</h4>
-                    <p>Go to GitHub Settings → Developer settings → GitHub Apps</p>
-                    <a
-                      href="https://github.com/settings/apps/new"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="setup-link"
-                    >
-                      Create GitHub App →
-                    </a>
-                  </div>
-                </div>
-
-                <div className="setup-step">
-                  <div className="step-number">2</div>
-                  <div className="step-content">
-                    <h4>Configure App Settings</h4>
-                    <p>Set callback URL: <code>http://localhost:8000/auth/callback</code></p>
-                    <p>Request permissions: <code>repo</code> (read & write)</p>
-                  </div>
-                </div>
-
-                <div className="setup-step">
-                  <div className="step-number">3</div>
-                  <div className="step-content">
-                    <h4>Set Environment Variables</h4>
-                    <p>Add to your <code>.env</code> file:</p>
-                    <pre className="env-example">
-GITPILOTA_GH_APP_CLIENT_ID=your_client_id
-GITPILOTA_GH_APP_CLIENT_SECRET=your_client_secret
-                    </pre>
-                  </div>
-                </div>
-
-                <div className="setup-step">
-                  <div className="step-number">4</div>
-                  <div className="step-content">
-                    <h4>Restart GitPilota</h4>
-                    <p>Restart the application to apply the changes</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="setup-help">
-                <p>
-                  <strong>Need help?</strong> Check our{" "}
-                  <a
-                    href="https://github.com/ruslanmv/gitpilota#setup"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    setup guide
-                  </a>
-                  {" "}for detailed instructions.
-                </p>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="welcome-actions">
-            <div className="connect-card">
-              <h3>Connect to GitHub</h3>
-              <p>
-                GitPilota will request access to your GitHub repositories.
-                You'll be able to select which repositories to grant access to.
-              </p>
-
-              <button
-                type="button"
-                className="welcome-btn welcome-btn-primary"
-                onClick={handleConnectGitHub}
-                disabled={loading}
-              >
-                {loading ? (
-                  <>
-                    <span className="spinner"></span>
-                    Connecting...
-                  </>
-                ) : (
-                  <>
-                    <span className="btn-icon">🔗</span>
-                    Connect with GitHub
-                  </>
-                )}
-              </button>
-
-              {error && (
-                <div className="welcome-error">
-                  <span className="error-icon">❌</span>
-                  {error}
-                </div>
+            <button
+              type="button"
+              className="welcome-btn welcome-btn-primary"
+              onClick={handleConnectGitHub}
+              disabled={loading}
+            >
+              {loading ? (
+                <>
+                  <span className="spinner"></span>
+                  Connecting...
+                </>
+              ) : (
+                <>
+                  <svg className="btn-icon" viewBox="0 0 16 16" width="20" height="20" fill="currentColor">
+                    <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path>
+                  </svg>
+                  Connect with GitHub
+                </>
               )}
+            </button>
 
-              <div className="connect-info">
-                <div className="info-item">
-                  <span className="info-icon">✓</span>
-                  <span>Secure OAuth 2.0 authentication</span>
-                </div>
-                <div className="info-item">
-                  <span className="info-icon">✓</span>
-                  <span>Choose which repositories to access</span>
-                </div>
-                <div className="info-item">
-                  <span className="info-icon">✓</span>
-                  <span>Revoke access anytime from GitHub</span>
-                </div>
+            {error && (
+              <div className="welcome-error">
+                <span className="error-icon">❌</span>
+                {error}
+              </div>
+            )}
+
+            <div className="connect-info">
+              <div className="info-item">
+                <span className="info-icon">✓</span>
+                <span>Secure OAuth 2.0 authentication</span>
+              </div>
+              <div className="info-item">
+                <span className="info-icon">✓</span>
+                <span>Choose which repositories to access</span>
+              </div>
+              <div className="info-item">
+                <span className="info-icon">✓</span>
+                <span>Revoke access anytime from GitHub settings</span>
               </div>
             </div>
 
-            <p className="welcome-privacy">
+            <p className="connect-note">
               By connecting, you authorize GitPilota to access your selected repositories.
-              We never store your GitHub password. Your credentials remain secure with GitHub.
+              Your credentials remain secure with GitHub.
             </p>
           </div>
-        )}
+        </div>
 
         <div className="welcome-footer">
           <p>
-            Enterprise solution for AI-powered repository management •{" "}
+            Enterprise AI solution for repository management •{" "}
             <a
               href="https://github.com/ruslanmv/gitpilota"
               target="_blank"
