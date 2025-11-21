@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, Query, Path as FPath
+from fastapi import FastAPI, Query, Path as FPath, Header
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -12,12 +12,40 @@ from .version import __version__
 from .github_api import list_user_repos, get_repo_tree, get_file, put_file
 from .settings import AppSettings, get_settings, set_provider, update_settings, LLMProvider
 from .agentic import generate_plan, execute_plan, PlanResult, get_flow_definition
+from .github_oauth import (
+    generate_authorization_url,
+    exchange_code_for_token,
+    validate_token,
+    AuthSession,
+    GitHubUser,
+)
 
 app = FastAPI(
     title="GitPilot API",
     version=__version__,
     description="Agentic AI assistant for GitHub repositories.",
 )
+
+
+def get_github_token(authorization: Optional[str] = Header(None)) -> Optional[str]:
+    """
+    Extract GitHub token from Authorization header.
+
+    Supports formats:
+    - Bearer <token>
+    - token <token>
+    - <token>
+    """
+    if not authorization:
+        return None
+
+    # Remove "Bearer " or "token " prefix if present
+    if authorization.startswith("Bearer "):
+        return authorization[7:]
+    elif authorization.startswith("token "):
+        return authorization[6:]
+    else:
+        return authorization
 
 
 class RepoSummary(BaseModel):
@@ -82,9 +110,32 @@ class ExecutePlanRequest(BaseModel):
     plan: PlanResult
 
 
+class AuthUrlResponse(BaseModel):
+    authorization_url: str
+    state: str
+
+
+class AuthCallbackRequest(BaseModel):
+    code: str
+    state: str
+
+
+class TokenValidationRequest(BaseModel):
+    access_token: str
+
+
+class UserInfoResponse(BaseModel):
+    user: GitHubUser
+    authenticated: bool
+
+
 @app.get("/api/repos", response_model=List[RepoSummary])
-async def api_list_repos(query: Optional[str] = Query(None)):
-    data = await list_user_repos(query=query)
+async def api_list_repos(
+    query: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+):
+    token = get_github_token(authorization)
+    data = await list_user_repos(query=query, token=token)
     return [
         RepoSummary(
             id=r["id"],
@@ -101,8 +152,10 @@ async def api_list_repos(query: Optional[str] = Query(None)):
 async def api_repo_tree(
     owner: str = FPath(...),
     repo: str = FPath(...),
+    authorization: Optional[str] = Header(None),
 ):
-    tree = await get_repo_tree(owner, repo)
+    token = get_github_token(authorization)
+    tree = await get_repo_tree(owner, repo, token=token)
     return FileTreeResponse(files=[FileEntry(**f) for f in tree])
 
 
@@ -111,8 +164,10 @@ async def api_get_file(
     owner: str = FPath(...),
     repo: str = FPath(...),
     path: str = Query(...),
+    authorization: Optional[str] = Header(None),
 ):
-    content = await get_file(owner, repo, path)
+    token = get_github_token(authorization)
+    content = await get_file(owner, repo, path, token=token)
     return FileContent(path=path, content=content)
 
 
@@ -121,9 +176,11 @@ async def api_put_file(
     owner: str = FPath(...),
     repo: str = FPath(...),
     payload: CommitRequest = ...,
+    authorization: Optional[str] = Header(None),
 ):
+    token = get_github_token(authorization)
     result = await put_file(
-        owner, repo, payload.path, payload.content, payload.message
+        owner, repo, payload.path, payload.content, payload.message, token=token
     )
     return CommitResponse(**result)
 
@@ -193,6 +250,73 @@ async def api_get_flow():
     """Return the current agent flow definition as a graph."""
     flow = await get_flow_definition()
     return flow
+
+
+# ============================================================================
+# Authentication Endpoints
+# ============================================================================
+
+
+@app.get("/api/auth/url", response_model=AuthUrlResponse)
+async def api_get_auth_url():
+    """
+    Generate GitHub OAuth authorization URL.
+
+    Returns the URL to redirect users to for GitHub authentication.
+    """
+    auth_url, state = generate_authorization_url()
+    return AuthUrlResponse(authorization_url=auth_url, state=state)
+
+
+@app.post("/api/auth/callback", response_model=AuthSession)
+async def api_auth_callback(request: AuthCallbackRequest):
+    """
+    Handle GitHub OAuth callback.
+
+    Exchange the authorization code for an access token and return user session.
+    """
+    try:
+        session = await exchange_code_for_token(request.code, request.state)
+        return session
+    except ValueError as e:
+        return JSONResponse(
+            {"error": str(e)},
+            status_code=400,
+        )
+
+
+@app.post("/api/auth/validate", response_model=UserInfoResponse)
+async def api_validate_token(request: TokenValidationRequest):
+    """
+    Validate a GitHub access token and return user information.
+
+    Can be used with both OAuth tokens and Personal Access Tokens.
+    """
+    user = await validate_token(request.access_token)
+    if user:
+        return UserInfoResponse(user=user, authenticated=True)
+    return UserInfoResponse(
+        user=GitHubUser(login="", id=0, avatar_url=""),
+        authenticated=False,
+    )
+
+
+@app.get("/api/auth/status")
+async def api_auth_status():
+    """
+    Check if GitHub authentication is configured.
+
+    Returns whether OAuth is set up or if PAT should be used.
+    """
+    import os
+    has_oauth = bool(os.getenv("GITHUB_CLIENT_ID") and os.getenv("GITHUB_CLIENT_SECRET"))
+    has_pat = bool(os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN"))
+
+    return {
+        "oauth_configured": has_oauth,
+        "pat_configured": has_pat,
+        "auth_method": "oauth" if has_oauth else "pat" if has_pat else "none",
+    }
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "web"
