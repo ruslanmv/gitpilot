@@ -421,6 +421,77 @@ class ConfigureAppRequest(BaseModel):
     private_key_base64: str
 
 
+class GitHubOAuthCallbackRequest(BaseModel):
+    code: str
+    installation_id: str
+    setup_action: str = "install"
+
+
+@app.get("/auth/github/callback")
+async def github_oauth_callback(
+    code: Optional[str] = None,
+    installation_id: Optional[str] = None,
+    setup_action: Optional[str] = None,
+):
+    """
+    GitHub OAuth callback handler - called after user installs GitHub App.
+
+    This is the SaaS model where users install the central GitPilota app.
+    """
+    from .settings import AppSettings
+    import httpx
+
+    settings = AppSettings.from_disk()
+
+    # If no code, redirect to installation
+    if not code:
+        return JSONResponse({
+            "error": "No authorization code provided",
+            "message": "Please install the GitHub App first"
+        }, status_code=400)
+
+    # Exchange code for access token if we have OAuth credentials
+    if settings.github.app.client_id and settings.github.app.client_secret:
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    "https://github.com/login/oauth/access_token",
+                    data={
+                        "client_id": settings.github.app.client_id,
+                        "client_secret": settings.github.app.client_secret,
+                        "code": code,
+                    },
+                    headers={"Accept": "application/json"}
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    access_token = data.get("access_token")
+
+                    if access_token and installation_id:
+                        # Store the installation ID for this user
+                        auth_manager = get_auth_manager()
+                        settings.github.app.installation_id = installation_id
+                        settings.github.auth_mode = GitHubAuthMode.app
+                        settings.use_custom_auth = False  # Using central app
+                        settings.save()
+
+                        # Redirect to success page
+                        return FileResponse(STATIC_DIR / "index.html")
+        except Exception as e:
+            print(f"OAuth exchange failed: {e}")
+
+    # Fallback: If we have installation_id, store it
+    if installation_id:
+        settings.github.app.installation_id = installation_id
+        settings.github.auth_mode = GitHubAuthMode.app
+        settings.use_custom_auth = False
+        settings.save()
+
+    # Redirect to main app
+    return FileResponse(STATIC_DIR / "index.html")
+
+
 @app.post("/api/auth/configure-app", response_model=LoginResponse)
 async def api_auth_configure_app(request: ConfigureAppRequest):
     """Configure GitHub App credentials via web form."""

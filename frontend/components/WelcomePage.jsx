@@ -5,11 +5,6 @@ export default function WelcomePage({ onAuthComplete }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showInstructions, setShowInstructions] = useState(false);
-  const [showCredentialsForm, setShowCredentialsForm] = useState(false);
-  const [appId, setAppId] = useState("");
-  const [installationId, setInstallationId] = useState("");
-  const [privateKey, setPrivateKey] = useState("");
-  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     checkAuthStatus();
@@ -42,46 +37,6 @@ export default function WelcomePage({ onAuthComplete }) {
 
   const handleLogin = () => {
     setShowInstructions(true);
-  };
-
-  const handleShowCredentialsForm = () => {
-    setShowCredentialsForm(true);
-    setShowInstructions(false);
-  };
-
-  const handleSubmitCredentials = async (e) => {
-    e.preventDefault();
-    setSubmitting(true);
-    setError(null);
-
-    try {
-      // Base64 encode the private key
-      const privateKeyBase64 = btoa(privateKey);
-
-      const response = await fetch("/api/auth/configure-app", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          app_id: appId,
-          installation_id: installationId,
-          private_key_base64: privateKeyBase64,
-        }),
-      });
-
-      const data = await response.json();
-
-      if (response.ok) {
-        // Success! Refresh auth status
-        checkAuthStatus();
-        setShowCredentialsForm(false);
-      } else {
-        setError(data.message || "Failed to configure GitHub App");
-      }
-    } catch (err) {
-      setError("Network error: " + err.message);
-    } finally {
-      setSubmitting(false);
-    }
   };
 
   const handleUseEnvCredentials = async () => {
@@ -259,13 +214,13 @@ export default function WelcomePage({ onAuthComplete }) {
                           </svg>
                         </div>
                         <div className="method-content">
-                          <h3>GitHub App (Recommended)</h3>
-                          <p>Enterprise-grade authentication with granular repository permissions</p>
-                          <button className="btn-primary" onClick={handleLogin}>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
-                              <path d="M12 2a5 5 0 00-5 5v3H6a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2v-8a2 2 0 00-2-2h-1V7a5 5 0 00-5-5z" />
+                          <h3>Install GitPilota GitHub App</h3>
+                          <p>One-click authentication - select which repositories to grant access</p>
+                          <button className="btn-primary" onClick={handleSetupGitHubApp}>
+                            <svg viewBox="0 0 16 16" fill="currentColor" width="16" height="16">
+                              <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
                             </svg>
-                            Setup GitHub App
+                            Install GitHub App
                           </button>
                         </div>
                       </div>
@@ -327,77 +282,6 @@ export default function WelcomePage({ onAuthComplete }) {
                 <p className="footer-text">Enterprise-grade security with GitHub App authentication</p>
               </div>
             </>
-          ) : showCredentialsForm ? (
-            <div className="credentials-form-panel">
-              <button className="back-button" onClick={() => {setShowCredentialsForm(false); setShowInstructions(false);}}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="20" height="20">
-                  <path d="M19 12H5m7-7l-7 7 7 7"/>
-                </svg>
-                Back
-              </button>
-
-              <h2>Configure GitHub App</h2>
-              <p className="instructions-description">Enter your GitHub App credentials to continue:</p>
-
-              <form onSubmit={handleSubmitCredentials} className="credentials-form">
-                <div className="form-group">
-                  <label htmlFor="appId">App ID</label>
-                  <input
-                    id="appId"
-                    type="text"
-                    value={appId}
-                    onChange={(e) => setAppId(e.target.value)}
-                    placeholder="e.g., 2313985"
-                    required
-                  />
-                  <small>Find this at the top of your GitHub App settings page</small>
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="installationId">Installation ID</label>
-                  <input
-                    id="installationId"
-                    type="text"
-                    value={installationId}
-                    onChange={(e) => setInstallationId(e.target.value)}
-                    placeholder="e.g., 12345678"
-                    required
-                  />
-                  <small>
-                    Find this at: <code>https://github.com/settings/installations</code>
-                  </small>
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="privateKey">Private Key (PEM format)</label>
-                  <textarea
-                    id="privateKey"
-                    value={privateKey}
-                    onChange={(e) => setPrivateKey(e.target.value)}
-                    placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;...&#10;-----END RSA PRIVATE KEY-----"
-                    rows="8"
-                    required
-                  />
-                  <small>Paste the entire private key file contents here</small>
-                </div>
-
-                <button type="submit" className="btn-primary" disabled={submitting}>
-                  {submitting ? (
-                    <>
-                      <div className="spinner-small"></div>
-                      Configuring...
-                    </>
-                  ) : (
-                    <>
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
-                        <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                      Save & Continue
-                    </>
-                  )}
-                </button>
-              </form>
-            </div>
           ) : (
             <div className="instructions-panel">
               <button className="back-button" onClick={() => setShowInstructions(false)}>
@@ -407,52 +291,52 @@ export default function WelcomePage({ onAuthComplete }) {
                 Back
               </button>
 
-              <h2>GitHub App Setup</h2>
-              <p className="instructions-description">Follow these steps to authenticate with GitHub:</p>
+              <h2>How It Works</h2>
+              <p className="instructions-description">GitPilot uses a centralized GitHub App for secure authentication</p>
+
+              <div className="info-panel">
+                <h3>What GitPilota Can Access</h3>
+                <p>When you install the GitPilota GitHub App, you grant these permissions:</p>
+                <ul className="permission-list">
+                  <li><strong>Repository Contents:</strong> Read and write files</li>
+                  <li><strong>Issues:</strong> Create and comment on issues</li>
+                  <li><strong>Pull Requests:</strong> Create and review pull requests</li>
+                </ul>
+                <p className="info-note">You control which repositories the app can access during installation.</p>
+              </div>
 
               <div className="step-list">
                 <div className="step">
                   <div className="step-number">1</div>
                   <div className="step-content">
-                    <h3>Create GitHub App with Permissions</h3>
-                    <p>Create a new GitHub App and configure these <strong>required permissions</strong>:</p>
-                    <ul className="permission-list">
-                      <li><strong>Contents:</strong> Read and write</li>
-                      <li><strong>Issues:</strong> Read and write</li>
-                      <li><strong>Pull requests:</strong> Read and write</li>
-                    </ul>
-                    <p><a href="https://github.com/settings/apps/new" target="_blank" rel="noopener noreferrer">Create GitHub App →</a></p>
+                    <h3>Install GitPilota App</h3>
+                    <p>Click the button below to install the official GitPilota GitHub App</p>
                   </div>
                 </div>
 
                 <div className="step">
                   <div className="step-number">2</div>
                   <div className="step-content">
-                    <h3>Install App on Repositories</h3>
-                    <p>After creating the app, install it and select which repositories it can access.</p>
-                    <button className="btn-secondary" onClick={handleSetupGitHubApp} style={{marginTop: '0.75rem'}}>
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
-                        <path d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                      </svg>
-                      Install GitHub App
-                    </button>
+                    <h3>Select Repositories</h3>
+                    <p>Choose "All repositories" or select specific ones to grant access</p>
                   </div>
                 </div>
 
                 <div className="step">
                   <div className="step-number">3</div>
                   <div className="step-content">
-                    <h3>Enter Credentials</h3>
-                    <p>Provide your App ID, Installation ID, and private key</p>
-                    <button className="btn-primary" onClick={handleShowCredentialsForm} style={{marginTop: '0.75rem'}}>
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
-                        <path d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-                      </svg>
-                      Configure Credentials
-                    </button>
+                    <h3>Authorize & Complete</h3>
+                    <p>After installation, you'll be redirected back and ready to use GitPilot</p>
                   </div>
                 </div>
               </div>
+
+              <button className="btn-primary" onClick={handleSetupGitHubApp} style={{marginTop: '1.5rem'}}>
+                <svg viewBox="0 0 16 16" fill="currentColor" width="16" height="16">
+                  <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+                </svg>
+                Install GitHub App Now
+              </button>
             </div>
           )}
         </div>
@@ -937,63 +821,36 @@ export default function WelcomePage({ onAuthComplete }) {
           transform: translateY(-1px);
         }
 
-        .credentials-form-panel {
-          padding: 2rem;
+        .info-panel {
+          padding: 1.5rem;
+          margin: 1.5rem 0;
+          background: rgba(136, 147, 255, 0.05);
+          border: 1px solid rgba(136, 147, 255, 0.15);
+          border-radius: 8px;
         }
 
-        .credentials-form {
-          display: flex;
-          flex-direction: column;
-          gap: 1.5rem;
-        }
-
-        .form-group {
-          display: flex;
-          flex-direction: column;
-          gap: 0.5rem;
-        }
-
-        .form-group label {
-          font-size: 14px;
+        .info-panel h3 {
+          margin: 0 0 0.75rem;
+          font-size: 16px;
           font-weight: 600;
           color: #f0f6fc;
         }
 
-        .form-group input,
-        .form-group textarea {
-          padding: 0.75rem 1rem;
-          background: #0d1117;
-          border: 1px solid #30363d;
-          border-radius: 6px;
-          color: #c9d1d9;
+        .info-panel p {
+          margin: 0 0 0.75rem;
           font-size: 14px;
-          font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
-          transition: all 0.2s;
+          color: #c9d1d9;
+          line-height: 1.6;
         }
 
-        .form-group input:focus,
-        .form-group textarea:focus {
-          outline: none;
-          border-color: #8893ff;
-          background: #161b22;
-        }
-
-        .form-group textarea {
-          resize: vertical;
-          min-height: 120px;
-        }
-
-        .form-group small {
-          font-size: 12px;
-          color: #8b949e;
-        }
-
-        .form-group small code {
-          padding: 0.2rem 0.4rem;
-          background: #0d1117;
-          border: 1px solid #30363d;
-          border-radius: 3px;
-          font-size: 11px;
+        .info-note {
+          margin-top: 1rem;
+          padding: 0.75rem 1rem;
+          background: rgba(136, 147, 255, 0.08);
+          border-left: 3px solid #8893ff;
+          border-radius: 4px;
+          font-size: 13px;
+          color: #c9d1d9;
         }
 
         .permission-list {
@@ -1010,19 +867,6 @@ export default function WelcomePage({ onAuthComplete }) {
 
         .permission-list strong {
           color: #8893ff;
-        }
-
-        .spinner-small {
-          width: 16px;
-          height: 16px;
-          border: 2px solid rgba(255, 255, 255, 0.3);
-          border-top-color: white;
-          border-radius: 50%;
-          animation: spin 0.8s linear infinite;
-        }
-
-        @keyframes spin {
-          to { transform: rotate(360deg); }
         }
 
         .polling-status {
