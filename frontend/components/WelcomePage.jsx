@@ -2,28 +2,25 @@ import React, { useState } from "react";
 
 export default function WelcomePage({ onLoginSuccess }) {
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
 
   const handleInstallApp = () => {
     // Redirect to GitHub App installation page
-    // The app slug should match your GitHub App name
     const appSlug = "gitpilota"; // Update this to match your actual GitHub App slug
     const installUrl = `https://github.com/apps/${appSlug}/installations/new`;
-
-    // Open installation page
     window.location.href = installUrl;
   };
 
   const handleConnectGitHub = async () => {
     try {
       setLoading(true);
-      setError(null);
 
       // Initiate OAuth flow
       const res = await fetch("/api/auth/login");
       if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to connect to GitHub");
+        // If OAuth not configured, silently redirect to installation page
+        console.log("OAuth not configured, redirecting to app installation");
+        handleInstallApp();
+        return;
       }
 
       const data = await res.json();
@@ -33,8 +30,8 @@ export default function WelcomePage({ onLoginSuccess }) {
 
     } catch (e) {
       console.error("Login error:", e);
-      setError(e.message || "Failed to connect to GitHub");
-      setLoading(false);
+      // Fallback to installation page
+      handleInstallApp();
     }
   };
 
@@ -125,13 +122,6 @@ export default function WelcomePage({ onLoginSuccess }) {
                 </div>
               </div>
             </div>
-
-            {error && (
-              <div className="welcome-error">
-                <span className="error-icon">❌</span>
-                {error}
-              </div>
-            )}
 
             <div className="connect-info">
               <div className="info-item">
