@@ -1,3 +1,4 @@
+# gitpilot/api.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -16,6 +17,8 @@ from .github_oauth import (
     generate_authorization_url,
     exchange_code_for_token,
     validate_token,
+    initiate_device_flow, # NEW: Device Flow support
+    poll_device_token,    # NEW: Device Flow support
     AuthSession,
     GitHubUser,
 )
@@ -253,16 +256,15 @@ async def api_get_flow():
 
 
 # ============================================================================
-# Authentication Endpoints
+# Authentication Endpoints (Web Flow + Device Flow)
 # ============================================================================
 
 
 @app.get("/api/auth/url", response_model=AuthUrlResponse)
 async def api_get_auth_url():
     """
-    Generate GitHub OAuth authorization URL.
-
-    Returns the URL to redirect users to for GitHub authentication.
+    Generate GitHub OAuth authorization URL (Web Flow).
+    Requires Client Secret to be configured.
     """
     auth_url, state = generate_authorization_url()
     return AuthUrlResponse(authorization_url=auth_url, state=state)
@@ -271,9 +273,8 @@ async def api_get_auth_url():
 @app.post("/api/auth/callback", response_model=AuthSession)
 async def api_auth_callback(request: AuthCallbackRequest):
     """
-    Handle GitHub OAuth callback.
-
-    Exchange the authorization code for an access token and return user session.
+    Handle GitHub OAuth callback (Web Flow).
+    Exchange the authorization code for an access token.
     """
     try:
         session = await exchange_code_for_token(request.code, request.state)
@@ -289,8 +290,6 @@ async def api_auth_callback(request: AuthCallbackRequest):
 async def api_validate_token(request: TokenValidationRequest):
     """
     Validate a GitHub access token and return user information.
-
-    Can be used with both OAuth tokens and Personal Access Tokens.
     """
     user = await validate_token(request.access_token)
     if user:
@@ -301,39 +300,66 @@ async def api_validate_token(request: TokenValidationRequest):
     )
 
 
+# --- NEW: Device Flow Endpoints ---
+
+@app.post("/api/auth/device/code")
+async def api_device_code():
+    """
+    Start the device login flow (Step 1).
+    Does NOT require a client secret.
+    """
+    try:
+        data = await initiate_device_flow()
+        return data  # Returns { device_code, user_code, verification_uri, interval, ... }
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/auth/device/poll")
+async def api_device_poll(payload: dict):
+    """
+    Poll GitHub to check if user authorized the device (Step 2).
+    """
+    device_code = payload.get("device_code")
+    if not device_code:
+        return JSONResponse({"error": "Missing device_code"}, status_code=400)
+
+    try:
+        session = await poll_device_token(device_code)
+        if session:
+            return session # Success!
+        
+        # 202 Accepted indicates "Pending - Keep Polling"
+        return JSONResponse({"status": "pending"}, status_code=202)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
 @app.get("/api/auth/status")
 async def api_auth_status():
     """
-    Check if GitHub authentication is configured.
-
-    Returns whether OAuth is set up or if PAT should be used.
+    Smart check: Do we have a secret (Web Flow) or just ID (Device Flow)?
+    This tells the frontend which UI to render.
     """
     import os
-    has_oauth = bool(os.getenv("GITHUB_CLIENT_ID") and os.getenv("GITHUB_CLIENT_SECRET"))
-    has_pat = bool(os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN"))
-    has_github_app = bool(os.getenv("GITHUB_APP_ID"))
-
+    has_secret = bool(os.getenv("GITHUB_CLIENT_SECRET"))
+    # Default Client ID is provided for convenience if environment var is missing
+    has_id = bool(os.getenv("GITHUB_CLIENT_ID", "Iv23litmRp80Z6wmlyRn"))
+    
     return {
-        "oauth_configured": has_oauth,
-        "pat_configured": has_pat,
-        "github_app_configured": has_github_app,
-        "auth_method": "github_app" if has_github_app else "oauth" if has_oauth else "pat" if has_pat else "none",
+        "mode": "web" if has_secret else "device", 
+        "configured": has_id,
+        "oauth_configured": has_secret, # Legacy compat
+        "pat_configured": bool(os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")),
     }
 
 
 @app.get("/api/auth/app-url")
 async def api_get_app_url():
-    """
-    Get GitHub App installation URL.
-
-    Returns the URL where users can install the GitHub App.
-    """
+    """Get GitHub App installation URL."""
     import os
-
-    # Get custom app URL if configured, otherwise use default
-    app_slug = os.getenv("GITHUB_APP_SLUG", "gitpilot")
+    app_slug = os.getenv("GITHUB_APP_SLUG", "gitpilota")
     app_url = f"https://github.com/apps/{app_slug}"
-
     return {
         "app_url": app_url,
         "app_slug": app_slug,
@@ -342,23 +368,11 @@ async def api_get_app_url():
 
 @app.get("/api/auth/installation-status")
 async def api_check_installation_status():
-    """
-    Check if GitHub App is installed for the current user.
-
-    This endpoint checks if:
-    1. A GitHub App is configured
-    2. User has a valid token (PAT or from localStorage)
-    3. User has access to repositories
-
-    Returns installation status and user info if authenticated.
-    """
+    """Check if GitHub App is installed for the current user."""
     import os
-
-    # Check if using PAT (simpler auth)
     pat_token = os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
 
     if pat_token:
-        # Validate PAT token
         user = await validate_token(pat_token)
         if user:
             return {
@@ -368,44 +382,63 @@ async def api_check_installation_status():
                 "auth_type": "pat",
             }
 
-    # If no PAT, check if GitHub App is configured
-    github_app_id = os.getenv("GITHUB_APP_ID")
-
+    github_app_id = os.getenv("GITHUB_APP_ID", "2313985")
     if not github_app_id:
         return {
             "installed": False,
-            "message": "GitHub authentication not configured. Please set GITPILOT_GITHUB_TOKEN or configure GitHub App.",
+            "message": "GitHub authentication not configured.",
             "auth_type": "none",
         }
 
-    # TODO: Implement GitHub App installation check
-    # For now, return not installed if no PAT
     return {
         "installed": False,
-        "message": "GitHub App not installed. Please install the app or use a Personal Access Token.",
+        "message": "GitHub App not installed.",
         "auth_type": "github_app",
     }
 
 
-STATIC_DIR = Path(__file__).resolve().parent / "web"
+# ============================================================================
+# Static Files & Frontend Serving (SPA Support)
+# ============================================================================
 
+STATIC_DIR = Path(__file__).resolve().parent / "web"
+ASSETS_DIR = STATIC_DIR / "assets"
+
+# 1. Mount assets explicitly (Fixes React/Vite loading issues)
+if ASSETS_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
+
+# 2. Mount static folder generic
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 @app.get("/", include_in_schema=False)
 async def index():
+    """Serve the React App entry point."""
     index_file = STATIC_DIR / "index.html"
     if index_file.exists():
         return FileResponse(index_file)
     return JSONResponse(
-        {
-            "message": "GitPilot UI not built. The static files directory is missing."
-        },
+        {"message": "GitPilot UI not built. The static files directory is missing."},
         status_code=500,
     )
 
-
-if STATIC_DIR.exists():
-    app.mount(
-        "/static",
-        StaticFiles(directory=STATIC_DIR),
-        name="static",
+# 3. Catch-All Route for SPA Routing (Must be last)
+# This allows paths like /login or /workspace to work on refresh
+@app.get("/{full_path:path}", include_in_schema=False)
+async def catch_all_spa_routes(full_path: str):
+    """
+    Catch-all route to serve index.html for frontend routing.
+    Excludes '/api' paths to ensure genuine API 404s are returned as JSON.
+    """
+    if full_path.startswith("api/"):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+        
+    index_file = STATIC_DIR / "index.html"
+    if index_file.exists():
+        return FileResponse(index_file)
+        
+    return JSONResponse(
+        {"message": "GitPilot UI not built. The static files directory is missing."},
+        status_code=500,
     )
