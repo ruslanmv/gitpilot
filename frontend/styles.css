@@ -1683,6 +1683,71 @@ body {
   box-shadow: 0 8px 24px rgba(91, 141, 238, 0.3);
 }
 
+.welcome-btn-outlined {
+  background: transparent;
+  color: #f5f5f7;
+  border: 1px solid #5B8DEE;
+}
+
+.welcome-btn-outlined:hover:not(:disabled) {
+  background: rgba(91, 141, 238, 0.1);
+  border-color: #6B9EFF;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(91, 141, 238, 0.2);
+}
+
+/* Button Group */
+.button-group {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.button-group .welcome-btn {
+  flex: 1;
+  min-width: 150px;
+}
+
+/* Status Messages */
+.status-message {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border-radius: 10px;
+  margin: 16px 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.status-message.checking {
+  background: rgba(91, 141, 238, 0.1);
+  border: 1px solid rgba(91, 141, 238, 0.3);
+  color: #7BA5FF;
+}
+
+.status-message.info {
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  color: #60a5fa;
+}
+
+.status-message.error {
+  background: rgba(244, 67, 54, 0.1);
+  border: 1px solid rgba(244, 67, 54, 0.3);
+  color: #e57373;
+}
+
+.status-message .spinner {
+  animation: spin 0.8s linear infinite;
+}
+
+.status-message .info-icon,
+.status-message .error-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
 /* ============================================================================
    User Menu
    ============================================================================ */
