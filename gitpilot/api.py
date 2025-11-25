@@ -311,11 +311,79 @@ async def api_auth_status():
     import os
     has_oauth = bool(os.getenv("GITHUB_CLIENT_ID") and os.getenv("GITHUB_CLIENT_SECRET"))
     has_pat = bool(os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN"))
+    has_github_app = bool(os.getenv("GITHUB_APP_ID"))
 
     return {
         "oauth_configured": has_oauth,
         "pat_configured": has_pat,
-        "auth_method": "oauth" if has_oauth else "pat" if has_pat else "none",
+        "github_app_configured": has_github_app,
+        "auth_method": "github_app" if has_github_app else "oauth" if has_oauth else "pat" if has_pat else "none",
+    }
+
+
+@app.get("/api/auth/app-url")
+async def api_get_app_url():
+    """
+    Get GitHub App installation URL.
+
+    Returns the URL where users can install the GitHub App.
+    """
+    import os
+
+    # Get custom app URL if configured, otherwise use default
+    app_slug = os.getenv("GITHUB_APP_SLUG", "gitpilot")
+    app_url = f"https://github.com/apps/{app_slug}"
+
+    return {
+        "app_url": app_url,
+        "app_slug": app_slug,
+    }
+
+
+@app.get("/api/auth/installation-status")
+async def api_check_installation_status():
+    """
+    Check if GitHub App is installed for the current user.
+
+    This endpoint checks if:
+    1. A GitHub App is configured
+    2. User has a valid token (PAT or from localStorage)
+    3. User has access to repositories
+
+    Returns installation status and user info if authenticated.
+    """
+    import os
+
+    # Check if using PAT (simpler auth)
+    pat_token = os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
+
+    if pat_token:
+        # Validate PAT token
+        user = await validate_token(pat_token)
+        if user:
+            return {
+                "installed": True,
+                "access_token": pat_token,
+                "user": user,
+                "auth_type": "pat",
+            }
+
+    # If no PAT, check if GitHub App is configured
+    github_app_id = os.getenv("GITHUB_APP_ID")
+
+    if not github_app_id:
+        return {
+            "installed": False,
+            "message": "GitHub authentication not configured. Please set GITPILOT_GITHUB_TOKEN or configure GitHub App.",
+            "auth_type": "none",
+        }
+
+    # TODO: Implement GitHub App installation check
+    # For now, return not installed if no PAT
+    return {
+        "installed": False,
+        "message": "GitHub App not installed. Please install the app or use a Personal Access Token.",
+        "auth_type": "github_app",
     }
 
 

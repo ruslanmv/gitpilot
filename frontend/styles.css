@@ -1764,4 +1764,286 @@ body {
   font-size: 11px;
   color: #7a7b8e;
   line-height: 1.6;
+}/* ============================================================================
+   INSTALLATION MODAL - Claude Code Style
+   ============================================================================ */
+
+.install-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(8px);
+  z-index: 9999;
+  animation: fadeIn 0.2s ease;
+}
+
+.install-modal {
+  width: 480px;
+  max-width: 90vw;
+  background: #101117;
+  border: 1px solid #272832;
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  animation: modalSlideIn 0.3s ease;
+  overflow: hidden;
+}
+
+@keyframes modalSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Modal Header */
+.install-modal-header {
+  padding: 32px 32px 24px;
+  text-align: center;
+  border-bottom: 1px solid #272832;
+}
+
+.install-modal-logo {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+
+.logo-icon-large {
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #ff7a3c 0%, #ff6b2b 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 24px;
+  color: #050608;
+  box-shadow: 0 4px 16px rgba(255, 122, 60, 0.3);
+}
+
+.install-modal-title {
+  margin: 0 0 8px 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: #f5f5f7;
+}
+
+.install-modal-subtitle {
+  margin: 0;
+  font-size: 13px;
+  color: #9a9bb0;
+  line-height: 1.5;
+}
+
+/* Status Indicator */
+.install-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  margin: 16px 24px;
+  border-radius: 8px;
+  font-size: 13px;
+  transition: all 0.2s ease;
+}
+
+.install-status-error {
+  background: rgba(255, 82, 82, 0.1);
+  border: 1px solid rgba(255, 82, 82, 0.3);
+  color: #ff8a8a;
+}
+
+.install-status-pending {
+  background: rgba(255, 152, 0, 0.1);
+  border: 1px solid rgba(255, 152, 0, 0.3);
+  color: #ffb74d;
+}
+
+.status-icon {
+  flex-shrink: 0;
+}
+
+.status-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 180, 77, 0.3);
+  border-top-color: #ffb74d;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+/* Installation Steps */
+.install-steps {
+  padding: 24px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.install-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.step-number {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: #1a1b26;
+  border: 1px solid #3a3b4d;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: #ff7a3c;
+}
+
+.step-content h3 {
+  margin: 0 0 4px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #f5f5f7;
+}
+
+.step-content p {
+  margin: 0;
+  font-size: 12px;
+  color: #9a9bb0;
+  line-height: 1.5;
+}
+
+/* Action Buttons */
+.install-modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 24px;
+  border-top: 1px solid #272832;
+  background: #0a0b0f;
+}
+
+.btn-install-primary {
+  border: none;
+  outline: none;
+  background: #000;
+  color: #fff;
+  padding: 10px 18px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+}
+
+.btn-install-primary:hover:not(:disabled) {
+  background: #1a1a1a;
+  transform: translateY(-1px);
+}
+
+.btn-install-primary:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.btn-install-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-check-status {
+  border: 1px solid #3a3b4d;
+  outline: none;
+  background: #1a1b26;
+  color: #f5f5f7;
+  padding: 10px 18px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+}
+
+.btn-check-status:hover:not(:disabled) {
+  background: #2a2b3c;
+  border-color: #4a4b5d;
+}
+
+.btn-check-status:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-install-secondary {
+  border: 1px solid #3a3b4d;
+  outline: none;
+  background: transparent;
+  color: #c3c5dd;
+  padding: 10px 18px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+}
+
+.btn-install-secondary:hover:not(:disabled) {
+  background: #1a1b26;
+  border-color: #4a4b5d;
+}
+
+.btn-install-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Footer */
+.install-modal-footer {
+  padding: 16px 32px 24px;
+  text-align: center;
+}
+
+.install-modal-footer p {
+  margin: 0;
+  font-size: 12px;
+  color: #7a7b8e;
+  line-height: 1.6;
+}
+
+.install-modal-footer strong {
+  color: #c3c5dd;
+  font-weight: 600;
+}
+
+/* Button spinner */
+.btn-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
