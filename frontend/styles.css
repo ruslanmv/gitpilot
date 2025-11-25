@@ -1597,6 +1597,81 @@ body {
   flex-shrink: 0;
 }
 
+/* Simplified Connect Card */
+.connect-card-simple {
+  background: #101117;
+  border: 1px solid #272832;
+  border-radius: 16px;
+  padding: 40px;
+  max-width: 550px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.connect-card-simple h3 {
+  font-size: 26px;
+  margin: 0 0 16px;
+  color: #f5f5f7;
+  font-weight: 700;
+}
+
+.connect-card-simple > p {
+  font-size: 15px;
+  color: #9a9bb0;
+  margin: 0 0 32px;
+  line-height: 1.6;
+}
+
+.welcome-btn-large {
+  padding: 18px 40px;
+  font-size: 16px;
+  min-width: 280px;
+}
+
+.connect-info-simple {
+  margin-top: 32px;
+  text-align: left;
+  background: rgba(91, 141, 238, 0.05);
+  border: 1px solid rgba(91, 141, 238, 0.15);
+  border-radius: 12px;
+  padding: 20px 24px;
+}
+
+.info-text {
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: #f5f5f7;
+}
+
+.info-list {
+  margin: 0;
+  padding-left: 20px;
+  list-style: decimal;
+}
+
+.info-list li {
+  font-size: 13px;
+  color: #9a9bb0;
+  margin: 8px 0;
+  line-height: 1.6;
+}
+
+.security-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid #272832;
+  font-size: 13px;
+  color: #7a7b8e;
+}
+
+.security-badge svg {
+  opacity: 0.7;
+}
+
 /* Two-Step Setup Flow */
 .setup-steps-simple {
   display: flex;
