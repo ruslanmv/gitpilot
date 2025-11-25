@@ -9,14 +9,31 @@ from fastapi import HTTPException
 GITHUB_API_BASE = "https://api.github.com"
 
 
-def _github_token() -> str:
+def _github_token(provided_token: Optional[str] = None) -> str:
+    """
+    Get GitHub token from provided token or environment variables.
+
+    Args:
+        provided_token: Optional token from Authorization header
+
+    Returns:
+        GitHub access token
+
+    Raises:
+        HTTPException: If no token is available
+    """
+    # Prefer provided token (from OAuth or header)
+    if provided_token:
+        return provided_token
+
+    # Fallback to environment variables (for CLI/server mode)
     token = os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
     if not token:
         raise HTTPException(
-            status_code=500,
+            status_code=401,
             detail=(
-                "GitHub token not configured. "
-                "Set GITPILOT_GITHUB_TOKEN or GITHUB_TOKEN in your environment."
+                "GitHub authentication required. "
+                "Please log in or set GITPILOT_GITHUB_TOKEN in your environment."
             ),
         )
     return token
@@ -28,11 +45,12 @@ async def github_request(
     method: str = "GET",
     json: Optional[Dict[str, Any]] = None,
     params: Optional[Dict[str, Any]] = None,
+    token: Optional[str] = None,
 ) -> Any:
-    token = _github_token()
+    github_token = _github_token(token)
 
     headers = {
-        "Authorization": f"Bearer {token}",
+        "Authorization": f"Bearer {github_token}",
         "Accept": "application/vnd.github+json",
         "User-Agent": "gitpilot",
     }
@@ -53,12 +71,12 @@ async def github_request(
     return resp.json()
 
 
-async def list_user_repos(query: str | None = None) -> List[Dict[str, Any]]:
+async def list_user_repos(query: str | None = None, token: Optional[str] = None) -> List[Dict[str, Any]]:
     params = {
         "per_page": 100,
         "affiliation": "owner,collaborator,organization_member",
     }
-    data = await github_request("/user/repos", params=params)
+    data = await github_request("/user/repos", params=params, token=token)
     repos = [
         {
             "id": r["id"],
@@ -76,10 +94,11 @@ async def list_user_repos(query: str | None = None) -> List[Dict[str, Any]]:
     return repos
 
 
-async def get_repo_tree(owner: str, repo: str) -> list[dict[str, str]]:
+async def get_repo_tree(owner: str, repo: str, token: Optional[str] = None) -> list[dict[str, str]]:
     data = await github_request(
         f"/repos/{owner}/{repo}/git/trees/HEAD",
         params={"recursive": 1},
+        token=token,
     )
     return [
         {"path": item["path"], "type": item["type"]}
@@ -88,10 +107,10 @@ async def get_repo_tree(owner: str, repo: str) -> list[dict[str, str]]:
     ]
 
 
-async def get_file(owner: str, repo: str, path: str) -> str:
+async def get_file(owner: str, repo: str, path: str, token: Optional[str] = None) -> str:
     from base64 import b64decode
 
-    data = await github_request(f"/repos/{owner}/{repo}/contents/{path}")
+    data = await github_request(f"/repos/{owner}/{repo}/contents/{path}", token=token)
     content_b64 = data.get("content") or ""
     return b64decode(content_b64.encode("utf-8")).decode("utf-8", errors="replace")
 
@@ -102,12 +121,13 @@ async def put_file(
     path: str,
     content: str,
     message: str,
+    token: Optional[str] = None,
 ) -> dict[str, Any]:
     from base64 import b64encode
 
     sha: str | None = None
     try:
-        existing = await github_request(f"/repos/{owner}/{repo}/contents/{path}")
+        existing = await github_request(f"/repos/{owner}/{repo}/contents/{path}", token=token)
         sha = existing.get("sha")
     except HTTPException:
         sha = None
@@ -123,6 +143,7 @@ async def put_file(
         f"/repos/{owner}/{repo}/contents/{path}",
         method="PUT",
         json=body,
+        token=token,
     )
     commit = result.get("commit", {})
     return {
@@ -137,6 +158,7 @@ async def delete_file(
     repo: str,
     path: str,
     message: str,
+    token: Optional[str] = None,
 ) -> dict[str, Any]:
     """Delete a file from the repository.
 
@@ -145,12 +167,13 @@ async def delete_file(
         repo: Repository name
         path: Path to the file to delete
         message: Commit message for the deletion
+        token: Optional GitHub access token
 
     Returns:
         Dictionary with deletion details including commit info
     """
     # Get current file SHA (required for deletion)
-    existing = await github_request(f"/repos/{owner}/{repo}/contents/{path}")
+    existing = await github_request(f"/repos/{owner}/{repo}/contents/{path}", token=token)
     sha = existing.get("sha")
 
     if not sha:
@@ -168,6 +191,7 @@ async def delete_file(
         f"/repos/{owner}/{repo}/contents/{path}",
         method="DELETE",
         json=body,
+        token=token,
     )
 
     commit = result.get("commit", {})
