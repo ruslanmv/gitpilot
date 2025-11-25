@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import FastAPI, Query, Path as FPath
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -13,6 +13,9 @@ from .github_api import list_user_repos, get_repo_tree, get_file, put_file
 from .settings import AppSettings, get_settings, set_provider, update_settings, LLMProvider, GitHubAuthMode
 from .agentic import generate_plan, execute_plan, PlanResult, get_flow_definition
 from .auth import get_auth_manager
+
+# Define STATIC_DIR early so it can be used in endpoints
+STATIC_DIR = Path(__file__).resolve().parent / "web"
 
 app = FastAPI(
     title="GitPilot API",
@@ -235,8 +238,10 @@ async def api_auth_status():
     has_env_credentials = False
     env_username = None
 
-    # Check for .env GitHub App credentials
-    if os.getenv("GITPILOT_GH_APP_ID") and os.getenv("GITPILOT_GH_APP_INSTALLATION_ID") and os.getenv("GITPILOT_GH_APP_PRIVATE_KEY_BASE64"):
+    # Check for .env GitHub App credentials (SaaS model)
+    # In SaaS model: app_id, client_id, client_secret, private_key come from .env
+    # But installation_id comes from user's installation (stored in settings)
+    if os.getenv("GITPILOT_GH_APP_ID") and os.getenv("GITPILOT_GH_APP_PRIVATE_KEY_BASE64"):
         has_env_credentials = True
     # Check for .env PAT credentials
     elif os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN"):
@@ -246,7 +251,7 @@ async def api_auth_status():
     if has_env_credentials and not settings.use_custom_auth:
         try:
             import httpx
-            # Try to get token from environment
+            # Try to get token from environment (PAT mode)
             env_token = os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
             if env_token:
                 response = await httpx.AsyncClient().get(
@@ -256,12 +261,14 @@ async def api_auth_status():
                 if response.status_code == 200:
                     data = response.json()
                     env_username = data.get("login")
-            # Try GitHub App from .env
-            elif os.getenv("GITPILOT_GH_APP_ID") and os.getenv("GITPILOT_GH_APP_INSTALLATION_ID"):
+            # Try GitHub App from .env (SaaS model)
+            # Use app credentials from .env + installation_id from settings
+            elif os.getenv("GITPILOT_GH_APP_ID") and os.getenv("GITPILOT_GH_APP_PRIVATE_KEY_BASE64"):
                 app_id = os.getenv("GITPILOT_GH_APP_ID")
-                installation_id = os.getenv("GITPILOT_GH_APP_INSTALLATION_ID")
                 private_key = os.getenv("GITPILOT_GH_APP_PRIVATE_KEY_BASE64")
-                if private_key:
+                # In SaaS model, installation_id comes from user's installation (stored in settings)
+                installation_id = settings.github.app.installation_id
+                if installation_id:
                     try:
                         token = await auth_manager.get_installation_token(app_id, installation_id, private_key)
                         response = await httpx.AsyncClient().get(
@@ -443,15 +450,15 @@ async def github_oauth_callback(
 
     settings = AppSettings.from_disk()
 
-    # If no code, redirect to installation
-    if not code:
+    # If no code and no installation_id, redirect to installation
+    if not code and not installation_id:
         return JSONResponse({
-            "error": "No authorization code provided",
+            "error": "No authorization code or installation ID provided",
             "message": "Please install the GitHub App first"
         }, status_code=400)
 
     # Exchange code for access token if we have OAuth credentials
-    if settings.github.app.client_id and settings.github.app.client_secret:
+    if code and settings.github.app.client_id and settings.github.app.client_secret:
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
@@ -470,26 +477,28 @@ async def github_oauth_callback(
 
                     if access_token and installation_id:
                         # Store the installation ID for this user
-                        auth_manager = get_auth_manager()
                         settings.github.app.installation_id = installation_id
                         settings.github.auth_mode = GitHubAuthMode.app
                         settings.use_custom_auth = False  # Using central app
+                        settings.setup_completed = True  # Mark setup as complete
                         settings.save()
 
-                        # Redirect to success page
-                        return FileResponse(STATIC_DIR / "index.html")
+                        # Redirect to main app
+                        return RedirectResponse(url="/", status_code=303)
         except Exception as e:
             print(f"OAuth exchange failed: {e}")
 
-    # Fallback: If we have installation_id, store it
+    # Fallback: If we have installation_id but no OAuth, store it anyway
+    # (This handles cases where OAuth isn't fully configured yet)
     if installation_id:
         settings.github.app.installation_id = installation_id
         settings.github.auth_mode = GitHubAuthMode.app
         settings.use_custom_auth = False
+        settings.setup_completed = True  # Mark setup as complete
         settings.save()
 
-    # Redirect to main app
-    return FileResponse(STATIC_DIR / "index.html")
+    # Redirect to main app (frontend will check auth status)
+    return RedirectResponse(url="/", status_code=303)
 
 
 @app.post("/api/auth/configure-app", response_model=LoginResponse)
@@ -584,9 +593,6 @@ async def api_github_app_install_url():
         install_url = f"https://github.com/apps/{settings.github.app.slug}/installations/new"
 
     return GitHubAppInstallUrlResponse(install_url=install_url)
-
-
-STATIC_DIR = Path(__file__).resolve().parent / "web"
 
 
 @app.get("/", include_in_schema=False)

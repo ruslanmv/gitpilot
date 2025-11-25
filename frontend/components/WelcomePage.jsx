@@ -5,6 +5,7 @@ export default function WelcomePage({ onAuthComplete }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showInstructions, setShowInstructions] = useState(false);
+  const [checkingStatus, setCheckingStatus] = useState(false);
 
   useEffect(() => {
     checkAuthStatus();
@@ -32,6 +33,21 @@ export default function WelcomePage({ onAuthComplete }) {
     } catch (err) {
       setError("Failed to check authentication status");
       setLoading(false);
+    }
+  };
+
+  const handleCheckStatus = async () => {
+    setCheckingStatus(true);
+    setError(null);
+    try {
+      await checkAuthStatus();
+      if (!authStatus?.authenticated) {
+        setError("GitPilota is not installed yet. Please complete the installation in GitHub.");
+      }
+    } catch (err) {
+      setError("Failed to check status. Please try again.");
+    } finally {
+      setCheckingStatus(false);
     }
   };
 
@@ -201,54 +217,63 @@ export default function WelcomePage({ onAuthComplete }) {
                   </>
                 ) : (
                   <>
-                    <h2 className="section-title">Secure Authentication Required</h2>
+                    <h2 className="section-title">Get Started with GitPilota</h2>
                     <p className="section-description">
-                      GitPilot uses GitHub App authentication for secure, granular access to your repositories.
+                      Connect GitPilota to your GitHub account in two simple steps
                     </p>
 
-                    <div className="auth-methods">
-                      <div className="auth-method primary">
-                        <div className="method-icon">
-                          <svg viewBox="0 0 16 16" fill="currentColor">
-                            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
-                          </svg>
-                        </div>
-                        <div className="method-content">
-                          <h3>Install GitPilota GitHub App</h3>
-                          <p>One-click authentication - select which repositories to grant access</p>
-                          <button className="btn-primary" onClick={handleSetupGitHubApp}>
+                    <div className="step-list" style={{marginBottom: '2rem'}}>
+                      <div className="step">
+                        <div className="step-number">1</div>
+                        <div className="step-content">
+                          <h3>Install GitPilota App</h3>
+                          <p>Grant GitPilota access to your repositories</p>
+                          <button className="btn-primary" onClick={handleSetupGitHubApp} style={{marginTop: '0.75rem'}}>
                             <svg viewBox="0 0 16 16" fill="currentColor" width="16" height="16">
                               <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
                             </svg>
-                            Install GitHub App
+                            Install GitPilota ↗
                           </button>
                         </div>
                       </div>
 
-                      <div className="divider">
-                        <span>or</span>
+                      <div className="step">
+                        <div className="step-number">2</div>
+                        <div className="step-content">
+                          <h3>Authenticate Your Account</h3>
+                          <p>After installation, verify to start using GitPilota</p>
+                          <button
+                            className="btn-secondary-check"
+                            onClick={handleCheckStatus}
+                            disabled={checkingStatus}
+                            style={{marginTop: '0.75rem'}}
+                          >
+                            {checkingStatus ? (
+                              <>
+                                <div className="spinner-small"></div>
+                                Checking...
+                              </>
+                            ) : (
+                              <>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                                  <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                                Check Status
+                              </>
+                            )}
+                          </button>
+                        </div>
                       </div>
+                    </div>
 
-                      <div className="auth-method secondary">
-                        <div className="method-icon">
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <path d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-                          </svg>
-                        </div>
-                        <div className="method-content">
-                          <h3>Personal Access Token</h3>
-                          <p>Quick setup for development and testing</p>
-                          <details className="pat-details">
-                            <summary>Setup instructions</summary>
-                            <ol>
-                              <li>Create a token at <a href="https://github.com/settings/tokens/new" target="_blank" rel="noopener noreferrer">github.com/settings/tokens</a></li>
-                              <li>Add to <code>.env</code>: <code>GITPILOT_GITHUB_TOKEN=your_token</code></li>
-                              <li>Set auth mode: <code>GITPILOT_GITHUB_AUTH_MODE=pat</code></li>
-                              <li>Restart GitPilot server</li>
-                            </ol>
-                          </details>
-                        </div>
-                      </div>
+                    <div className="help-text">
+                      <p><strong>What happens:</strong></p>
+                      <ol>
+                        <li>Click "Install GitPilota" - opens GitHub in new window</li>
+                        <li>Select which repositories to grant access</li>
+                        <li>Click "Install & Authorize" on GitHub</li>
+                        <li>Return here and click "Check Status"</li>
+                      </ol>
                     </div>
                   </>
                 )}
@@ -282,62 +307,6 @@ export default function WelcomePage({ onAuthComplete }) {
                 <p className="footer-text">Enterprise-grade security with GitHub App authentication</p>
               </div>
             </>
-          ) : (
-            <div className="instructions-panel">
-              <button className="back-button" onClick={() => setShowInstructions(false)}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="20" height="20">
-                  <path d="M19 12H5m7-7l-7 7 7 7"/>
-                </svg>
-                Back
-              </button>
-
-              <h2>How It Works</h2>
-              <p className="instructions-description">GitPilot uses a centralized GitHub App for secure authentication</p>
-
-              <div className="info-panel">
-                <h3>What GitPilota Can Access</h3>
-                <p>When you install the GitPilota GitHub App, you grant these permissions:</p>
-                <ul className="permission-list">
-                  <li><strong>Repository Contents:</strong> Read and write files</li>
-                  <li><strong>Issues:</strong> Create and comment on issues</li>
-                  <li><strong>Pull Requests:</strong> Create and review pull requests</li>
-                </ul>
-                <p className="info-note">You control which repositories the app can access during installation.</p>
-              </div>
-
-              <div className="step-list">
-                <div className="step">
-                  <div className="step-number">1</div>
-                  <div className="step-content">
-                    <h3>Install GitPilota App</h3>
-                    <p>Click the button below to install the official GitPilota GitHub App</p>
-                  </div>
-                </div>
-
-                <div className="step">
-                  <div className="step-number">2</div>
-                  <div className="step-content">
-                    <h3>Select Repositories</h3>
-                    <p>Choose "All repositories" or select specific ones to grant access</p>
-                  </div>
-                </div>
-
-                <div className="step">
-                  <div className="step-number">3</div>
-                  <div className="step-content">
-                    <h3>Authorize & Complete</h3>
-                    <p>After installation, you'll be redirected back and ready to use GitPilot</p>
-                  </div>
-                </div>
-              </div>
-
-              <button className="btn-primary" onClick={handleSetupGitHubApp} style={{marginTop: '1.5rem'}}>
-                <svg viewBox="0 0 16 16" fill="currentColor" width="16" height="16">
-                  <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
-                </svg>
-                Install GitHub App Now
-              </button>
-            </div>
           )}
         </div>
       </div>
@@ -819,6 +788,73 @@ export default function WelcomePage({ onAuthComplete }) {
           border-color: #8893ff;
           color: #c9d1d9;
           transform: translateY(-1px);
+        }
+
+        .btn-secondary-check {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 0.5rem;
+          width: 100%;
+          padding: 0.75rem 1rem;
+          background: transparent;
+          color: #c9d1d9;
+          border: 1px solid #30363d;
+          border-radius: 6px;
+          font-size: 14px;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all 0.2s;
+          font-family: inherit;
+        }
+
+        .btn-secondary-check:hover:not(:disabled) {
+          background: #161b22;
+          border-color: #8893ff;
+          transform: translateY(-1px);
+        }
+
+        .btn-secondary-check:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+        }
+
+        .spinner-small {
+          width: 16px;
+          height: 16px;
+          border: 2px solid rgba(201, 209, 217, 0.3);
+          border-top-color: #c9d1d9;
+          border-radius: 50%;
+          animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+
+        .help-text {
+          padding: 1.25rem 1.5rem;
+          background: rgba(136, 147, 255, 0.05);
+          border: 1px solid rgba(136, 147, 255, 0.15);
+          border-radius: 8px;
+          font-size: 13px;
+          color: #c9d1d9;
+        }
+
+        .help-text p {
+          margin: 0 0 0.75rem;
+          font-weight: 600;
+          color: #f0f6fc;
+        }
+
+        .help-text ol {
+          margin: 0;
+          padding-left: 1.5rem;
+          line-height: 1.8;
+        }
+
+        .help-text li {
+          margin-bottom: 0.5rem;
         }
 
         .info-panel {
