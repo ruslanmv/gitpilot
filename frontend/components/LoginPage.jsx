@@ -17,6 +17,7 @@ export default function LoginPage({ onAuthenticated }) {
   // Device Flow State
   const [deviceData, setDeviceData] = useState(null);
   const pollTimer = useRef(null);
+  const stopPolling = useRef(false); // Flag to safely stop async polling
 
   // Web Flow State
   const [missingClientId, setMissingClientId] = useState(false);
@@ -44,8 +45,6 @@ export default function LoginPage({ onAuthenticated }) {
     fetch("/api/auth/status")
       .then((res) => res.json())
       .then((data) => {
-        // If the server has a secret, we prefer Web Flow. 
-        // If not, we fallback to Device Flow.
         setMode(data.mode === "web" ? "web" : "device");
       })
       .catch((err) => {
@@ -55,7 +54,8 @@ export default function LoginPage({ onAuthenticated }) {
 
     // Cleanup polling on unmount
     return () => {
-      if (pollTimer.current) clearInterval(pollTimer.current);
+      stopPolling.current = true;
+      if (pollTimer.current) clearTimeout(pollTimer.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -72,8 +72,6 @@ export default function LoginPage({ onAuthenticated }) {
 
     setAuthProcessing(true);
     setError("");
-
-    // Clean URL
     window.history.replaceState({}, document.title, window.location.pathname);
 
     try {
@@ -134,15 +132,16 @@ export default function LoginPage({ onAuthenticated }) {
   const startDeviceFlow = async () => {
     setError("");
     setAuthProcessing(true);
+    stopPolling.current = false; // Reset stop flag
+
     try {
       const res = await fetch("/api/auth/device/code", { method: "POST" });
       const data = await res.json();
       
       // Handle Errors
       if (data.error) {
-        // Helpful hint for the "400 Bad Request" error caused by disabled Device Flow
         if (data.error.includes("400") || data.error.includes("Bad Request")) {
-           throw new Error("Device Flow is disabled in GitHub. Please go to your GitHub App Settings > 'Identifying and authorizing users' and check the box 'Enable Device Flow'.");
+           throw new Error("Device Flow is disabled in GitHub. Please go to your GitHub App Settings > 'General' > 'Identifying and authorizing users' and check the box 'Enable Device Flow'.");
         }
         throw new Error(data.error);
       }
@@ -150,21 +149,20 @@ export default function LoginPage({ onAuthenticated }) {
       if (!data.device_code) throw new Error("Invalid device code response");
 
       setDeviceData(data);
-      setAuthProcessing(false); // Stop "button" loading, show "UI" loading
+      setAuthProcessing(false); 
 
-      // Start Polling
-      if (pollTimer.current) clearInterval(pollTimer.current);
-      pollTimer.current = setInterval(
-        () => checkDeviceToken(data.device_code), 
-        (data.interval || 5) * 1000
-      );
+      // Start Polling (Recursive Timeout Pattern)
+      pollDeviceToken(data.device_code, data.interval || 5);
+
     } catch (err) {
       setError(err.message);
       setAuthProcessing(false);
     }
   };
 
-  const checkDeviceToken = async (deviceCode) => {
+  const pollDeviceToken = async (deviceCode, interval) => {
+    if (stopPolling.current) return;
+
     try {
       const res = await fetch("/api/auth/device/poll", {
         method: "POST",
@@ -172,31 +170,83 @@ export default function LoginPage({ onAuthenticated }) {
         body: JSON.stringify({ device_code: deviceCode })
       });
       
-      // 202 = Pending (Do nothing)
-      if (res.status === 202) return;
-
-      // 200 = Success
+      // 1. Success (200)
       if (res.status === 200) {
         const data = await res.json();
-        clearInterval(pollTimer.current);
         handleSuccess(data);
         return;
       }
 
-      // 400+ = Error (or expired)
-      if (res.status >= 400) {
-        const errData = await res.json();
-        // If it's just pending/slow_down (sometimes 400), ignore. 
-        // If expired or denied, stop polling.
-        if (errData.error === "expired_token" || errData.error === "access_denied") {
-            clearInterval(pollTimer.current);
-            setError(errData.error === "expired_token" ? "Code expired. Please try again." : "Access denied.");
-            setDeviceData(null); // Reset UI
-        }
+      // 2. Pending (202) -> Continue Polling
+      if (res.status === 202) {
+        // Schedule next poll
+        pollTimer.current = setTimeout(
+            () => pollDeviceToken(deviceCode, interval), 
+            interval * 1000
+        );
+        return;
       }
+
+      // 3. Error (4xx/5xx) -> Stop Polling & Show Error
+      const errData = await res.json().catch(() => ({ error: "Unknown polling error" }));
+      
+      // Special case: If it's just a 'slow_down' warning (sometimes 400), we just wait longer
+      if (errData.error === "slow_down") {
+          pollTimer.current = setTimeout(
+            () => pollDeviceToken(deviceCode, interval + 5), 
+            (interval + 5) * 1000
+          );
+          return;
+      }
+
+      // Terminal errors
+      throw new Error(errData.error || `Polling failed: ${res.status}`);
+
     } catch (e) {
-      console.error("Poll error", e);
+      console.error("Poll error:", e);
+      if (!stopPolling.current) {
+        setError(e.message || "Failed to connect to authentication server.");
+        setDeviceData(null); // Return to initial state
+      }
     }
+  };
+
+  const handleManualCheck = async () => {
+    if (!deviceData?.device_code) return;
+    
+    try {
+        const res = await fetch("/api/auth/device/poll", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ device_code: deviceData.device_code })
+        });
+        
+        if (res.status === 200) {
+            const data = await res.json();
+            handleSuccess(data);
+        } else if (res.status === 202) {
+            // Visual feedback for pending state
+            const btn = document.getElementById("manual-check-btn");
+            if (btn) {
+                const originalText = btn.innerText;
+                btn.innerText = "Still Pending...";
+                btn.disabled = true;
+                setTimeout(() => {
+                    btn.innerText = originalText;
+                    btn.disabled = false;
+                }, 2000);
+            }
+        }
+    } catch (e) {
+        console.error("Manual check failed", e);
+    }
+  };
+
+  const handleCancelDeviceFlow = () => {
+    stopPolling.current = true;
+    if (pollTimer.current) clearTimeout(pollTimer.current);
+    setDeviceData(null);
+    setError("");
   };
 
   // ===========================================================================
@@ -204,6 +254,9 @@ export default function LoginPage({ onAuthenticated }) {
   // ===========================================================================
 
   function handleSuccess(data) {
+    stopPolling.current = true; // Ensure polling stops
+    if (pollTimer.current) clearTimeout(pollTimer.current);
+
     if (!data.access_token || !data.user) {
       setError("Server returned incomplete session data.");
       return;
@@ -301,6 +354,17 @@ export default function LoginPage({ onAuthenticated }) {
       justifyContent: "center",
       gap: "10px",
       boxShadow: "0 4px 12px rgba(217, 92, 61, 0.25)",
+    },
+    secondaryButton: {
+        backgroundColor: "transparent",
+        color: "#A1A1AA",
+        border: "1px solid #3F3F46",
+        padding: "8px 16px",
+        borderRadius: "6px",
+        fontSize: "12px",
+        cursor: "pointer",
+        marginTop: "16px",
+        minWidth: "100px"
     },
     errorBox: {
       backgroundColor: "rgba(185, 28, 28, 0.15)",
@@ -402,6 +466,22 @@ export default function LoginPage({ onAuthenticated }) {
            <span style={{animation: 'spin 1s linear infinite', display: 'inline-block'}}>↻</span> 
            Waiting for authorization...
            <style>{`@keyframes spin { 100% { transform: rotate(360deg); } }`}</style>
+        </div>
+
+        <div style={{textAlign: 'center', display: 'flex', gap: '10px', justifyContent: 'center'}}>
+            <button 
+                id="manual-check-btn"
+                onClick={handleManualCheck} 
+                style={styles.secondaryButton}
+            >
+                Check Status
+            </button>
+            <button 
+                onClick={handleCancelDeviceFlow} 
+                style={styles.secondaryButton}
+            >
+                Cancel
+            </button>
         </div>
       </div>
     );
