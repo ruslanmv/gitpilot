@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import LoginPage from "./components/LoginPage.jsx";
 import RepoSelector from "./components/RepoSelector.jsx";
 import ProjectContextPanel from "./components/ProjectContextPanel.jsx";
 import ChatPanel from "./components/ChatPanel.jsx";
@@ -9,7 +10,81 @@ import Footer from "./components/Footer.jsx";
 export default function App() {
   const [repo, setRepo] = useState(null);
   const [activePage, setActivePage] = useState("workspace"); // "workspace" | "admin" | "flow"
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [userInfo, setUserInfo] = useState(null);
 
+  // Check for existing authentication on mount
+  useEffect(() => {
+    checkAuthentication();
+  }, []);
+
+  const checkAuthentication = async () => {
+    const token = localStorage.getItem('github_token');
+    const user = localStorage.getItem('github_user');
+
+    if (token && user) {
+      try {
+        // Validate the token is still valid
+        const response = await fetch('/api/auth/validate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ access_token: token }),
+        });
+
+        const data = await response.json();
+
+        if (data.authenticated) {
+          setIsAuthenticated(true);
+          setUserInfo(JSON.parse(user));
+          setIsLoading(false);
+          return;
+        }
+      } catch (err) {
+        console.error('Token validation failed:', err);
+      }
+
+      // Token invalid, clear storage
+      localStorage.removeItem('github_token');
+      localStorage.removeItem('github_user');
+    }
+
+    setIsAuthenticated(false);
+    setIsLoading(false);
+  };
+
+  const handleAuthenticated = (session) => {
+    setIsAuthenticated(true);
+    setUserInfo(session.user);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('github_token');
+    localStorage.removeItem('github_user');
+    setIsAuthenticated(false);
+    setUserInfo(null);
+    setRepo(null);
+  };
+
+  // Show loading state while checking authentication
+  if (isLoading) {
+    return (
+      <div className="app-root">
+        <div className="login-page">
+          <div className="login-container">
+            <div className="loading-spinner"></div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show login page if not authenticated
+  if (!isAuthenticated) {
+    return <LoginPage onAuthenticated={handleAuthenticated} />;
+  }
+
+  // Main application (authenticated)
   return (
     <div className="app-root">
       <div className="main-wrapper">
@@ -65,6 +140,30 @@ export default function App() {
                 </div>
               )}
             </>
+          )}
+
+          {/* User Profile Section */}
+          {userInfo && (
+            <div className="user-profile">
+              <div className="user-profile-header">
+                <img
+                  src={userInfo.avatar_url}
+                  alt={userInfo.login}
+                  className="user-avatar"
+                />
+                <div className="user-info">
+                  <div className="user-name">{userInfo.name || userInfo.login}</div>
+                  <div className="user-login">@{userInfo.login}</div>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn-logout"
+                onClick={handleLogout}
+              >
+                Logout
+              </button>
+            </div>
           )}
         </aside>
 
