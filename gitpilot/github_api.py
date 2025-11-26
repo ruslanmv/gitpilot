@@ -158,6 +158,13 @@ async def put_file(
     message: str,
     token: Optional[str] = None,
 ) -> dict[str, Any]:
+    """
+    Create or update a file in the repository.
+    
+    Uses hybrid authentication:
+    1. Try with user token first
+    2. If 403 "Resource not accessible by integration", fallback to GitHub App token
+    """
     from base64 import b64encode
 
     sha: str | None = None
@@ -174,18 +181,53 @@ async def put_file(
     if sha:
         body["sha"] = sha
 
-    result = await github_request(
-        f"/repos/{owner}/{repo}/contents/{path}",
-        method="PUT",
-        json=body,
-        token=token,
-    )
-    commit = result.get("commit", {})
-    return {
-        "path": path,
-        "commit_sha": commit.get("sha", ""),
-        "commit_url": commit.get("html_url"),
-    }
+    # First attempt with user token
+    try:
+        result = await github_request(
+            f"/repos/{owner}/{repo}/contents/{path}",
+            method="PUT",
+            json=body,
+            token=token,
+        )
+        commit = result.get("commit", {})
+        return {
+            "path": path,
+            "commit_sha": commit.get("sha", ""),
+            "commit_url": commit.get("html_url"),
+        }
+    except HTTPException as e:
+        # Check if this is a permission issue that GitHub App can solve
+        if e.status_code == 403 and "Resource not accessible by integration" in str(e.detail):
+            # Try with GitHub App installation token
+            try:
+                from .github_app import get_installation_token_for_repo
+                
+                app_token = await get_installation_token_for_repo(owner, repo)
+                if not app_token:
+                    # App not installed, re-raise original error
+                    raise e
+                
+                # Retry with app token
+                result = await github_request(
+                    f"/repos/{owner}/{repo}/contents/{path}",
+                    method="PUT",
+                    json=body,
+                    token=app_token,
+                )
+                commit = result.get("commit", {})
+                return {
+                    "path": path,
+                    "commit_sha": commit.get("sha", ""),
+                    "commit_url": commit.get("html_url"),
+                }
+            except Exception as app_error:
+                # Log but re-raise original error
+                import logging
+                logging.error(f"GitHub App fallback failed: {app_error}")
+                raise e
+        else:
+            # Not a permission issue, re-raise
+            raise
 
 
 async def delete_file(
@@ -195,10 +237,35 @@ async def delete_file(
     message: str,
     token: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Delete a file from the repository."""
+    """
+    Delete a file from the repository.
+    
+    Uses hybrid authentication:
+    1. Try with user token first
+    2. If 403 "Resource not accessible by integration", fallback to GitHub App token
+    """
     # Get current file SHA (required for deletion)
-    existing = await github_request(f"/repos/{owner}/{repo}/contents/{path}", token=token)
-    sha = existing.get("sha")
+    try:
+        existing = await github_request(f"/repos/{owner}/{repo}/contents/{path}", token=token)
+        sha = existing.get("sha")
+    except HTTPException as e:
+        # If we can't even read the file, try with app token
+        if e.status_code == 403:
+            try:
+                from .github_app import get_installation_token_for_repo
+                app_token = await get_installation_token_for_repo(owner, repo)
+                if app_token:
+                    existing = await github_request(
+                        f"/repos/{owner}/{repo}/contents/{path}", 
+                        token=app_token
+                    )
+                    sha = existing.get("sha")
+                else:
+                    raise e
+            except Exception:
+                raise e
+        else:
+            raise
 
     if not sha:
         raise HTTPException(
@@ -211,16 +278,53 @@ async def delete_file(
         "message": message,
         "sha": sha,
     }
-    result = await github_request(
-        f"/repos/{owner}/{repo}/contents/{path}",
-        method="DELETE",
-        json=body,
-        token=token,
-    )
+    
+    # First attempt with user token
+    try:
+        result = await github_request(
+            f"/repos/{owner}/{repo}/contents/{path}",
+            method="DELETE",
+            json=body,
+            token=token,
+        )
 
-    commit = result.get("commit", {})
-    return {
-        "path": path,
-        "commit_sha": commit.get("sha", ""),
-        "commit_url": commit.get("html_url"),
-    }
+        commit = result.get("commit", {}) if result else {}
+        return {
+            "path": path,
+            "commit_sha": commit.get("sha", ""),
+            "commit_url": commit.get("html_url"),
+        }
+    except HTTPException as e:
+        # Check if this is a permission issue that GitHub App can solve
+        if e.status_code == 403 and "Resource not accessible by integration" in str(e.detail):
+            # Try with GitHub App installation token
+            try:
+                from .github_app import get_installation_token_for_repo
+                
+                app_token = await get_installation_token_for_repo(owner, repo)
+                if not app_token:
+                    # App not installed, re-raise original error
+                    raise e
+                
+                # Retry with app token
+                result = await github_request(
+                    f"/repos/{owner}/{repo}/contents/{path}",
+                    method="DELETE",
+                    json=body,
+                    token=app_token,
+                )
+                
+                commit = result.get("commit", {}) if result else {}
+                return {
+                    "path": path,
+                    "commit_sha": commit.get("sha", ""),
+                    "commit_url": commit.get("html_url"),
+                }
+            except Exception as app_error:
+                # Log but re-raise original error
+                import logging
+                logging.error(f"GitHub App fallback failed: {app_error}")
+                raise e
+        else:
+            # Not a permission issue, re-raise
+            raise

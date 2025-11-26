@@ -1,4 +1,3 @@
-# gitpilot/api.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -17,6 +16,7 @@ from .github_api import (
     put_file, 
     execution_context  # Imported Context Manager
 )
+from .github_app import check_repo_write_access  # NEW: GitHub App integration
 from .settings import AppSettings, get_settings, set_provider, update_settings, LLMProvider
 from .agentic import generate_plan, execute_plan, PlanResult, get_flow_definition
 from .github_oauth import (
@@ -136,6 +136,12 @@ class TokenValidationRequest(BaseModel):
 class UserInfoResponse(BaseModel):
     user: GitHubUser
     authenticated: bool
+
+
+class RepoAccessResponse(BaseModel):
+    can_write: bool
+    app_installed: bool
+    auth_type: str
 
 
 @app.get("/api/repos", response_model=List[RepoSummary])
@@ -417,6 +423,29 @@ async def api_check_installation_status():
         "message": "GitHub App not installed.",
         "auth_type": "github_app",
     }
+
+
+# NEW: Repository write access check endpoint
+@app.get("/api/auth/repo-access", response_model=RepoAccessResponse)
+async def api_check_repo_access(
+    owner: str = Query(...),
+    repo: str = Query(...),
+    authorization: Optional[str] = Header(None),
+):
+    """
+    Check if we have write access to a repository via User token or GitHub App.
+    
+    This endpoint helps the frontend determine if it should show
+    installation prompts or if the user already has sufficient permissions.
+    """
+    token = get_github_token(authorization)
+    access_info = await check_repo_write_access(owner, repo, user_token=token)
+    
+    return RepoAccessResponse(
+        can_write=access_info["can_write"],
+        app_installed=access_info["app_installed"],
+        auth_type=access_info["auth_type"],
+    )
 
 
 # ============================================================================
