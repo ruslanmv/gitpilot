@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import AssistantMessage from "./AssistantMessage.jsx";
+import { getAuthHeaders } from "../utils/api.js";
 
 export default function ChatPanel({ repo }) {
   const [messages, setMessages] = useState([]);
@@ -26,7 +27,10 @@ export default function ChatPanel({ repo }) {
     try {
       const res = await fetch("/api/chat/plan", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...getAuthHeaders(), // Inject Authorization header
+        },
         body: JSON.stringify({
           repo_owner: repo.owner,
           repo_name: repo.name,
@@ -61,7 +65,10 @@ export default function ChatPanel({ repo }) {
     try {
       const res = await fetch("/api/chat/execute", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...getAuthHeaders(), // Inject Authorization header
+        },
         body: JSON.stringify({
           repo_owner: repo.owner,
           repo_name: repo.name,

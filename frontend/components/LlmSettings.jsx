@@ -140,7 +140,7 @@ export default function LlmSettings() {
           <input
             className="settings-input"
             type="text"
-            placeholder="claude-3-5-sonnet-20241022"
+            placeholder="claude-sonnet-4-5"
             value={settings.claude?.model || ""}
             onChange={(e) => updateField("claude", "model", e.target.value)}
           />
@@ -153,7 +153,7 @@ export default function LlmSettings() {
             onChange={(e) => updateField("claude", "base_url", e.target.value)}
           />
           <div className="settings-hint">
-            Examples: claude-3-5-sonnet-20241022, claude-3-opus-20240229
+            Examples: claude-sonnet-4-5, claude-3-opus-20240229
           </div>
         </div>
       )}
@@ -183,7 +183,7 @@ export default function LlmSettings() {
           <input
             className="settings-input"
             type="text"
-            placeholder="meta-llama/llama-3-1-70b-instruct"
+            placeholder="meta-llama/llama-3-3-70b-instruct"
             value={settings.watsonx?.model_id || ""}
             onChange={(e) =>
               updateField("watsonx", "model_id", e.target.value)
@@ -200,7 +200,7 @@ export default function LlmSettings() {
             }
           />
           <div className="settings-hint">
-            Examples: meta-llama/llama-3-1-70b-instruct, ibm/granite-13b-chat-v2
+            Examples: meta-llama/llama-3-3-70b-instruct, ibm/granite-13b-chat-v2
           </div>
         </div>
       )}

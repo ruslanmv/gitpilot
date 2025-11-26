@@ -30,14 +30,14 @@ class OpenAIConfig(BaseModel):
 
 class ClaudeConfig(BaseModel):
     api_key: str = Field(default="")
-    model: str = Field(default="claude-3-5-sonnet-20241022")
+    model: str = Field(default="claude-sonnet-4-5")
     base_url: str = Field(default="")  # Optional: for proxies
 
 
 class WatsonxConfig(BaseModel):
     api_key: str = Field(default="")
     project_id: str = Field(default="")
-    model_id: str = Field(default="meta-llama/llama-3-1-70b-instruct")
+    model_id: str = Field(default="meta-llama/llama-3-3-70b-instruct")
     base_url: str = Field(default="https://api.watsonx.ai/v1")
 
 

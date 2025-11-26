@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { authFetch } from "../utils/api.js";
 
 export default function RepoSelector({ onSelect }) {
   const [query, setQuery] = useState("");
@@ -11,7 +12,7 @@ export default function RepoSelector({ onSelect }) {
     setStatus("");
     try {
       const url = "/api/repos" + (query ? `?query=${encodeURIComponent(query)}` : "");
-      const res = await fetch(url);
+      const res = await authFetch(url);
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.detail || data.error || "Failed to load repos");

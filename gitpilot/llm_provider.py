@@ -38,7 +38,7 @@ def build_llm() -> LLM:
     if provider == LLMProvider.claude:
         # Use settings config if available, otherwise fall back to env vars
         api_key = settings.claude.api_key or os.getenv("ANTHROPIC_API_KEY", "")
-        model = settings.claude.model or os.getenv("GITPILOT_CLAUDE_MODEL", "claude-3-5-sonnet-20241022")
+        model = settings.claude.model or os.getenv("GITPILOT_CLAUDE_MODEL", "claude-sonnet-4-5")
         base_url = settings.claude.base_url or os.getenv("ANTHROPIC_BASE_URL", "")
 
         # Validate required credentials
@@ -47,6 +47,14 @@ def build_llm() -> LLM:
                 "Claude API key is required. "
                 "Configure it in Admin / LLM Settings or set ANTHROPIC_API_KEY environment variable."
             )
+
+        # CRITICAL: Set API key as environment variable (required by CrewAI's native Anthropic provider)
+        # CrewAI's Anthropic integration checks for this env var internally
+        os.environ["ANTHROPIC_API_KEY"] = api_key
+        
+        # Optional: Set base URL as environment variable if provided
+        if base_url:
+            os.environ["ANTHROPIC_BASE_URL"] = base_url
 
         # Ensure model has provider prefix for CrewAI
         if not model.startswith("anthropic/"):
@@ -59,16 +67,16 @@ def build_llm() -> LLM:
         )
 
     if provider == LLMProvider.watsonx:
-        # Use settings config if available, otherwise fall back to env vars
+        # FIXED: Use settings config with proper watsonx.ai integration
         api_key = settings.watsonx.api_key or os.getenv("WATSONX_API_KEY", "")
         project_id = settings.watsonx.project_id or os.getenv("WATSONX_PROJECT_ID", "")
         model = settings.watsonx.model_id or os.getenv(
             "GITPILOT_WATSONX_MODEL",
-            "meta-llama/llama-3-1-70b-instruct",
+            "ibm/granite-3-8b-instruct",  # Default model (without prefix)
         )
         base_url = settings.watsonx.base_url or os.getenv(
             "WATSONX_BASE_URL",
-            "https://api.watsonx.ai/v1",
+            "https://us-south.ml.cloud.ibm.com",  # Default to US South
         )
 
         # Validate required credentials
@@ -83,15 +91,26 @@ def build_llm() -> LLM:
                 "Configure it in Admin / LLM Settings or set WATSONX_PROJECT_ID environment variable."
             )
 
-        # Set project ID as environment variable for IBM SDK/CrewAI integration
-        if project_id:
-            os.environ["WATSONX_PROJECT_ID"] = project_id
+        # CRITICAL: Set project ID as environment variable (required by watsonx.ai SDK)
+        os.environ["WATSONX_PROJECT_ID"] = project_id
+        
+        # CRITICAL: Also set the base URL as WATSONX_URL (some integrations use this)
+        os.environ["WATSONX_URL"] = base_url
 
-        # Ensure model has provider prefix for CrewAI
+        # Ensure model has provider prefix for CrewAI (watsonx/provider/model)
+        # Format: watsonx/ibm/granite-3-8b-instruct
         if not model.startswith("watsonx/"):
             model = f"watsonx/{model}"
 
-        return LLM(model=model, base_url=base_url, api_key=api_key)
+        # FIXED: Create LLM with project_id parameter (CRITICAL!)
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            project_id=project_id,  # ← CRITICAL: This was missing!
+            temperature=0.3,  # Default temperature
+            max_tokens=1024,  # Default max tokens
+        )
 
     if provider == LLMProvider.ollama:
         # Use settings config if available, otherwise fall back to env vars
