@@ -34,8 +34,8 @@ Your support helps us:
 GitPilot is a **production-ready agentic AI assistant** that acts as your intelligent coding companion for GitHub repositories. Unlike copy-paste coding assistants, GitPilot:
 
 * **🧠 Understands your entire codebase** – Analyzes project structure and file relationships
-* **📋 Shows clear plans before executing** – Always presents an "Answer + Action Plan" with structured file operations (CREATE/MODIFY/DELETE)
-* **🔄 Manages multiple LLM providers** – Seamlessly switch between OpenAI, Claude, Watsonx, and Ollama
+* **📋 Shows clear plans before executing** – Always presents an "Answer + Action Plan" with structured file operations (CREATE/MODIFY/DELETE/READ)
+* **🔄 Manages multiple LLM providers** – Seamlessly switch between OpenAI, Claude, Watsonx, and Ollama (all fully working!)
 * **👁️ Visualizes agent workflows** – See exactly how the multi-agent system thinks and operates
 * **🔗 Integrates directly with GitHub** – Repository access, file editing, commits, and more
 
@@ -60,6 +60,9 @@ export GITPILOT_GITHUB_TOKEN="ghp_your_token_here"
 export OPENAI_API_KEY="sk-..."
 # or
 export ANTHROPIC_API_KEY="sk-ant-..."
+# or
+export WATSONX_API_KEY="your_api_key"
+export WATSONX_PROJECT_ID="your_project_id"
 
 # Launch GitPilot
 gitpilot
@@ -83,7 +86,8 @@ gitpilot
 #    ✓ Action Plan: Structured steps with file operations
 #      - CREATE: src/api/auth.py
 #      - MODIFY: src/routes/index.py
-#      - MODIFY: tests/test_auth.py
+#      - READ: README.md (for analysis)
+#      - DELETE: deprecated/old_auth.py
 
 # 5. Approve & Execute
 #    → GitPilot applies changes to your repository
@@ -120,13 +124,16 @@ Answer: I'll convert all authentication functions to async/await pattern,
 update the database queries, and ensure all tests pass.
 
 Action Plan:
-  Step 1: Convert auth service to async
+  Step 1: Analyze current authentication implementation
+    - READ: src/services/auth_service.py
+    - READ: src/routes/auth.py
+  Step 2: Convert auth service to async
     - MODIFY: src/services/auth_service.py (12 functions)
-  Step 2: Update route handlers
+  Step 3: Update route handlers
     - MODIFY: src/routes/auth.py
-  Step 3: Migrate database calls
+  Step 4: Migrate database calls
     - MODIFY: src/db/user_repository.py
-  Step 4: Update unit tests
+  Step 5: Update unit tests
     - MODIFY: tests/test_auth_service.py
 ```
 
@@ -160,41 +167,53 @@ Every AI response is structured into two clear sections:
   - 🟢 **CREATE** – New files to be added
   - 🔵 **MODIFY** – Existing files to be changed
   - 🔴 **DELETE** – Files to be removed
+  - 📖 **READ** – Files to analyze (no changes)
 
 See exactly what will happen before approving execution!
 
-### 2. **Project Context Panel** 🆕
+### 2. **Full Multi-LLM Support** ✨
+All four LLM providers are fully operational and tested:
+- ✅ **OpenAI** – GPT-4o, GPT-4o-mini, GPT-4-turbo
+- ✅ **Claude (Anthropic)** – Claude 4.5 Sonnet, Claude 3 Opus
+- ✅ **IBM Watsonx.ai** – Llama 3.3, Granite 3.x models
+- ✅ **Ollama** – Local models (Llama3, Mistral, CodeLlama, Phi3)
+
+Switch between providers seamlessly through the Admin UI without restart!
+
+### 3. **Project Context Panel** 🆕
 Visual display of your repository state:
 - Repository name and branch
-- Total file count
+- Total file count with refresh capability
 - Last analysis timestamp
-- Interactive file tree browser
+- Interactive file tree browser with refresh button
+- Write access status (shows if GitHub App is installed)
 
-### 3. **Real Execution Engine** 🆕
+### 4. **Real Execution Engine** 🆕
 GitPilot now performs actual GitHub operations:
-- Creates new files with proper content
-- Modifies existing files intelligently
-- Marks files for deletion (safe approach)
+- Creates new files with LLM-generated content
+- Modifies existing files intelligently using AI
+- Deletes files safely with confirmation
 - Returns detailed execution logs with success/failure status
+- **READ operations** for analysis without modifications
 
-### 4. **Admin / Settings Console**
+### 5. **Admin / Settings Console**
 Full-featured LLM provider configuration with:
-- **OpenAI** – GPT-4o, GPT-4o-mini, GPT-4-turbo support
-- **Claude** – Claude 3.5 Sonnet, Claude 3 Opus support
-- **IBM Watsonx.ai** – Llama, Granite models
-- **Ollama** – Local models (Llama3, Mistral, CodeLlama, Phi3, etc.)
+- **OpenAI** – API key, model selection, optional base URL
+- **Claude** – API key, model selection (Claude 4.5 Sonnet recommended)
+- **IBM Watsonx.ai** – API key, project ID, model selection, regional URLs
+- **Ollama** – Base URL (local), model selection
 
 Settings are persisted to `~/.gitpilot/settings.json` and survive restarts.
 
-### 5. **Agent Flow Viewer**
+### 6. **Agent Flow Viewer**
 Interactive visual representation of the CrewAI multi-agent system using ReactFlow:
-- **Repository Reader** – Analyzes codebase structure
-- **Refactor Planner** – Creates safe, step-by-step plans
-- **Code Writer** – Implements approved changes
+- **Repository Explorer** – Thoroughly explores codebase structure
+- **Refactor Planner** – Creates safe, step-by-step plans with verified file operations
+- **Code Writer** – Implements approved changes with AI-generated content
 - **Code Reviewer** – Reviews for quality and safety
 - **GitHub API Tools** – Manages file operations and commits
 
-### 6. **Three-Tab Navigation**
+### 7. **Three-Tab Navigation**
 Seamlessly switch between:
 - 📁 **Workspace** – Repository browsing and AI chat
 - 🔄 **Agent Flow** – Visual workflow diagram
@@ -207,7 +226,7 @@ Seamlessly switch between:
 ### From PyPI (Recommended)
 
 ```bash
-pip install gitpilot
+pip install gitcopilot
 ```
 
 ### From Source
@@ -267,15 +286,20 @@ export GITPILOT_OPENAI_MODEL="gpt-4o-mini"  # optional
 #### Claude (Anthropic)
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
-export GITPILOT_CLAUDE_MODEL="claude-sonnet-4-5"  # optional
+export GITPILOT_CLAUDE_MODEL="claude-3-5-sonnet-20241022"  # optional
 ```
 
-#### IBM Watsonx
+**Note:** Claude integration now includes automatic environment variable configuration for seamless CrewAI compatibility.
+
+#### IBM Watsonx.ai
 ```bash
 export WATSONX_API_KEY="your-watsonx-api-key"
-export WATSONX_PROJECT_ID="your-project-id"
-export GITPILOT_WATSONX_MODEL="meta-llama/llama-3-3-70b-instruct"  # optional
+export WATSONX_PROJECT_ID="your-project-id"  # Required!
+export WATSONX_BASE_URL="https://us-south.ml.cloud.ibm.com"  # optional, region-specific
+export GITPILOT_WATSONX_MODEL="ibm/granite-3-8b-instruct"  # optional
 ```
+
+**Note:** Watsonx integration requires both API key and Project ID for proper authentication.
 
 #### Ollama (Local Models)
 ```bash
@@ -320,8 +344,12 @@ Your browser opens to `http://127.0.0.1:8000`
 
 **Step 2: Configure LLM Provider**
 1. Click **"⚙️ Admin / Settings"** in the sidebar
-2. Select your preferred provider (e.g., OpenAI)
-3. Enter your API key and select a model (e.g., `gpt-4o-mini`)
+2. Select your preferred provider (e.g., OpenAI, Claude, Watsonx, or Ollama)
+3. Enter your credentials:
+   - **OpenAI**: API key + model
+   - **Claude**: API key + model
+   - **Watsonx**: API key + Project ID + model + base URL
+   - **Ollama**: Base URL + model
 4. Click **"Save settings"**
 5. See the success message confirming your settings are saved
 
@@ -330,6 +358,8 @@ Your browser opens to `http://127.0.0.1:8000`
 2. In the sidebar, use the search box to find your repository
 3. Click **"Search my repos"** to list all accessible repositories
 4. Click on any repository to connect
+5. The **Project Context Panel** will show repository information
+6. Use the **Refresh** button to update permissions and file counts
 
 ### Development Workflow
 
@@ -337,6 +367,7 @@ Your browser opens to `http://127.0.0.1:8000`
 - The **Project Context** panel shows repository metadata
 - Browse the file tree to understand structure
 - Click on files to preview their contents
+- Use the **Refresh** button to update the file tree after changes
 
 **Step 2: Describe Your Task**
 In the chat panel, describe what you want in natural language:
@@ -353,7 +384,13 @@ Refactor the authentication middleware to use JWT tokens
 instead of session cookies. Update all related tests.
 ```
 
-**Example 3: Fix a Bug**
+**Example 3: Analyze and Generate**
+```
+Analyze the README.md file and generate Python example code
+that demonstrates the main features.
+```
+
+**Example 4: Fix a Bug**
 ```
 The login endpoint is returning 500 errors when the email
 field is empty. Add proper validation and return a 400
@@ -374,7 +411,8 @@ GitPilot will show you:
   - 🟢 CREATE – Files to be created
   - 🔵 MODIFY – Files to be modified
   - 🔴 DELETE – Files to be removed
-- Summary totals (e.g., "2 files to create, 3 files to modify")
+  - 📖 READ – Files to analyze (no changes)
+- Summary totals (e.g., "2 files to create, 3 files to modify, 1 file to read")
 - Risk warnings when applicable
 
 **Step 4: Execute or Refine**
@@ -395,11 +433,18 @@ Step 1: Create authentication endpoint
 
 Step 2: Add authentication tests
   ✓ Created tests/test_auth.py
+  ℹ️ READ-only: inspected README.md
 ```
 
-**Step 6: View Agent Workflow (Optional)**
+**Step 6: Refresh File Tree**
+After agent operations:
+- Click the **Refresh** button in the file tree header
+- See newly created/modified files appear
+- Verify changes were applied correctly
+
+**Step 7: View Agent Workflow (Optional)**
 Click **"🔄 Agent Flow"** to see:
-- How agents collaborate (Repository Reader → Planner → Code Writer → Reviewer)
+- How agents collaborate (Explorer → Planner → Code Writer → Reviewer)
 - Data flow between components
 - The complete multi-agent system architecture
 
@@ -413,14 +458,14 @@ Click **"🔄 Agent Flow"** to see:
 frontend/
 ├── App.jsx                         # Main application with navigation
 ├── components/
-│   ├── AssistantMessage.jsx       # Answer + Action Plan display (NEW)
+│   ├── AssistantMessage.jsx       # Answer + Action Plan display
 │   ├── ChatPanel.jsx              # AI chat interface
-│   ├── FileTree.jsx               # Repository file browser
+│   ├── FileTree.jsx               # Repository file browser with refresh
 │   ├── FlowViewer.jsx             # Agent workflow visualization
-│   ├── Footer.jsx                 # Footer with GitHub star CTA (NEW)
+│   ├── Footer.jsx                 # Footer with GitHub star CTA
 │   ├── LlmSettings.jsx            # Provider configuration UI
-│   ├── PlanView.jsx               # Enhanced plan rendering (NEW)
-│   ├── ProjectContextPanel.jsx    # Repository context display (NEW)
+│   ├── PlanView.jsx               # Enhanced plan rendering with READ support
+│   ├── ProjectContextPanel.jsx    # Repository context with refresh
 │   └── RepoSelector.jsx           # Repository search/selection
 ├── styles.css                      # Global styles with dark theme
 ├── index.html                      # Entry point
@@ -433,11 +478,12 @@ frontend/
 gitpilot/
 ├── __init__.py
 ├── api.py                          # FastAPI routes and endpoints
-├── agentic.py                      # CrewAI agents + real executor (UPDATED)
+├── agentic.py                      # CrewAI agents with READ support
+├── agent_tools.py                  # Repository exploration tools
 ├── cli.py                          # Command-line interface
 ├── github_api.py                   # GitHub REST API client
-├── langflow_client.py              # LangFlow integration (optional)
-├── llm_provider.py                 # Multi-provider LLM factory
+├── github_app.py                   # GitHub App installation management
+├── llm_provider.py                 # Multi-provider LLM factory (all providers fixed!)
 ├── settings.py                     # Configuration management
 └── web/                            # Production frontend build
     ├── index.html
@@ -453,6 +499,8 @@ gitpilot/
 - `GET /api/repos/{owner}/{repo}/tree` – Get repository file tree
 - `GET /api/repos/{owner}/{repo}/file` – Get file contents
 - `POST /api/repos/{owner}/{repo}/file` – Update/commit file
+- `DELETE /api/repos/{owner}/{repo}/file` – Delete file
+- `GET /api/auth/repo-access` – Check repository write access status
 
 #### Settings & Configuration
 - `GET /api/settings` – Get current LLM settings
@@ -460,7 +508,7 @@ gitpilot/
 - `PUT /api/settings/llm` – Update provider-specific settings
 
 #### Chat & Planning
-- `POST /api/chat/plan` – Generate execution plan (with structured actions)
+- `POST /api/chat/plan` – Generate execution plan (with READ/CREATE/MODIFY/DELETE)
 - `POST /api/chat/execute` – Execute approved plan (returns execution log)
 
 #### Workflow Visualization
@@ -546,16 +594,17 @@ make publish-test
 make publish
 ```
 
-# Example of deletion of files
+---
 
+## 📸 Screenshots
+
+### Example: File Deletion
 ![](assets/2025-11-16-00-25-49.png)
 
-# Example of genertion of content
-
+### Example: Content Generation
 ![](assets/2025-11-16-00-29-47.png)
 
-# Example of generation of files
-
+### Example: File Creation
 ![](assets/2025-11-16-01-01-40.png)
 
 ---
@@ -632,16 +681,24 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🗺️ Roadmap
 
-### Recently Released (v0.2.0) 🆕
+### Recently Released (v0.2.1) 🆕
+- ✅ **Full Multi-LLM Support** – All 4 providers (OpenAI, Claude, Watsonx, Ollama) fully tested and working
+- ✅ **READ File Actions** – Agents can now analyze files without modifications
+- ✅ **Claude Integration Fix** – Automatic environment variable configuration
+- ✅ **Watsonx Integration Fix** – Proper project_id parameter handling
+- ✅ **Refresh Functionality** – Update permissions and file trees on demand
+- ✅ **GitHub App Status** – Clear indication of write access status
+
+### Current Features (v0.2.0)
 - ✅ **Answer + Action Plan UX** – Clear separation of explanation and action items
-- ✅ **Structured File Actions** – Explicit CREATE/MODIFY/DELETE operations
+- ✅ **Structured File Actions** – Explicit CREATE/MODIFY/DELETE/READ operations
 - ✅ **Project Context Panel** – Repository metadata display
 - ✅ **Real Execution Engine** – Actual GitHub file operations
 - ✅ **Execution Logs** – Detailed success/failure tracking
 - ✅ **Enhanced Plan View** – Color-coded pills and totals
 - ✅ **Footer with GitHub CTA** – Community engagement
 
-### Current Features (v0.1.0)
+### Previous Features (v0.1.0)
 - ✅ GitHub repository browsing
 - ✅ Multi-LLM provider support (OpenAI, Claude, Watsonx, Ollama)
 - ✅ Admin/Settings console
@@ -650,9 +707,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - ✅ Production-ready web UI
 
 ### Planned Features (v0.3.0+)
-- 🔄 Intelligent code modification (using LLM for actual changes)
+- 🔄 Enhanced code modification with better LLM-powered diffs
 - 🔄 Pull request creation and management
-- 🔄 Multi-file refactoring
+- 🔄 Multi-file refactoring workflows
 - 🔄 Automated test generation
 - 🔄 Code review automation
 - 🔄 Branch management
@@ -660,6 +717,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - 🔄 Integration with CI/CD pipelines
 - 🔄 Custom agent templates
 - 🔄 Slack/Discord notifications
+- 🔄 Multi-repository operations
+- 🔄 Advanced GitHub App permissions management
 
 ---
 
@@ -672,15 +731,43 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 3. **Rotate tokens regularly**
 4. **Limit GitHub token scopes** to only what's needed
 5. **Review all plans** before approving execution
+6. **Verify GitHub App installations** before granting write access
 
-### Current Behavior
+### LLM Provider Configuration
 
-**Execution Safety**: The current executor performs simple file operations:
-- CREATE adds files with placeholder content
-- MODIFY appends comments
-- DELETE marks files (safe approach)
+**All providers now fully supported!** ✨
 
-Future versions will use LLM-powered code generation for intelligent modifications.
+Each provider has specific requirements:
+
+**OpenAI**
+- Requires: `OPENAI_API_KEY`
+- Optional: `GITPILOT_OPENAI_MODEL`, `OPENAI_BASE_URL`
+
+**Claude (Anthropic)**
+- Requires: `ANTHROPIC_API_KEY`
+- Optional: `GITPILOT_CLAUDE_MODEL`, `ANTHROPIC_BASE_URL`
+- Note: Environment variables are automatically configured by GitPilot
+
+**IBM Watsonx.ai**
+- Requires: `WATSONX_API_KEY`, `WATSONX_PROJECT_ID`
+- Optional: `WATSONX_BASE_URL`, `GITPILOT_WATSONX_MODEL`
+- Note: Project ID is essential for proper authentication
+
+**Ollama**
+- Requires: `OLLAMA_BASE_URL`
+- Optional: `GITPILOT_OLLAMA_MODEL`
+- Note: Runs locally, no API key needed
+
+### File Action Types
+
+GitPilot supports four file operation types in plans:
+
+- **CREATE** (🟢) – Add new files with AI-generated content
+- **MODIFY** (🔵) – Update existing files intelligently
+- **DELETE** (🔴) – Remove files safely
+- **READ** (📖) – Analyze files without making changes (new!)
+
+READ operations allow agents to gather context and information without modifying your repository, enabling better-informed plans.
 
 ---
 
@@ -688,13 +775,18 @@ Future versions will use LLM-powered code generation for intelligent modificatio
 
 ### Understanding the Agent System
 
-GitPilot uses a multi-agent architecture:
+GitPilot uses a multi-agent architecture with two phases:
 
-1. **Repository Reader** – Scans and understands your codebase
-2. **Planner** – Converts your goals into actionable steps with structured file operations
-3. **Code Writer** – Generates code based on the plan
-4. **Reviewer** – Checks for quality, safety, and best practices
-5. **GitHub Tools** – Interfaces with GitHub API
+**Phase 1: Repository Exploration**
+- **Repository Explorer** – Thoroughly scans and documents repository state
+- Uses tools to gather actual file listings and structure
+- Creates detailed exploration report
+
+**Phase 2: Plan Creation & Execution**
+1. **Planner** – Creates structured plans based on exploration report
+2. **Code Writer** – Generates AI-powered content for files
+3. **Reviewer** – Checks for quality, safety, and best practices
+4. **GitHub Tools** – Interfaces with GitHub API for actual operations
 
 Each agent specializes in a specific task, working together like a development team.
 
@@ -703,22 +795,49 @@ Each agent specializes in a specific task, working together like a development t
 **OpenAI (GPT-4o, GPT-4o-mini)**
 - ✅ Best for: General-purpose coding, fast responses
 - ✅ Strengths: Excellent code quality, great at following instructions
+- ✅ Status: Fully tested and working
 - ⚠️ Costs: Moderate to high
 
-**Claude (Claude 3.5 Sonnet)**
+**Claude (Claude 4.5 Sonnet)**
 - ✅ Best for: Complex refactoring, detailed analysis
 - ✅ Strengths: Deep reasoning, excellent at planning
+- ✅ Status: Fully tested and working (latest integration fixes applied)
 - ⚠️ Costs: Moderate to high
 
-**Watsonx (Llama, Granite)**
+**Watsonx (Llama 3.3, Granite 3.x)**
 - ✅ Best for: Enterprise deployments, privacy-focused
 - ✅ Strengths: On-premise option, compliance-friendly
+- ✅ Status: Fully tested and working (project_id integration fixed)
 - ⚠️ Costs: Subscription-based
 
 **Ollama (Local Models)**
 - ✅ Best for: Cost-free operation, offline work
 - ✅ Strengths: Zero API costs, complete privacy
+- ✅ Status: Fully tested and working
 - ⚠️ Performance: Depends on hardware, may be slower
+
+---
+
+## 🐛 Troubleshooting
+
+### Common Issues and Solutions
+
+**Issue: "ANTHROPIC_API_KEY is required" error with Claude**
+- **Solution**: This is now automatically handled. Update to latest version or ensure environment variables are set via Admin UI.
+
+**Issue: "Fallback to LiteLLM is not available" with Watsonx**
+- **Solution**: Ensure you've set both `WATSONX_API_KEY` and `WATSONX_PROJECT_ID`. Install `litellm` if needed: `pip install litellm`
+
+**Issue: Plan generation fails with validation error**
+- **Solution**: Update to latest version which includes READ action support in schema validation.
+
+**Issue: "Read Only" status despite having write access**
+- **Solution**: Install the GitPilot GitHub App on your repository. Click the install link in the UI or refresh permissions.
+
+**Issue: File tree not updating after agent operations**
+- **Solution**: Click the Refresh button in the file tree header to see newly created/modified files.
+
+For more issues, visit our [GitHub Issues](https://github.com/ruslanmv/gitpilot/issues) page.
 
 ---
 
