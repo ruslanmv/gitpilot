@@ -681,7 +681,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🗺️ Roadmap
 
-### Recently Released (v0.2.1) 🆕
+### Recently Released (v0.1.13) 🆕
 - ✅ **Full Multi-LLM Support** – All 4 providers (OpenAI, Claude, Watsonx, Ollama) fully tested and working
 - ✅ **READ File Actions** – Agents can now analyze files without modifications
 - ✅ **Claude Integration Fix** – Automatic environment variable configuration
@@ -689,7 +689,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - ✅ **Refresh Functionality** – Update permissions and file trees on demand
 - ✅ **GitHub App Status** – Clear indication of write access status
 
-### Current Features (v0.2.0)
+### Current Features (v0.1.12)
 - ✅ **Answer + Action Plan UX** – Clear separation of explanation and action items
 - ✅ **Structured File Actions** – Explicit CREATE/MODIFY/DELETE/READ operations
 - ✅ **Project Context Panel** – Repository metadata display
@@ -698,7 +698,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - ✅ **Enhanced Plan View** – Color-coded pills and totals
 - ✅ **Footer with GitHub CTA** – Community engagement
 
-### Previous Features (v0.1.0)
+### Previous Features (v0.1.1)
 - ✅ GitHub repository browsing
 - ✅ Multi-LLM provider support (OpenAI, Claude, Watsonx, Ollama)
 - ✅ Admin/Settings console
@@ -706,7 +706,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - ✅ AI-powered plan generation
 - ✅ Production-ready web UI
 
-### Planned Features (v0.3.0+)
+### Planned Features (v0.1.14+)
 - 🔄 Enhanced code modification with better LLM-powered diffs
 - 🔄 Pull request creation and management
 - 🔄 Multi-file refactoring workflows
