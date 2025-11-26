@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import logging
 from textwrap import dedent
 from typing import List, Literal
 
@@ -10,13 +12,17 @@ from pydantic import BaseModel, Field
 from .llm_provider import build_llm
 from .agent_tools import REPOSITORY_TOOLS, set_repo_context, get_repository_context_summary
 
+logger = logging.getLogger(__name__)
+
 
 class PlanFile(BaseModel):
+    """Represents a file operation in a plan step."""
     path: str
-    action: Literal["CREATE", "MODIFY", "DELETE"] = "MODIFY"
+    action: Literal["CREATE", "MODIFY", "DELETE", "READ"] = "MODIFY"
 
 
 class PlanStep(BaseModel):
+    """A single step in the execution plan."""
     step_number: int
     title: str
     description: str
@@ -26,12 +32,13 @@ class PlanStep(BaseModel):
 
 
 class PlanResult(BaseModel):
+    """The complete execution plan."""
     goal: str
     summary: str
     steps: List[PlanStep]
 
 
-async def generate_plan(goal: str, repo_full_name: str) -> PlanResult:
+async def generate_plan(goal: str, repo_full_name: str, token: str | None = None) -> PlanResult:
     """Agentic planning: create a structured plan but DO NOT modify the repo.
 
     This function uses a two-phase approach:
@@ -42,12 +49,17 @@ async def generate_plan(goal: str, repo_full_name: str) -> PlanResult:
 
     # Set repository context for tools
     owner, repo = repo_full_name.split("/")
-    set_repo_context(owner, repo)
+    # CRITICAL: Pass token to context so tools can use it in threads
+    set_repo_context(owner, repo, token=token)
 
     # PHASE 1: Explore the repository and gather context
-    print(f"[GitPilot] Phase 1: Exploring repository {repo_full_name}...")
-    repo_context_data = await get_repository_context_summary(owner, repo)
-    print(f"[GitPilot] Repository context gathered: {repo_context_data.get('total_files', 0)} files found")
+    logger.info("[GitPilot] Phase 1: Exploring repository %s...", repo_full_name)
+    # Pass token explicitly here too
+    repo_context_data = await get_repository_context_summary(owner, repo, token=token)
+    logger.info(
+        "[GitPilot] Repository context gathered: %s files found",
+        repo_context_data.get("total_files", 0),
+    )
 
     # Create explorer agent
     explorer = Agent(
@@ -108,14 +120,19 @@ async def generate_plan(goal: str, repo_full_name: str) -> PlanResult:
     def _explore():
         return explore_crew.kickoff()
 
-    exploration_result = await asyncio.to_thread(_explore)
+    # FIX: Propagate context (token) to the thread for CrewAI execution
+    ctx = contextvars.copy_context()
+    exploration_result = await asyncio.to_thread(ctx.run, _explore)
 
     # Extract exploration report
-    exploration_report = exploration_result.raw if hasattr(exploration_result, 'raw') else str(exploration_result)
-    print(f"[GitPilot] Exploration complete. Report length: {len(exploration_report)} chars")
+    exploration_report = exploration_result.raw if hasattr(exploration_result, "raw") else str(exploration_result)
+    logger.info(
+        "[GitPilot] Exploration complete. Report length: %s chars",
+        len(exploration_report),
+    )
 
     # PHASE 2: Create the plan using the exploration context
-    print(f"[GitPilot] Phase 2: Creating plan based on repository exploration...")
+    logger.info("[GitPilot] Phase 2: Creating plan based on repository exploration...")
 
     planner = Agent(
         role="Repository Refactor Planner",
@@ -196,7 +213,8 @@ async def generate_plan(goal: str, repo_full_name: str) -> PlanResult:
                   "files": [
                     {{"path": "file/path.py", "action": "CREATE"}},
                     {{"path": "another/file.py", "action": "MODIFY"}},
-                    {{"path": "old/file.py", "action": "DELETE"}}
+                    {{"path": "old/file.py", "action": "DELETE"}},
+                    {{"path": "README.md", "action": "READ"}}
                   ],
                   "risks": "Optional risk description or null"
                 }}
@@ -204,11 +222,11 @@ async def generate_plan(goal: str, repo_full_name: str) -> PlanResult:
             }}
 
             CRITICAL JSON RULES:
-            - Output MUST be valid JSON:
-              - Double quotes around all keys and string values
-              - No comments
-              - No trailing commas anywhere
-            - "action" MUST be exactly one of: "CREATE", "MODIFY", "DELETE"
+            - Output MUST be valid JSON.
+            - STRICTLY NO COMMENTS allowed (no // or #).
+            - Double quotes around all keys and string values.
+            - No trailing commas.
+            - "action" MUST be exactly one of: "CREATE", "MODIFY", "DELETE", "READ"
             - "step_number" MUST be an integer starting from 1
             - "risks" can be either a string or null (the JSON null value, without quotes)
             - Do NOT wrap the JSON in markdown code fences
@@ -250,9 +268,9 @@ async def generate_plan(goal: str, repo_full_name: str) -> PlanResult:
               - step_number: integer
               - title: string
               - description: string
-              - files: array of {{ "path": string, "action": "CREATE" | "MODIFY" | "DELETE" }}
+              - files: array of { "path": string, "action": "CREATE" | "MODIFY" | "DELETE" | "READ" }
               - risks: string or null
-            The response must contain ONLY pure JSON (no markdown, no prose, no code fences).
+            The response must contain ONLY pure JSON (no markdown, no prose, no code fences, NO COMMENTS).
 
             IMPORTANT:
             - For analysis/generation tasks: Include CREATE actions for new files (demos, examples, tutorials)
@@ -274,17 +292,22 @@ async def generate_plan(goal: str, repo_full_name: str) -> PlanResult:
     def _plan():
         return plan_crew.kickoff(inputs={"goal": goal})
 
-    result = await asyncio.to_thread(_plan)
+    # FIX: Propagate context to the planning thread
+    ctx = contextvars.copy_context()
+    result = await asyncio.to_thread(ctx.run, _plan)
 
     # CrewAI returns CrewOutput with .pydantic attribute containing the PlanResult
     if hasattr(result, "pydantic") and result.pydantic:
         plan = result.pydantic
-        print(f"[GitPilot] Plan created with {len(plan.steps)} steps")
+        logger.info("[GitPilot] Plan created with %s steps", len(plan.steps))
         return plan
+
+    # Fallback: this should not usually happen if output_pydantic is respected
+    logger.warning("[GitPilot] Unexpected planning result type: %r", type(result))
     return result
 
 
-async def execute_plan(plan: PlanResult, repo_full_name: str) -> dict:
+async def execute_plan(plan: PlanResult, repo_full_name: str, token: str | None = None) -> dict:
     """Execute the approved plan by applying changes to the GitHub repository.
 
     Returns an execution log with details about each step.
@@ -292,11 +315,11 @@ async def execute_plan(plan: PlanResult, repo_full_name: str) -> dict:
     from .github_api import get_file, put_file
 
     owner, repo = repo_full_name.split("/")
-    execution_steps = []
+    execution_steps: list[dict] = []
     llm = build_llm()
 
     # Set repository context for tools (in case Code Writer needs them)
-    set_repo_context(owner, repo)
+    set_repo_context(owner, repo, token=token)
 
     # Create a Code Writer agent that generates actual content
     code_writer = Agent(
@@ -366,7 +389,9 @@ async def execute_plan(plan: PlanResult, repo_full_name: str) -> dict:
                             return result.raw
                         return str(result)
 
-                    content = await asyncio.to_thread(_create)
+                    # FIX: Propagate context to the creation thread
+                    ctx = contextvars.copy_context()
+                    content = await asyncio.to_thread(ctx.run, _create)
 
                     # Clean up any markdown code blocks that might be included
                     content = content.strip()
@@ -383,13 +408,14 @@ async def execute_plan(plan: PlanResult, repo_full_name: str) -> dict:
                         file.path,
                         content,
                         f"GitPilot: Create {file.path} - {step.title}",
+                        token=token,
                     )
                     step_summary += f"\n  ✓ Created {file.path}"
 
                 elif file.action == "MODIFY":
                     # Use LLM to intelligently modify the existing file
                     try:
-                        existing_content = await get_file(owner, repo, file.path)
+                        existing_content = await get_file(owner, repo, file.path, token=token)
 
                         modify_task = Task(
                             description=(
@@ -423,7 +449,9 @@ async def execute_plan(plan: PlanResult, repo_full_name: str) -> dict:
                                 return result.raw
                             return str(result)
 
-                        modified_content = await asyncio.to_thread(_modify)
+                        # FIX: Propagate context to the modification thread
+                        ctx = contextvars.copy_context()
+                        modified_content = await asyncio.to_thread(ctx.run, _modify)
 
                         # Clean up any markdown code blocks
                         modified_content = modified_content.strip()
@@ -440,26 +468,51 @@ async def execute_plan(plan: PlanResult, repo_full_name: str) -> dict:
                             file.path,
                             modified_content,
                             f"GitPilot: Modify {file.path} - {step.title}",
+                            token=token,
                         )
                         step_summary += f"\n  ✓ Modified {file.path}"
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
+                        logger.exception(
+                            "Failed to modify file %s in step %s: %s",
+                            file.path,
+                            step.step_number,
+                            e,
+                        )
                         step_summary += f"\n  ✗ Failed to modify {file.path}: {str(e)}"
 
                 elif file.action == "DELETE":
                     # Actually delete the file from the repository
                     from .github_api import delete_file
+
                     try:
                         await delete_file(
                             owner,
                             repo,
                             file.path,
                             f"GitPilot: Delete {file.path} - {step.title}",
+                            token=token,
                         )
                         step_summary += f"\n  ✓ Deleted {file.path}"
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
+                        logger.exception(
+                            "Failed to delete file %s in step %s: %s",
+                            file.path,
+                            step.step_number,
+                            e,
+                        )
                         step_summary += f"\n  ✗ Failed to delete {file.path}: {str(e)}"
 
-            except Exception as e:
+                elif file.action == "READ":
+                    # READ is a planning/analysis action only, no repo change
+                    step_summary += f"\n  ℹ️ READ-only: inspected {file.path}"
+
+            except Exception as e:  # noqa: BLE001
+                logger.exception(
+                    "Error processing file %s in step %s: %s",
+                    file.path,
+                    step.step_number,
+                    e,
+                )
                 step_summary += f"\n  ✗ Error processing {file.path}: {str(e)}"
 
         execution_steps.append({"step_number": step.step_number, "summary": step_summary})
@@ -476,7 +529,7 @@ async def get_flow_definition() -> dict:
 
     This represents the multi-agent system used for planning and execution.
     """
-    flow = {
+    return {
         "nodes": [
             {
                 "id": "repo_explorer",
@@ -542,4 +595,3 @@ async def get_flow_definition() -> dict:
             },
         ],
     }
-    return flow
