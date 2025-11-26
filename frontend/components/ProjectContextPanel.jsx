@@ -3,7 +3,7 @@ import FileTree from "./FileTree.jsx";
 
 /**
  * GitPilot - Project Context Panel
- * FIXED: Properly shows "Read Only" for repos without GitHub App installed
+ * WORKING VERSION: Shows correct status and includes refresh functionality
  */
 export default function ProjectContextPanel({ repo }) {
   const [appUrl, setAppUrl] = useState("");
@@ -44,8 +44,11 @@ export default function ProjectContextPanel({ repo }) {
       console.warn("Unable to read github_token from localStorage:", e);
     }
 
-    // First, check repo access (write permissions)
-    fetch(`/api/auth/repo-access?owner=${repo.owner}&repo=${repo.name}`, { headers })
+    // Add cache busting parameter when user clicks refresh
+    const cacheBuster = refreshTrigger > 0 ? `&_t=${Date.now()}` : '';
+
+    // Check repo access
+    fetch(`/api/auth/repo-access?owner=${repo.owner}&repo=${repo.name}${cacheBuster}`, { headers })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
         
@@ -70,8 +73,8 @@ export default function ProjectContextPanel({ repo }) {
         });
       });
 
-    // Then fetch file tree for stats
-    fetch(`/api/repos/${repo.owner}/${repo.name}/tree`, { headers })
+    // Fetch file tree for stats
+    fetch(`/api/repos/${repo.owner}/${repo.name}/tree${cacheBuster ? '?' + cacheBuster.slice(1) : ''}`, { headers })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
 
@@ -99,7 +102,7 @@ export default function ProjectContextPanel({ repo }) {
     window.open(targetUrl, "_blank", "noopener,noreferrer");
   };
 
-  const handleRetry = () => {
+  const handleRefresh = () => {
     setAnalyzing(true);
     setRefreshTrigger(prev => prev + 1);
   };
@@ -170,7 +173,26 @@ export default function ProjectContextPanel({ repo }) {
     label: { color: theme.textSecondary },
     value: { color: theme.textPrimary, fontWeight: "500" },
     
-    // --- Install Link (Subtle) ---
+    // Refresh button style
+    refreshButton: {
+      marginTop: "8px",
+      height: "32px",
+      padding: "0 12px",
+      backgroundColor: "transparent",
+      color: theme.textSecondary,
+      border: `1px solid ${theme.border}`,
+      borderRadius: "6px",
+      fontSize: "12px",
+      fontWeight: "500",
+      cursor: "pointer",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: "6px",
+      transition: "all 0.2s",
+    },
+    
+    // Install Link (Subtle)
     installLink: {
       marginTop: "4px",
       fontSize: "12px",
@@ -183,7 +205,7 @@ export default function ProjectContextPanel({ repo }) {
       transition: "opacity 0.2s",
     },
     
-    // --- Enterprise Install Card ---
+    // Enterprise Install Card
     installCard: {
       marginTop: "8px",
       padding: "16px",
@@ -282,21 +304,21 @@ export default function ProjectContextPanel({ repo }) {
       ? repo.full_name.slice(0, 26) + "…"
       : repo.full_name || `${repo.owner}/${repo.name}`;
 
-  // FIXED: Determine status based on ACTUAL app installation
+  // Determine status - SIMPLIFIED: Just check app_installed
   let statusText = "Checking...";
   let statusColor = theme.textSecondary;
   let showInstallCard = false;
   let showInstallLink = false;
   
   if (!analyzing && accessInfo) {
-    // ONLY show "Write Access ✓" if app_installed is TRUE
     if (accessInfo.app_installed) {
+      // App installed (user has push access)
       statusText = "Write Access ✓";
       statusColor = theme.successColor;
       showInstallCard = false;
       showInstallLink = false;
     } else {
-      // App NOT installed - show Read Only
+      // No push access - show install prompt
       statusText = "Read Only";
       statusColor = theme.warningText;
       showInstallCard = true;
@@ -330,7 +352,39 @@ export default function ProjectContextPanel({ repo }) {
             </span>
           </div>
           
-          {/* ALWAYS show Install App link if app not installed */}
+          {/* Refresh Button - Always visible */}
+          <button
+            type="button"
+            style={styles.refreshButton}
+            onClick={handleRefresh}
+            disabled={analyzing}
+            onMouseOver={(e) => {
+              if (!analyzing) {
+                e.currentTarget.style.backgroundColor = "rgba(255, 255, 255, 0.05)";
+              }
+            }}
+            onMouseOut={(e) => {
+              e.currentTarget.style.backgroundColor = "transparent";
+            }}
+          >
+            <svg 
+              width="14" 
+              height="14" 
+              viewBox="0 0 24 24" 
+              fill="none" 
+              stroke="currentColor" 
+              strokeWidth="2"
+              style={{
+                transform: analyzing ? "rotate(360deg)" : "rotate(0deg)",
+                transition: "transform 0.6s ease"
+              }}
+            >
+              <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+            </svg>
+            {analyzing ? "Refreshing..." : "Refresh"}
+          </button>
+          
+          {/* Install App link if needed */}
           {showInstallLink && appUrl && (
             <div style={{ marginTop: "8px" }}>
               <a
@@ -346,28 +400,23 @@ export default function ProjectContextPanel({ repo }) {
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405 1.02 0 2.04.135 3 .405 2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
                 </svg>
-                Install GitPilot App
+                Install GitPilot App to enable write access
               </a>
             </div>
           )}
         </div>
 
-        {/* INSTALL ACTION CARD: Shows detailed info when app not installed */}
+        {/* INSTALL ACTION CARD: Shows when app not installed */}
         {showInstallCard && (
           <div style={styles.installCard}>
             <div style={styles.installHeader}>
               <span>⚡</span>
-              <span>Agent Write Access Required</span>
+              <span>Enable Agent Write Access</span>
             </div>
 
             <p style={styles.installText}>
-              To enable AI agent operations (create, modify, delete files), 
-              install the GitPilot GitHub App on this repository.
-              {accessInfo?.auth_type === "user_token_only" && (
-                <span style={{ display: "block", marginTop: "8px", fontSize: "12px", fontStyle: "italic" }}>
-                  Note: You have personal push access, but agent operations require the GitHub App.
-                </span>
-              )}
+              Install the GitPilot GitHub App to enable AI agent operations 
+              (create, modify, delete files) on this repository.
             </p>
 
             <div style={styles.buttonRow}>
@@ -388,15 +437,6 @@ export default function ProjectContextPanel({ repo }) {
                 </svg>
                 Install App
                 </button>
-                
-                <button 
-                   type="button" 
-                   style={styles.retryButton} 
-                   onClick={handleRetry}
-                   title="Refresh after installing"
-                >
-                    Verify
-                </button>
             </div>
           </div>
         )}
@@ -409,7 +449,7 @@ export default function ProjectContextPanel({ repo }) {
             ⚠️ Failed to load files: {treeError}
           </div>
         ) : (
-          <FileTree repo={repo} />
+          <FileTree repo={repo} refreshTrigger={refreshTrigger} />
         )}
       </div>
     </div>
