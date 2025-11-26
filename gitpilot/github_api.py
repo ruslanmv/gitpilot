@@ -10,20 +10,11 @@ from fastapi import HTTPException
 
 GITHUB_API_BASE = "https://api.github.com"
 
-# Context variable to store the GitHub token for the current request/execution scope.
-# This allows deep functions (like tools used by agents) to access the token 
-# without passing it explicitly through every function call.
 _request_token: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("request_token", default=None)
 
 
 @contextmanager
 def execution_context(token: Optional[str]):
-    """
-    Context manager to set the GitHub token for the current execution scope.
-    Usage:
-        with execution_context(token):
-            # Code here (and functions it calls) can access the token via _github_token()
-    """
     token_var = _request_token.set(token)
     try:
         yield
@@ -32,31 +23,11 @@ def execution_context(token: Optional[str]):
 
 
 def _github_token(provided_token: Optional[str] = None) -> str:
-    """
-    Get GitHub token from:
-    1. Explicit argument
-    2. Request Context (set via execution_context)
-    3. Environment variables (Fallback)
-
-    Args:
-        provided_token: Optional token from Authorization header
-
-    Returns:
-        GitHub access token
-
-    Raises:
-        HTTPException: If no token is available
-    """
-    # 1. Prefer explicitly provided token
     if provided_token:
         return provided_token
-
-    # 2. Check Request Context (injected by API middleware/endpoint)
     ctx_token = _request_token.get()
     if ctx_token:
         return ctx_token
-
-    # 3. Fallback to environment variables (for CLI/Server mode)
     token = os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
     if not token:
         raise HTTPException(
@@ -95,7 +66,6 @@ async def github_request(
         except Exception:
             msg = resp.text
         
-        # Handle 401 specifically to provide a better error for tools
         if resp.status_code == 401:
              msg = "GitHub Token Expired or Invalid. Please refresh your login."
              
@@ -159,6 +129,8 @@ async def put_file(
     token: Optional[str] = None,
 ) -> dict[str, Any]:
     from base64 import b64encode
+    # Import inside function to avoid circular top-level imports
+    from .github_app import is_github_app_configured, get_installation_token_for_repo
 
     sha: str | None = None
     try:
@@ -174,12 +146,30 @@ async def put_file(
     if sha:
         body["sha"] = sha
 
-    result = await github_request(
-        f"/repos/{owner}/{repo}/contents/{path}",
-        method="PUT",
-        json=body,
-        token=token,
-    )
+    async def _do_put(use_token: Optional[str]) -> Any:
+        return await github_request(
+            f"/repos/{owner}/{repo}/contents/{path}",
+            method="PUT",
+            json=body,
+            token=use_token,
+        )
+
+    try:
+        result = await _do_put(token)
+    except HTTPException as e:
+        # Fallback to GitHub App Token if we get a 403 permissions error
+        msg = str(e.detail)
+        if (
+            e.status_code == 403
+            and "Resource not accessible by integration" in msg
+            and is_github_app_configured()
+        ):
+            print(f"[GitPilot] 403 on put_file. Falling back to GitHub App token for {owner}/{repo}")
+            app_token = await get_installation_token_for_repo(owner, repo)
+            result = await _do_put(app_token)
+        else:
+            raise
+
     commit = result.get("commit", {})
     return {
         "path": path,
@@ -196,27 +186,64 @@ async def delete_file(
     token: Optional[str] = None,
 ) -> dict[str, Any]:
     """Delete a file from the repository."""
-    # Get current file SHA (required for deletion)
-    existing = await github_request(f"/repos/{owner}/{repo}/contents/{path}", token=token)
-    sha = existing.get("sha")
+    from .github_app import is_github_app_configured, get_installation_token_for_repo
+    
+    async def _get_existing(use_token: Optional[str]) -> Any:
+        return await github_request(
+            f"/repos/{owner}/{repo}/contents/{path}",
+            token=use_token,
+        )
 
+    try:
+        existing = await _get_existing(token)
+    except HTTPException as e:
+        # Fallback check for existence
+        msg = str(e.detail)
+        if (
+            e.status_code == 403
+            and "Resource not accessible by integration" in msg
+            and is_github_app_configured()
+        ):
+            app_token = await get_installation_token_for_repo(owner, repo)
+            existing = await _get_existing(app_token)
+        else:
+            raise
+
+    sha = existing.get("sha")
     if not sha:
         raise HTTPException(
             status_code=404,
             detail=f"File {path} not found or has no SHA"
         )
 
-    # Delete the file
     body = {
         "message": message,
         "sha": sha,
     }
-    result = await github_request(
-        f"/repos/{owner}/{repo}/contents/{path}",
-        method="DELETE",
-        json=body,
-        token=token,
-    )
+
+    async def _do_delete(use_token: Optional[str]) -> Any:
+        return await github_request(
+            f"/repos/{owner}/{repo}/contents/{path}",
+            method="DELETE",
+            json=body,
+            token=use_token,
+        )
+
+    try:
+        result = await _do_delete(token)
+    except HTTPException as e:
+        # Fallback delete
+        msg = str(e.detail)
+        if (
+            e.status_code == 403
+            and "Resource not accessible by integration" in msg
+            and is_github_app_configured()
+        ):
+            print(f"[GitPilot] 403 on delete_file. Falling back to GitHub App token for {owner}/{repo}")
+            app_token = await get_installation_token_for_repo(owner, repo)
+            result = await _do_delete(app_token)
+        else:
+            raise
 
     commit = result.get("commit", {})
     return {
