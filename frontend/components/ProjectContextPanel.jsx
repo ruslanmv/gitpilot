@@ -3,16 +3,16 @@ import FileTree from "./FileTree.jsx";
 
 /**
  * GitPilot - Project Context Panel
- * Displays repository metadata and handles GitHub App Installation/Permissions
+ * FIXED: Properly shows "Read Only" for repos without GitHub App installed
  */
 export default function ProjectContextPanel({ repo }) {
   const [appUrl, setAppUrl] = useState("");
   const [fileCount, setFileCount] = useState(0);
   const [branch, setBranch] = useState("main");
   const [analyzing, setAnalyzing] = useState(false);
-  const [authIssue, setAuthIssue] = useState(false);
   const [accessInfo, setAccessInfo] = useState(null);
-  const [refreshTrigger, setRefreshTrigger] = useState(0); // For manual retry
+  const [treeError, setTreeError] = useState(null);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   // Fetch the GitHub App Installation URL on mount
   useEffect(() => {
@@ -30,10 +30,10 @@ export default function ProjectContextPanel({ repo }) {
 
     setBranch(repo.default_branch || "main");
     setAnalyzing(true);
-    setAuthIssue(false);
     setAccessInfo(null);
+    setTreeError(null);
 
-    // Attach GitHub access token if we have one (OAuth Token)
+    // Get GitHub token from localStorage
     let headers = {};
     try {
       const token = localStorage.getItem("github_token");
@@ -51,17 +51,23 @@ export default function ProjectContextPanel({ repo }) {
         
         if (!res.ok) {
           console.error("Failed to check repo access:", data);
-          // Don't block on this error, continue to load tree
+          setAccessInfo({
+            can_write: false,
+            app_installed: false,
+            auth_type: "none"
+          });
         } else {
           setAccessInfo(data);
-          // If we can't write, show auth issue
-          if (!data.can_write) {
-            setAuthIssue(true);
-          }
+          console.log("Access info:", data);
         }
       })
       .catch((err) => {
         console.error("Failed to check repo access:", err);
+        setAccessInfo({
+          can_write: false,
+          app_installed: false,
+          auth_type: "none"
+        });
       });
 
     // Then fetch file tree for stats
@@ -70,28 +76,22 @@ export default function ProjectContextPanel({ repo }) {
         const data = await res.json().catch(() => ({}));
 
         if (!res.ok) {
-          const message =
-            data.detail || data.error || "Failed to load repository tree.";
-          
-          // 401/403/404 often implies missing permissions or app not installed
-          if (res.status === 401 || res.status === 403 || res.status === 404) {
-            setAuthIssue(true);
-          }
-          throw new Error(message);
+          const message = data.detail || data.error || "Failed to load repository tree.";
+          setTreeError(message);
+        } else {
+          setFileCount(Array.isArray(data.files) ? data.files.length : 0);
+          setTreeError(null);
         }
-
-        setFileCount(Array.isArray(data.files) ? data.files.length : 0);
       })
       .catch((err) => {
         console.error("Failed to fetch file tree:", err);
+        setTreeError(err.message);
       })
       .finally(() => setAnalyzing(false));
   }, [repo?.owner, repo?.name, repo?.default_branch, refreshTrigger]);
 
   const handleInstallClick = () => {
     if (!appUrl) return;
-    // FIX: Append '/installations/new' to force the Repo Selection UI
-    // This solves the issue of just opening the generic landing page.
     const targetUrl = appUrl.endsWith("/") 
         ? `${appUrl}installations/new` 
         : `${appUrl}/installations/new`;
@@ -170,17 +170,29 @@ export default function ProjectContextPanel({ repo }) {
     label: { color: theme.textSecondary },
     value: { color: theme.textPrimary, fontWeight: "500" },
     
+    // --- Install Link (Subtle) ---
+    installLink: {
+      marginTop: "4px",
+      fontSize: "12px",
+      color: theme.accent,
+      textDecoration: "none",
+      cursor: "pointer",
+      display: "flex",
+      alignItems: "center",
+      gap: "6px",
+      transition: "opacity 0.2s",
+    },
+    
     // --- Enterprise Install Card ---
     installCard: {
       marginTop: "8px",
       padding: "16px",
       borderRadius: "8px",
       backgroundColor: theme.cardBg,
-      border: `1px solid ${theme.border}`,
+      border: `1px solid ${theme.warningBorder}`,
       display: "flex",
       flexDirection: "column",
       gap: "12px",
-      boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)",
     },
     installHeader: {
       display: "flex",
@@ -194,15 +206,6 @@ export default function ProjectContextPanel({ repo }) {
       fontSize: "13px",
       color: theme.textSecondary,
       lineHeight: "1.5",
-    },
-    accessDetail: {
-      fontSize: "12px",
-      color: theme.textSecondary,
-      fontFamily: "monospace",
-      backgroundColor: "rgba(0, 0, 0, 0.2)",
-      padding: "8px",
-      borderRadius: "4px",
-      marginTop: "4px",
     },
     buttonRow: {
         display: 'flex',
@@ -252,6 +255,15 @@ export default function ProjectContextPanel({ repo }) {
       color: theme.textSecondary,
       fontSize: "13px",
     },
+    errorState: {
+      padding: "20px",
+      color: theme.warningText,
+      fontSize: "12px",
+      backgroundColor: theme.warningBg,
+      border: `1px solid ${theme.warningBorder}`,
+      borderRadius: "6px",
+      margin: "10px 20px",
+    },
   };
 
   if (!repo) {
@@ -270,21 +282,26 @@ export default function ProjectContextPanel({ repo }) {
       ? repo.full_name.slice(0, 26) + "…"
       : repo.full_name || `${repo.owner}/${repo.name}`;
 
-  // Determine status display
+  // FIXED: Determine status based on ACTUAL app installation
   let statusText = "Checking...";
   let statusColor = theme.textSecondary;
+  let showInstallCard = false;
+  let showInstallLink = false;
   
   if (!analyzing && accessInfo) {
-    if (accessInfo.can_write) {
-      statusText = "Write Access";
+    // ONLY show "Write Access ✓" if app_installed is TRUE
+    if (accessInfo.app_installed) {
+      statusText = "Write Access ✓";
       statusColor = theme.successColor;
+      showInstallCard = false;
+      showInstallLink = false;
     } else {
+      // App NOT installed - show Read Only
       statusText = "Read Only";
       statusColor = theme.warningText;
+      showInstallCard = true;
+      showInstallLink = true;
     }
-  } else if (!analyzing) {
-    statusText = authIssue ? "Access Needed" : "Connected";
-    statusColor = authIssue ? theme.warningText : theme.successColor;
   }
 
   return (
@@ -312,27 +329,46 @@ export default function ProjectContextPanel({ repo }) {
                  {statusText}
             </span>
           </div>
+          
+          {/* ALWAYS show Install App link if app not installed */}
+          {showInstallLink && appUrl && (
+            <div style={{ marginTop: "8px" }}>
+              <a
+                href="#"
+                style={styles.installLink}
+                onClick={(e) => {
+                  e.preventDefault();
+                  handleInstallClick();
+                }}
+                onMouseOver={(e) => { e.currentTarget.style.opacity = "0.8"; }}
+                onMouseOut={(e) => { e.currentTarget.style.opacity = "1"; }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405 1.02 0 2.04.135 3 .405 2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
+                </svg>
+                Install GitPilot App
+              </a>
+            </div>
+          )}
         </div>
 
-        {/* INSTALL ACTION CARD: Shows when write access is needed */}
-        {authIssue && accessInfo && !accessInfo.can_write && (
+        {/* INSTALL ACTION CARD: Shows detailed info when app not installed */}
+        {showInstallCard && (
           <div style={styles.installCard}>
             <div style={styles.installHeader}>
               <span>⚡</span>
-              <span>Enable Agent Write Access</span>
+              <span>Agent Write Access Required</span>
             </div>
 
             <p style={styles.installText}>
-              GitPilot can read this repository but needs write permissions to create, 
-              modify, or delete files. Install the GitHub App to enable full agent capabilities.
+              To enable AI agent operations (create, modify, delete files), 
+              install the GitPilot GitHub App on this repository.
+              {accessInfo?.auth_type === "user_token_only" && (
+                <span style={{ display: "block", marginTop: "8px", fontSize: "12px", fontStyle: "italic" }}>
+                  Note: You have personal push access, but agent operations require the GitHub App.
+                </span>
+              )}
             </p>
-
-            {accessInfo.auth_type && (
-              <div style={styles.accessDetail}>
-                Current Auth: {accessInfo.auth_type}
-                {accessInfo.app_installed && <span> | App Installed ✓</span>}
-              </div>
-            )}
 
             <div style={styles.buttonRow}>
                 <button
@@ -350,14 +386,14 @@ export default function ProjectContextPanel({ repo }) {
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405 1.02 0 2.04.135 3 .405 2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
                 </svg>
-                {accessInfo.app_installed ? "Grant Access" : "Install App"}
+                Install App
                 </button>
                 
                 <button 
                    type="button" 
                    style={styles.retryButton} 
                    onClick={handleRetry}
-                   title="Click this after installing to reload"
+                   title="Refresh after installing"
                 >
                     Verify
                 </button>
@@ -366,11 +402,16 @@ export default function ProjectContextPanel({ repo }) {
         )}
       </div>
 
-      {!authIssue && (
-        <div style={styles.treeWrapper}>
+      {/* File Tree - Always show */}
+      <div style={styles.treeWrapper}>
+        {treeError ? (
+          <div style={styles.errorState}>
+            ⚠️ Failed to load files: {treeError}
+          </div>
+        ) : (
           <FileTree repo={repo} />
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

@@ -1,55 +1,35 @@
-"""GitHub App authentication and installation token management.
+"""
+GitHub App Installation Management - OAuth-Based (No Private Keys Required)
 
-This module handles GitHub App authentication including:
-- JWT generation for App authentication
-- Installation discovery for repositories
-- Installation token minting with caching
+This module properly checks if the GitHub App is ACTUALLY installed on repositories.
 """
 from __future__ import annotations
 
 import logging
 import os
-import time
 from typing import Optional, Dict, Any
-from datetime import datetime, timedelta
 
 import httpx
 
-try:
-    import jwt
-except ImportError:
-    jwt = None
-
 logger = logging.getLogger("gitpilot.github_app")
 
-# Simple in-memory cache to prevent API spam
+# Simple in-memory cache for installation checks
 _installation_cache: Dict[str, Dict[str, Any]] = {}
-_token_cache: Dict[int, Dict[str, Any]] = {}
-
-CACHE_TTL_SECONDS = 300  # 5 minutes for installation lookup
-TOKEN_CACHE_BUFFER = 60  # Refresh token 1 minute before expiry
+CACHE_TTL_SECONDS = 300  # 5 minutes
 
 
 class GitHubAppConfig:
-    """Configuration for GitHub App authentication."""
+    """Configuration for GitHub App (no private key needed)."""
     
     def __init__(self):
-        self.app_id = os.getenv("GITHUB_APP_ID")
-        self.private_key = os.getenv("GITHUB_APP_PRIVATE_KEY")
-        
-        # Support loading private key from file path as fallback
-        if not self.private_key and os.getenv("GITHUB_APP_PRIVATE_KEY_PATH"):
-            key_path = os.getenv("GITHUB_APP_PRIVATE_KEY_PATH")
-            try:
-                with open(key_path, 'r') as f:
-                    self.private_key = f.read()
-            except Exception as e:
-                logger.error(f"Failed to load private key from {key_path}: {e}")
+        self.app_id = os.getenv("GITHUB_APP_ID", "2313985")
+        self.client_id = os.getenv("GITHUB_CLIENT_ID", "Iv23litmRp80Z6wmlyRn")
+        self.app_slug = os.getenv("GITHUB_APP_SLUG", "gitpilota")
     
     @property
     def is_configured(self) -> bool:
-        """Check if GitHub App is properly configured."""
-        return bool(self.app_id and self.private_key)
+        """Check if GitHub App is configured."""
+        return bool(self.app_id and self.client_id)
 
 
 def get_app_config() -> GitHubAppConfig:
@@ -57,186 +37,146 @@ def get_app_config() -> GitHubAppConfig:
     return GitHubAppConfig()
 
 
-def generate_jwt() -> str:
+async def check_app_installation(
+    owner: str, 
+    repo: str, 
+    user_token: str
+) -> bool:
     """
-    Generate a JWT for GitHub App authentication.
+    Check if the GitHub App is ACTUALLY installed on a repository.
     
-    The JWT is valid for 10 minutes and is used to authenticate
-    as the GitHub App itself (not as an installation).
-    
-    Returns:
-        JWT token string
-        
-    Raises:
-        ValueError: If App configuration is missing or jwt library not installed
-    """
-    if jwt is None:
-        raise ValueError(
-            "PyJWT library not installed. Install with: pip install pyjwt[crypto]"
-        )
-    
-    config = get_app_config()
-    
-    if not config.is_configured:
-        raise ValueError(
-            "GitHub App not configured. Please set GITHUB_APP_ID and "
-            "GITHUB_APP_PRIVATE_KEY environment variables."
-        )
-    
-    # JWT payload - valid for 10 minutes
-    now = int(time.time())
-    payload = {
-        "iat": now - 60,  # Issued 60 seconds in the past to account for clock skew
-        "exp": now + 600,  # Expires in 10 minutes
-        "iss": config.app_id,
-    }
-    
-    # Sign JWT with RS256
-    token = jwt.encode(payload, config.private_key, algorithm="RS256")
-    return token
-
-
-async def get_installation_for_repo(owner: str, repo: str) -> Optional[Dict[str, Any]]:
-    """
-    Find the GitHub App installation for a specific repository.
-    
-    Uses in-memory caching to prevent excessive API calls.
-    
-    Args:
-        owner: Repository owner username/org
-        repo: Repository name
-        
-    Returns:
-        Installation data dict with 'id', 'account', etc. or None if not installed
-    """
-    cache_key = f"{owner}/{repo}"
-    
-    # Check cache first
-    if cache_key in _installation_cache:
-        cached = _installation_cache[cache_key]
-        if time.time() - cached["timestamp"] < CACHE_TTL_SECONDS:
-            logger.debug(f"Using cached installation for {cache_key}")
-            return cached["data"]
-    
-    try:
-        app_jwt = generate_jwt()
-        
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            # Get installation for this specific repo
-            response = await client.get(
-                f"https://api.github.com/repos/{owner}/{repo}/installation",
-                headers={
-                    "Authorization": f"Bearer {app_jwt}",
-                    "Accept": "application/vnd.github+json",
-                    "User-Agent": "gitpilot",
-                },
-            )
-            
-            if response.status_code == 404:
-                logger.info(f"GitHub App not installed on {owner}/{repo}")
-                # Cache negative result too
-                _installation_cache[cache_key] = {
-                    "data": None,
-                    "timestamp": time.time(),
-                }
-                return None
-            
-            response.raise_for_status()
-            installation = response.json()
-            
-            # Cache the result
-            _installation_cache[cache_key] = {
-                "data": installation,
-                "timestamp": time.time(),
-            }
-            
-            logger.info(f"Found installation {installation['id']} for {owner}/{repo}")
-            return installation
-            
-    except Exception as e:
-        logger.error(f"Failed to get installation for {owner}/{repo}: {e}")
-        return None
-
-
-async def get_installation_token_for_repo(owner: str, repo: str) -> Optional[str]:
-    """
-    Get an installation access token for a specific repository.
-    
-    This token has the permissions granted to the GitHub App installation
-    and can be used to make API calls on behalf of the installation.
-    
-    Tokens are cached until near expiry to minimize API calls.
-    
-    Args:
-        owner: Repository owner username/org
-        repo: Repository name
-        
-    Returns:
-        Access token string or None if App is not installed
-    """
-    # First, get the installation
-    installation = await get_installation_for_repo(owner, repo)
-    if not installation:
-        return None
-    
-    installation_id = installation["id"]
-    
-    # Check if we have a valid cached token
-    if installation_id in _token_cache:
-        cached_token = _token_cache[installation_id]
-        expires_at = datetime.fromisoformat(cached_token["expires_at"].rstrip("Z"))
-        
-        # If token is still valid (with buffer), use it
-        if datetime.utcnow() < expires_at - timedelta(seconds=TOKEN_CACHE_BUFFER):
-            logger.debug(f"Using cached token for installation {installation_id}")
-            return cached_token["token"]
-    
-    # Need to mint a new token
-    try:
-        app_jwt = generate_jwt()
-        
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            # Request installation token
-            response = await client.post(
-                f"https://api.github.com/app/installations/{installation_id}/access_tokens",
-                headers={
-                    "Authorization": f"Bearer {app_jwt}",
-                    "Accept": "application/vnd.github+json",
-                    "User-Agent": "gitpilot",
-                },
-                json={
-                    "repositories": [repo],  # Limit scope to just this repo
-                },
-            )
-            
-            response.raise_for_status()
-            token_data = response.json()
-            
-            # Cache the token
-            _token_cache[installation_id] = {
-                "token": token_data["token"],
-                "expires_at": token_data["expires_at"],
-            }
-            
-            logger.info(f"Minted new installation token for {owner}/{repo} (expires: {token_data['expires_at']})")
-            return token_data["token"]
-            
-    except Exception as e:
-        logger.error(f"Failed to get installation token for {owner}/{repo}: {e}")
-        return None
-
-
-async def check_repo_write_access(owner: str, repo: str, user_token: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Check if we have write access to a repository via User token or GitHub App.
-    
-    This is useful for the frontend to determine if it should show
-    installation prompts.
+    This uses the /repos/{owner}/{repo}/installation endpoint which returns
+    the installation info if the App is installed.
     
     Args:
         owner: Repository owner
         repo: Repository name
-        user_token: User's OAuth token (optional)
+        user_token: User's OAuth token
+        
+    Returns:
+        True if App is installed, False otherwise
+    """
+    cache_key = f"app_install:{owner}/{repo}"
+    
+    # Check cache
+    if cache_key in _installation_cache:
+        cached = _installation_cache[cache_key]
+        import time
+        if time.time() - cached.get("timestamp", 0) < CACHE_TTL_SECONDS:
+            return cached.get("installed", False)
+    
+    try:
+        config = get_app_config()
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # Check if the App is installed on this repo
+            response = await client.get(
+                f"https://api.github.com/repos/{owner}/{repo}/installation",
+                headers={
+                    "Authorization": f"Bearer {user_token}",
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "gitpilot",
+                },
+            )
+            
+            is_installed = response.status_code == 200
+            
+            # Cache the result
+            import time
+            _installation_cache[cache_key] = {
+                "installed": is_installed,
+                "timestamp": time.time(),
+            }
+            
+            if is_installed:
+                installation_data = response.json()
+                logger.info(f"GitHub App IS installed on {owner}/{repo} (installation_id: {installation_data.get('id')})")
+            else:
+                logger.info(f"GitHub App NOT installed on {owner}/{repo} (status: {response.status_code})")
+            
+            return is_installed
+            
+    except Exception as e:
+        logger.error(f"Failed to check app installation for {owner}/{repo}: {e}")
+        return False
+
+
+async def check_user_permissions(
+    owner: str, 
+    repo: str, 
+    user_token: str
+) -> Dict[str, bool]:
+    """
+    Check the user's direct permissions on a repository.
+    
+    Args:
+        owner: Repository owner
+        repo: Repository name
+        user_token: User's OAuth token
+        
+    Returns:
+        Dict with 'has_push' and 'has_admin'
+    """
+    cache_key = f"user_perms:{owner}/{repo}"
+    
+    # Check cache
+    if cache_key in _installation_cache:
+        cached = _installation_cache[cache_key]
+        import time
+        if time.time() - cached.get("timestamp", 0) < CACHE_TTL_SECONDS:
+            return cached.get("permissions", {"has_push": False, "has_admin": False})
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"https://api.github.com/repos/{owner}/{repo}",
+                headers={
+                    "Authorization": f"Bearer {user_token}",
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "gitpilot",
+                },
+            )
+            
+            if response.status_code == 200:
+                repo_data = response.json()
+                permissions = repo_data.get("permissions", {})
+                
+                result = {
+                    "has_push": permissions.get("push", False),
+                    "has_admin": permissions.get("admin", False),
+                }
+                
+                # Cache the result
+                import time
+                _installation_cache[cache_key] = {
+                    "permissions": result,
+                    "timestamp": time.time(),
+                }
+                
+                return result
+            else:
+                return {"has_push": False, "has_admin": False}
+                
+    except Exception as e:
+        logger.error(f"Failed to check user permissions for {owner}/{repo}: {e}")
+        return {"has_push": False, "has_admin": False}
+
+
+async def check_repo_write_access(
+    owner: str, 
+    repo: str, 
+    user_token: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Check if user has write access to a repository.
+    
+    CRITICAL FIX: This now properly checks if the GitHub App is ACTUALLY installed,
+    not just if the user has personal push access.
+    
+    Args:
+        owner: Repository owner
+        repo: Repository name
+        user_token: User's OAuth token
         
     Returns:
         Dict with 'can_write', 'app_installed', 'auth_type'
@@ -247,45 +187,47 @@ async def check_repo_write_access(owner: str, repo: str, user_token: Optional[st
         "auth_type": "none",
     }
     
-    # Check User Token first (if provided)
-    if user_token:
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(
-                    f"https://api.github.com/repos/{owner}/{repo}",
-                    headers={
-                        "Authorization": f"Bearer {user_token}",
-                        "Accept": "application/vnd.github+json",
-                        "User-Agent": "gitpilot",
-                    },
-                )
-                
-                if response.status_code == 200:
-                    repo_data = response.json()
-                    permissions = repo_data.get("permissions", {})
-                    
-                    if permissions.get("push"):
-                        result["can_write"] = True
-                        result["auth_type"] = "user_token"
-                        logger.debug(f"User has push access to {owner}/{repo}")
-                        return result
-                    
-        except Exception as e:
-            logger.debug(f"User token check failed for {owner}/{repo}: {e}")
+    if not user_token:
+        return result
     
-    # Check GitHub App Installation
-    installation = await get_installation_for_repo(owner, repo)
-    if installation:
-        result["app_installed"] = True
-        result["can_write"] = True
-        result["auth_type"] = "github_app"
-        logger.debug(f"GitHub App installed on {owner}/{repo}")
+    try:
+        # Check BOTH: user permissions AND app installation
+        user_perms = await check_user_permissions(owner, repo, user_token)
+        app_installed = await check_app_installation(owner, repo, user_token)
+        
+        # Determine access level
+        has_push = user_perms.get("has_push", False)
+        
+        if app_installed:
+            # App is installed - this is the BEST case for agent operations
+            result["can_write"] = True
+            result["app_installed"] = True
+            result["auth_type"] = "github_app"
+            logger.info(f"✅ {owner}/{repo}: App installed (can_write=True)")
+        elif has_push:
+            # User has personal push access but App NOT installed
+            # Agent operations will likely fail with "Resource not accessible by integration"
+            result["can_write"] = False  # ← CRITICAL: Set to False because agent ops will fail
+            result["app_installed"] = False
+            result["auth_type"] = "user_token_only"
+            logger.warning(f"⚠️  {owner}/{repo}: User has push but App NOT installed (agent operations will fail)")
+        else:
+            # User has no push access and App NOT installed
+            result["can_write"] = False
+            result["app_installed"] = False
+            result["auth_type"] = "none"
+            logger.info(f"❌ {owner}/{repo}: No push access, App not installed")
+                
+    except Exception as e:
+        logger.error(f"Error checking access for {owner}/{repo}: {e}")
+        result["can_write"] = False
+        result["app_installed"] = False
+        result["auth_type"] = "error"
     
     return result
 
 
 def clear_cache():
-    """Clear all cached installation and token data. Useful for testing."""
+    """Clear installation cache."""
     _installation_cache.clear()
-    _token_cache.clear()
-    logger.info("Cleared GitHub App cache")
+    logger.info("Cleared installation cache")

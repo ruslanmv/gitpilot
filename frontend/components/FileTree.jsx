@@ -12,6 +12,7 @@ export default function FileTree({ repo }) {
   useEffect(() => {
     if (!repo) return;
     setLoading(true);
+    setError(null);
     
     // Construct headers manually to ensure no dependency on external utils for this component
     let headers = {};
@@ -33,16 +34,51 @@ export default function FileTree({ repo }) {
         return res.json();
       })
       .then((data) => {
-        if (data.files) {
+        if (data.files && Array.isArray(data.files)) {
           setTree(buildTree(data.files));
+          setError(null);
+        } else {
+          setError("No files found in repository");
         }
       })
-      .catch((err) => setError(err.message))
+      .catch((err) => {
+        setError(err.message);
+        console.error("FileTree error:", err);
+      })
       .finally(() => setLoading(false));
   }, [repo]);
 
-  if (loading) return <div style={{ padding: "0 20px", color: "#666", fontSize: "13px" }}>Loading files...</div>;
-  if (error) return null; // Error is handled by parent context panel usually, or just hidden here
+  if (loading) {
+    return (
+      <div style={{ padding: "0 20px", color: "#666", fontSize: "13px" }}>
+        Loading files...
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={{ 
+        padding: "12px 20px", 
+        color: "#F59E0B", 
+        fontSize: "12px",
+        backgroundColor: "rgba(245, 158, 11, 0.1)",
+        border: "1px solid rgba(245, 158, 11, 0.2)",
+        borderRadius: "6px",
+        margin: "0 10px"
+      }}>
+        ⚠️ {error}
+      </div>
+    );
+  }
+
+  if (tree.length === 0) {
+    return (
+      <div style={{ padding: "0 20px", color: "#666", fontSize: "13px" }}>
+        No files found
+      </div>
+    );
+  }
 
   return (
     <div style={{ fontSize: "13px", color: "#A1A1AA", padding: "0 10px 20px 10px" }}>
