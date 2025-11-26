@@ -124,3 +124,6 @@ frontend/.vite/
 * copy *
 * copy
 * copy*.*
+/gitpilot/web/assets
+/gitpilot/web/assets
+/gitpilot/web
