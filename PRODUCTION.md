@@ -380,7 +380,7 @@ GITPILOT_OPENAI_MODEL=gpt-4o-mini
 
 ```bash
 ANTHROPIC_API_KEY=sk-ant-xxx
-GITPILOT_CLAUDE_MODEL=claude-3-5-sonnet-20241022
+GITPILOT_CLAUDE_MODEL=claude-sonnet-4-5
 ```
 
 ### Watsonx
@@ -388,7 +388,7 @@ GITPILOT_CLAUDE_MODEL=claude-3-5-sonnet-20241022
 ```bash
 WATSONX_API_KEY=xxx
 WATSONX_PROJECT_ID=xxx
-GITPILOT_WATSONX_MODEL=meta-llama/llama-3-1-70b-instruct
+GITPILOT_WATSONX_MODEL=meta-llama/llama-3-3-70b-instruct
 ```
 
 ### Ollama

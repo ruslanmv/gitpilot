@@ -267,14 +267,14 @@ export GITPILOT_OPENAI_MODEL="gpt-4o-mini"  # optional
 #### Claude (Anthropic)
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
-export GITPILOT_CLAUDE_MODEL="claude-3-5-sonnet-20241022"  # optional
+export GITPILOT_CLAUDE_MODEL="claude-sonnet-4-5"  # optional
 ```
 
 #### IBM Watsonx
 ```bash
 export WATSONX_API_KEY="your-watsonx-api-key"
 export WATSONX_PROJECT_ID="your-project-id"
-export GITPILOT_WATSONX_MODEL="meta-llama/llama-3-1-70b-instruct"  # optional
+export GITPILOT_WATSONX_MODEL="meta-llama/llama-3-3-70b-instruct"  # optional
 ```
 
 #### Ollama (Local Models)

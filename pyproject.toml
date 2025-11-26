@@ -48,12 +48,14 @@ dependencies = [
   "python-dotenv>=1.1.0",
   "typer>=0.12.0",
   "pydantic>=2.7.0",
-  "crewai>=0.76.9",
+  "crewai[anthropic]>=0.76.9",  
+  "anthropic>=0.39.0",           
   "crewai-tools>=0.13.4",
   "ibm-watsonx-ai>=1.1.0",
   "langchain-ibm>=0.3.0",
   "rich>=13.0.0",
   "pyjwt[crypto]>=2.8.0",
+  "litellm>=1.80.5", 
 ]
 
 [project.urls]
