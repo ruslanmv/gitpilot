@@ -1,25 +1,27 @@
 """
-GitHub App Installation Management - OAuth-Based (No Private Keys Required)
+GitHub App Installation Management - PROPER FIX
 
-This module properly checks if the GitHub App is ACTUALLY installed on repositories.
+This checks which repositories ACTUALLY have the GitHub App installed
+by querying the user's app installations.
 """
 from __future__ import annotations
 
 import logging
 import os
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Set
 
 import httpx
 
 logger = logging.getLogger("gitpilot.github_app")
 
-# Simple in-memory cache for installation checks
-_installation_cache: Dict[str, Dict[str, Any]] = {}
+# Cache for installed repositories
+_installed_repos_cache: Dict[str, Set[str]] = {}
+_cache_timestamp: Dict[str, float] = {}
 CACHE_TTL_SECONDS = 300  # 5 minutes
 
 
 class GitHubAppConfig:
-    """Configuration for GitHub App (no private key needed)."""
+    """Configuration for GitHub App."""
     
     def __init__(self):
         self.app_id = os.getenv("GITHUB_APP_ID", "2313985")
@@ -37,41 +39,34 @@ def get_app_config() -> GitHubAppConfig:
     return GitHubAppConfig()
 
 
-async def check_app_installation(
-    owner: str, 
-    repo: str, 
-    user_token: str
-) -> bool:
+async def get_installed_repositories(user_token: str) -> Set[str]:
     """
-    Check if the GitHub App is ACTUALLY installed on a repository.
+    Get list of repositories where the GitHub App is installed.
     
-    This uses the /repos/{owner}/{repo}/installation endpoint which returns
-    the installation info if the App is installed.
+    Uses /user/installations endpoint to get all installations,
+    then fetches repositories for each installation.
     
-    Args:
-        owner: Repository owner
-        repo: Repository name
-        user_token: User's OAuth token
-        
     Returns:
-        True if App is installed, False otherwise
+        Set of repository full names (e.g., "owner/repo")
     """
-    cache_key = f"app_install:{owner}/{repo}"
+    cache_key = "installed_repos"
     
     # Check cache
-    if cache_key in _installation_cache:
-        cached = _installation_cache[cache_key]
-        import time
-        if time.time() - cached.get("timestamp", 0) < CACHE_TTL_SECONDS:
-            return cached.get("installed", False)
+    import time
+    if cache_key in _installed_repos_cache:
+        if time.time() - _cache_timestamp.get(cache_key, 0) < CACHE_TTL_SECONDS:
+            logger.debug(f"Using cached installed repositories ({len(_installed_repos_cache[cache_key])} repos)")
+            return _installed_repos_cache[cache_key]
+    
+    installed_repos: Set[str] = set()
     
     try:
         config = get_app_config()
         
         async with httpx.AsyncClient(timeout=10.0) as client:
-            # Check if the App is installed on this repo
-            response = await client.get(
-                f"https://api.github.com/repos/{owner}/{repo}/installation",
+            # Get user's app installations
+            installations_response = await client.get(
+                "https://api.github.com/user/installations",
                 headers={
                     "Authorization": f"Bearer {user_token}",
                     "Accept": "application/vnd.github+json",
@@ -79,87 +74,50 @@ async def check_app_installation(
                 },
             )
             
-            is_installed = response.status_code == 200
+            if installations_response.status_code != 200:
+                logger.warning(f"Failed to get installations: {installations_response.status_code}")
+                return installed_repos
             
-            # Cache the result
-            import time
-            _installation_cache[cache_key] = {
-                "installed": is_installed,
-                "timestamp": time.time(),
-            }
+            installations_data = installations_response.json()
+            installations = installations_data.get("installations", [])
             
-            if is_installed:
-                installation_data = response.json()
-                logger.info(f"GitHub App IS installed on {owner}/{repo} (installation_id: {installation_data.get('id')})")
-            else:
-                logger.info(f"GitHub App NOT installed on {owner}/{repo} (status: {response.status_code})")
+            logger.info(f"Found {len(installations)} app installations")
             
-            return is_installed
+            # For each installation, get the repositories
+            for installation in installations:
+                installation_id = installation.get("id")
+                
+                # Get repositories for this installation
+                repos_response = await client.get(
+                    f"https://api.github.com/user/installations/{installation_id}/repositories",
+                    headers={
+                        "Authorization": f"Bearer {user_token}",
+                        "Accept": "application/vnd.github+json",
+                        "User-Agent": "gitpilot",
+                    },
+                )
+                
+                if repos_response.status_code == 200:
+                    repos_data = repos_response.json()
+                    repositories = repos_data.get("repositories", [])
+                    
+                    for repo in repositories:
+                        full_name = repo.get("full_name")  # e.g., "owner/repo"
+                        if full_name:
+                            installed_repos.add(full_name)
+                            logger.debug(f"  ✓ App installed on: {full_name}")
+            
+            logger.info(f"GitHub App is installed on {len(installed_repos)} repositories")
+            
+            # Cache the results
+            _installed_repos_cache[cache_key] = installed_repos
+            _cache_timestamp[cache_key] = time.time()
+            
+            return installed_repos
             
     except Exception as e:
-        logger.error(f"Failed to check app installation for {owner}/{repo}: {e}")
-        return False
-
-
-async def check_user_permissions(
-    owner: str, 
-    repo: str, 
-    user_token: str
-) -> Dict[str, bool]:
-    """
-    Check the user's direct permissions on a repository.
-    
-    Args:
-        owner: Repository owner
-        repo: Repository name
-        user_token: User's OAuth token
-        
-    Returns:
-        Dict with 'has_push' and 'has_admin'
-    """
-    cache_key = f"user_perms:{owner}/{repo}"
-    
-    # Check cache
-    if cache_key in _installation_cache:
-        cached = _installation_cache[cache_key]
-        import time
-        if time.time() - cached.get("timestamp", 0) < CACHE_TTL_SECONDS:
-            return cached.get("permissions", {"has_push": False, "has_admin": False})
-    
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(
-                f"https://api.github.com/repos/{owner}/{repo}",
-                headers={
-                    "Authorization": f"Bearer {user_token}",
-                    "Accept": "application/vnd.github+json",
-                    "User-Agent": "gitpilot",
-                },
-            )
-            
-            if response.status_code == 200:
-                repo_data = response.json()
-                permissions = repo_data.get("permissions", {})
-                
-                result = {
-                    "has_push": permissions.get("push", False),
-                    "has_admin": permissions.get("admin", False),
-                }
-                
-                # Cache the result
-                import time
-                _installation_cache[cache_key] = {
-                    "permissions": result,
-                    "timestamp": time.time(),
-                }
-                
-                return result
-            else:
-                return {"has_push": False, "has_admin": False}
-                
-    except Exception as e:
-        logger.error(f"Failed to check user permissions for {owner}/{repo}: {e}")
-        return {"has_push": False, "has_admin": False}
+        logger.error(f"Error getting installed repositories: {e}")
+        return installed_repos
 
 
 async def check_repo_write_access(
@@ -170,8 +128,9 @@ async def check_repo_write_access(
     """
     Check if user has write access to a repository.
     
-    CRITICAL FIX: This now properly checks if the GitHub App is ACTUALLY installed,
-    not just if the user has personal push access.
+    PROPER FIX: Checks BOTH:
+    1. User has push permissions
+    2. GitHub App is ACTUALLY installed on this specific repository
     
     Args:
         owner: Repository owner
@@ -179,55 +138,95 @@ async def check_repo_write_access(
         user_token: User's OAuth token
         
     Returns:
-        Dict with 'can_write', 'app_installed', 'auth_type'
+        Dict with 'can_write', 'app_installed', 'auth_type', 'reason'
     """
     result = {
         "can_write": False,
         "app_installed": False,
         "auth_type": "none",
+        "reason": "No token provided",
     }
     
     if not user_token:
         return result
     
+    full_repo_name = f"{owner}/{repo}"
+    
     try:
-        # Check BOTH: user permissions AND app installation
-        user_perms = await check_user_permissions(owner, repo, user_token)
-        app_installed = await check_app_installation(owner, repo, user_token)
+        # Step 1: Check user's push permissions
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(
+                f"https://api.github.com/repos/{owner}/{repo}",
+                headers={
+                    "Authorization": f"Bearer {user_token}",
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "gitpilot",
+                },
+            )
+            
+            if response.status_code != 200:
+                result["reason"] = f"Cannot access repository (status: {response.status_code})"
+                logger.warning(f"❌ {full_repo_name}: {result['reason']}")
+                return result
+            
+            repo_data = response.json()
+            permissions = repo_data.get("permissions", {})
+            has_push = permissions.get("push", False)
         
-        # Determine access level
-        has_push = user_perms.get("has_push", False)
+        # Step 2: Check if GitHub App is installed on this repo
+        installed_repos = await get_installed_repositories(user_token)
+        app_installed = full_repo_name in installed_repos
         
+        # Step 3: Determine write access
         if app_installed:
-            # App is installed - this is the BEST case for agent operations
+            # App IS installed - agent can write!
             result["can_write"] = True
             result["app_installed"] = True
             result["auth_type"] = "github_app"
-            logger.info(f"✅ {owner}/{repo}: App installed (can_write=True)")
+            result["reason"] = "GitHub App installed with write access"
+            logger.info(f"✅ {full_repo_name}: App installed (agent can write)")
         elif has_push:
-            # User has personal push access but App NOT installed
-            # Agent operations will likely fail with "Resource not accessible by integration"
-            result["can_write"] = False  # ← CRITICAL: Set to False because agent ops will fail
-            result["app_installed"] = False
-            result["auth_type"] = "user_token_only"
-            logger.warning(f"⚠️  {owner}/{repo}: User has push but App NOT installed (agent operations will fail)")
-        else:
-            # User has no push access and App NOT installed
+            # User has push but App NOT installed - agent operations will FAIL
             result["can_write"] = False
             result["app_installed"] = False
-            result["auth_type"] = "none"
-            logger.info(f"❌ {owner}/{repo}: No push access, App not installed")
+            result["auth_type"] = "user_only"
+            result["reason"] = "User has push access but GitHub App NOT installed (install app for agent operations)"
+            logger.warning(f"⚠️  {full_repo_name}: User can push but app NOT installed - agent will get 403 errors")
+        else:
+            # User has no push and App NOT installed
+            result["can_write"] = False
+            result["app_installed"] = False
+            result["auth_type"] = "read_only"
+            result["reason"] = "No push access and GitHub App not installed"
+            logger.info(f"ℹ️  {full_repo_name}: Read-only access")
                 
     except Exception as e:
-        logger.error(f"Error checking access for {owner}/{repo}: {e}")
-        result["can_write"] = False
-        result["app_installed"] = False
-        result["auth_type"] = "error"
+        result["reason"] = f"Error checking access: {str(e)}"
+        logger.error(f"❌ Error checking {full_repo_name}: {e}")
     
     return result
 
 
 def clear_cache():
-    """Clear installation cache."""
-    _installation_cache.clear()
+    """Clear all caches."""
+    _installed_repos_cache.clear()
+    _cache_timestamp.clear()
     logger.info("Cleared installation cache")
+
+
+async def check_installation_for_repo(
+    owner: str, 
+    repo: str, 
+    user_token: str
+) -> Optional[Dict[str, Any]]:
+    """
+    Legacy function - kept for compatibility.
+    """
+    result = await check_repo_write_access(owner, repo, user_token)
+    if result["app_installed"]:
+        return {
+            "installed": True,
+            "owner": owner,
+            "repo": repo,
+        }
+    return None

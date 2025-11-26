@@ -1,20 +1,21 @@
 import React, { useState, useEffect } from "react";
 
 /**
- * Simple recursive file tree viewer
+ * Simple recursive file tree viewer with refresh support
  * Fetches tree data directly using the API.
  */
-export default function FileTree({ repo }) {
+export default function FileTree({ repo, refreshTrigger }) {
   const [tree, setTree] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [localRefresh, setLocalRefresh] = useState(0);
 
   useEffect(() => {
     if (!repo) return;
     setLoading(true);
     setError(null);
     
-    // Construct headers manually to ensure no dependency on external utils for this component
+    // Construct headers manually
     let headers = {};
     try {
       const token = localStorage.getItem("github_token");
@@ -25,7 +26,10 @@ export default function FileTree({ repo }) {
       console.warn("Unable to read github_token", e);
     }
 
-    fetch(`/api/repos/${repo.owner}/${repo.name}/tree`, { headers })
+    // Add cache busting
+    const cacheBuster = `?_t=${Date.now()}`;
+
+    fetch(`/api/repos/${repo.owner}/${repo.name}/tree${cacheBuster}`, { headers })
       .then(async (res) => {
         if (!res.ok) {
             const errData = await res.json().catch(() => ({}));
@@ -46,45 +50,136 @@ export default function FileTree({ repo }) {
         console.error("FileTree error:", err);
       })
       .finally(() => setLoading(false));
-  }, [repo]);
+  }, [repo, refreshTrigger, localRefresh]);
 
-  if (loading) {
-    return (
-      <div style={{ padding: "0 20px", color: "#666", fontSize: "13px" }}>
-        Loading files...
-      </div>
-    );
-  }
+  const handleRefresh = () => {
+    setLocalRefresh(prev => prev + 1);
+  };
 
-  if (error) {
-    return (
-      <div style={{ 
-        padding: "12px 20px", 
-        color: "#F59E0B", 
-        fontSize: "12px",
-        backgroundColor: "rgba(245, 158, 11, 0.1)",
-        border: "1px solid rgba(245, 158, 11, 0.2)",
-        borderRadius: "6px",
-        margin: "0 10px"
-      }}>
-        ⚠️ {error}
-      </div>
-    );
-  }
+  // Theme matching parent component
+  const theme = {
+    border: "#27272A",
+    textPrimary: "#EDEDED",
+    textSecondary: "#A1A1AA",
+    accent: "#D95C3D",
+    warningText: "#F59E0B",
+    warningBg: "rgba(245, 158, 11, 0.1)",
+    warningBorder: "rgba(245, 158, 11, 0.2)",
+  };
 
-  if (tree.length === 0) {
-    return (
-      <div style={{ padding: "0 20px", color: "#666", fontSize: "13px" }}>
-        No files found
-      </div>
-    );
-  }
+  const styles = {
+    header: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      padding: "8px 20px 8px 10px",
+      marginBottom: "8px",
+      borderBottom: `1px solid ${theme.border}`,
+    },
+    headerTitle: {
+      fontSize: "12px",
+      fontWeight: "600",
+      color: theme.textSecondary,
+      textTransform: "uppercase",
+      letterSpacing: "0.5px",
+    },
+    refreshButton: {
+      backgroundColor: "transparent",
+      border: `1px solid ${theme.border}`,
+      color: theme.textSecondary,
+      padding: "4px 8px",
+      borderRadius: "4px",
+      fontSize: "11px",
+      cursor: loading ? "not-allowed" : "pointer",
+      display: "flex",
+      alignItems: "center",
+      gap: "4px",
+      transition: "all 0.2s",
+      opacity: loading ? 0.5 : 1,
+    },
+    loadingText: {
+      padding: "0 20px",
+      color: theme.textSecondary,
+      fontSize: "13px",
+    },
+    errorBox: {
+      padding: "12px 20px",
+      color: theme.warningText,
+      fontSize: "12px",
+      backgroundColor: theme.warningBg,
+      border: `1px solid ${theme.warningBorder}`,
+      borderRadius: "6px",
+      margin: "0 10px",
+    },
+    emptyText: {
+      padding: "0 20px",
+      color: theme.textSecondary,
+      fontSize: "13px",
+    },
+    treeContainer: {
+      fontSize: "13px",
+      color: theme.textSecondary,
+      padding: "0 10px 20px 10px",
+    },
+  };
 
   return (
-    <div style={{ fontSize: "13px", color: "#A1A1AA", padding: "0 10px 20px 10px" }}>
-      {tree.map((node) => (
-        <TreeNode key={node.path} node={node} level={0} />
-      ))}
+    <div>
+      {/* Header with Refresh Button */}
+      <div style={styles.header}>
+        <span style={styles.headerTitle}>Files</span>
+        <button
+          type="button"
+          style={styles.refreshButton}
+          onClick={handleRefresh}
+          disabled={loading}
+          onMouseOver={(e) => {
+            if (!loading) {
+              e.currentTarget.style.backgroundColor = "rgba(255, 255, 255, 0.05)";
+            }
+          }}
+          onMouseOut={(e) => {
+            e.currentTarget.style.backgroundColor = "transparent";
+          }}
+        >
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            style={{
+              transform: loading ? "rotate(360deg)" : "rotate(0deg)",
+              transition: "transform 0.6s ease",
+            }}
+          >
+            <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+          </svg>
+          {loading ? "..." : "Refresh"}
+        </button>
+      </div>
+
+      {/* Content */}
+      {loading && (
+        <div style={styles.loadingText}>Loading files...</div>
+      )}
+
+      {!loading && error && (
+        <div style={styles.errorBox}>⚠️ {error}</div>
+      )}
+
+      {!loading && !error && tree.length === 0 && (
+        <div style={styles.emptyText}>No files found</div>
+      )}
+
+      {!loading && !error && tree.length > 0 && (
+        <div style={styles.treeContainer}>
+          {tree.map((node) => (
+            <TreeNode key={node.path} node={node} level={0} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
