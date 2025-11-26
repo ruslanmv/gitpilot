@@ -10,15 +10,21 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .version import __version__
-from .github_api import list_user_repos, get_repo_tree, get_file, put_file
+from .github_api import (
+    list_user_repos, 
+    get_repo_tree, 
+    get_file, 
+    put_file, 
+    execution_context  # Imported Context Manager
+)
 from .settings import AppSettings, get_settings, set_provider, update_settings, LLMProvider
 from .agentic import generate_plan, execute_plan, PlanResult, get_flow_definition
 from .github_oauth import (
     generate_authorization_url,
     exchange_code_for_token,
     validate_token,
-    initiate_device_flow, # NEW: Device Flow support
-    poll_device_token,    # NEW: Device Flow support
+    initiate_device_flow,
+    poll_device_token,
     AuthSession,
     GitHubUser,
 )
@@ -234,18 +240,34 @@ async def api_update_llm_settings(updates: dict):
     )
 
 
+# --- UPDATED CHAT ENDPOINTS TO USE CONTEXT ---
+
 @app.post("/api/chat/plan", response_model=PlanResult)
-async def api_chat_plan(req: ChatPlanRequest):
-    full_name = f"{req.repo_owner}/{req.repo_name}"
-    plan = await generate_plan(req.goal, full_name)
-    return plan
+async def api_chat_plan(
+    req: ChatPlanRequest,
+    authorization: Optional[str] = Header(None)
+):
+    token = get_github_token(authorization)
+    # Inject token into context so tools called deep in 'generate_plan' can use it
+    with execution_context(token):
+        full_name = f"{req.repo_owner}/{req.repo_name}"
+        # FIX: Pass token explicitly to ensure it propagates to tools in threads
+        plan = await generate_plan(req.goal, full_name, token=token)
+        return plan
 
 
 @app.post("/api/chat/execute")
-async def api_chat_execute(req: ExecutePlanRequest):
-    full_name = f"{req.repo_owner}/{req.repo_name}"
-    result = await execute_plan(req.plan, full_name)
-    return result
+async def api_chat_execute(
+    req: ExecutePlanRequest,
+    authorization: Optional[str] = Header(None)
+):
+    token = get_github_token(authorization)
+    # Inject token into context so tools called deep in 'execute_plan' can use it
+    with execution_context(token):
+        full_name = f"{req.repo_owner}/{req.repo_name}"
+        # FIX: Pass token explicitly to ensure it propagates to tools in threads
+        result = await execute_plan(req.plan, full_name, token=token)
+        return result
 
 
 @app.get("/api/flow/current")
@@ -300,7 +322,7 @@ async def api_validate_token(request: TokenValidationRequest):
     )
 
 
-# --- NEW: Device Flow Endpoints ---
+# --- Device Flow Endpoints ---
 
 @app.post("/api/auth/device/code")
 async def api_device_code():

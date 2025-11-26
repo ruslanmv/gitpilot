@@ -1,97 +1,141 @@
 import React, { useState, useEffect } from "react";
 
+/**
+ * Simple recursive file tree viewer
+ * Fetches tree data directly using the API.
+ */
 export default function FileTree({ repo }) {
-  const [files, setFiles] = useState([]);
+  const [tree, setTree] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     if (!repo) return;
-
     setLoading(true);
-    setError("");
-
-    // Auth Header: Crucial for accessing private repos
+    
+    // Construct headers manually to ensure no dependency on external utils for this component
     let headers = {};
-    const token = localStorage.getItem("github_token");
-    if (token) headers = { Authorization: `Bearer ${token}` };
+    try {
+      const token = localStorage.getItem("github_token");
+      if (token) {
+        headers = { Authorization: `Bearer ${token}` };
+      }
+    } catch (e) {
+      console.warn("Unable to read github_token", e);
+    }
 
     fetch(`/api/repos/${repo.owner}/${repo.name}/tree`, { headers })
       .then(async (res) => {
         if (!res.ok) {
-           const data = await res.json().catch(() => ({}));
-           // If 404/403, we rely on the parent component (ProjectContextPanel) to show the "Install App" card.
-           // Here we just handle the error state gracefully without crashing.
-           throw new Error(data.detail || "Could not fetch file tree");
+            const errData = await res.json().catch(() => ({}));
+            throw new Error(errData.detail || "Failed to load files");
         }
         return res.json();
       })
       .then((data) => {
-        setFiles(data.files || []);
+        if (data.files) {
+          setTree(buildTree(data.files));
+        }
       })
-      .catch((err) => {
-        console.error("FileTree Error:", err);
-        setError(err.message);
-      })
+      .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, [repo]);
 
-  // --- Styles ---
-  const styles = {
-    container: {
-      padding: "0 20px 20px 20px",
-      fontSize: "13px",
-      fontFamily: "monospace",
-      color: "#A1A1AA",
-    },
-    item: {
-      padding: "4px 0",
-      display: "flex",
-      alignItems: "center",
-      gap: "8px",
-      cursor: "default",
-    },
-    icon: {
-      opacity: 0.6,
-      width: "14px",
-      textAlign: "center"
-    },
-    loading: {
-      padding: "20px",
-      textAlign: "center",
-      color: "#52525B",
-      fontSize: "12px",
-    },
-    error: {
-        padding: "10px 20px",
-        color: "#EF4444",
-        fontSize: "12px"
-    }
-  };
-
-  if (loading) {
-    return <div style={styles.loading}>Loading file tree...</div>;
-  }
-
-  if (error) {
-    // Return empty if error, as parent handles the visual alert
-    return <div style={{...styles.loading, color: "#71717A"}}>Tree unavailable</div>;
-  }
-
-  if (files.length === 0) {
-    return <div style={styles.loading}>No files found.</div>;
-  }
+  if (loading) return <div style={{ padding: "0 20px", color: "#666", fontSize: "13px" }}>Loading files...</div>;
+  if (error) return null; // Error is handled by parent context panel usually, or just hidden here
 
   return (
-    <div style={styles.container}>
-      {files.map((file, idx) => (
-        <div key={idx} style={styles.item}>
-           <span style={styles.icon}>
-             {file.type === "tree" || file.type === "dir" ? "📁" : "📄"}
-           </span>
-           <span>{file.path}</span>
-        </div>
+    <div style={{ fontSize: "13px", color: "#A1A1AA", padding: "0 10px 20px 10px" }}>
+      {tree.map((node) => (
+        <TreeNode key={node.path} node={node} level={0} />
       ))}
     </div>
   );
+}
+
+// Recursive Node Component
+function TreeNode({ node, level }) {
+  const [expanded, setExpanded] = useState(false);
+  const isFolder = node.children && node.children.length > 0;
+  
+  const icon = isFolder ? (expanded ? "📂" : "📁") : "📄";
+
+  return (
+    <div>
+      <div 
+        onClick={() => isFolder && setExpanded(!expanded)}
+        style={{ 
+          padding: "4px 0", 
+          paddingLeft: `${level * 12}px`,
+          cursor: isFolder ? "pointer" : "default",
+          display: "flex",
+          alignItems: "center",
+          gap: "6px",
+          color: isFolder ? "#EDEDED" : "#A1A1AA",
+          whiteSpace: "nowrap"
+        }}
+      >
+        <span style={{ fontSize: "14px", opacity: 0.7 }}>{icon}</span>
+        <span>{node.name}</span>
+      </div>
+      
+      {isFolder && expanded && (
+        <div>
+          {node.children.map(child => (
+            <TreeNode key={child.path} node={child} level={level + 1} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Helper to build tree structure from flat file list
+function buildTree(files) {
+  const root = [];
+  
+  files.forEach(file => {
+    const parts = file.path.split('/');
+    let currentLevel = root;
+    let currentPath = "";
+
+    parts.forEach((part, idx) => {
+      currentPath = currentPath ? `${currentPath}/${part}` : part;
+      
+      // Check if node exists at this level
+      let existingNode = currentLevel.find(n => n.name === part);
+      
+      if (!existingNode) {
+        const newNode = {
+          name: part,
+          path: currentPath,
+          type: idx === parts.length - 1 ? file.type : 'tree',
+          children: []
+        };
+        currentLevel.push(newNode);
+        existingNode = newNode;
+      }
+      
+      if (idx < parts.length - 1) {
+        currentLevel = existingNode.children;
+      }
+    });
+  });
+
+  // Sort folders first, then files
+  const sortNodes = (nodes) => {
+    nodes.sort((a, b) => {
+      const aIsFolder = a.children.length > 0;
+      const bIsFolder = b.children.length > 0;
+      if (aIsFolder && !bIsFolder) return -1;
+      if (!aIsFolder && bIsFolder) return 1;
+      return a.name.localeCompare(b.name);
+    });
+    nodes.forEach(n => {
+      if (n.children.length > 0) sortNodes(n.children);
+    });
+  };
+
+  sortNodes(root);
+  return root;
 }

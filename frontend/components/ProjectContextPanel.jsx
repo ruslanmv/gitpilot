@@ -237,8 +237,6 @@ export default function ProjectContextPanel({ repo }) {
       ? repo.full_name.slice(0, 26) + "…"
       : repo.full_name || `${repo.owner}/${repo.name}`;
 
-  const analyzedLabel = analyzing ? "Analyzing…" : "Just now";
-
   return (
     <div style={styles.container}>
       {/* Header */}
