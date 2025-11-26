@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import contextvars
+from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -8,10 +10,33 @@ from fastapi import HTTPException
 
 GITHUB_API_BASE = "https://api.github.com"
 
+# Context variable to store the GitHub token for the current request/execution scope.
+# This allows deep functions (like tools used by agents) to access the token 
+# without passing it explicitly through every function call.
+_request_token: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("request_token", default=None)
+
+
+@contextmanager
+def execution_context(token: Optional[str]):
+    """
+    Context manager to set the GitHub token for the current execution scope.
+    Usage:
+        with execution_context(token):
+            # Code here (and functions it calls) can access the token via _github_token()
+    """
+    token_var = _request_token.set(token)
+    try:
+        yield
+    finally:
+        _request_token.reset(token_var)
+
 
 def _github_token(provided_token: Optional[str] = None) -> str:
     """
-    Get GitHub token from provided token or environment variables.
+    Get GitHub token from:
+    1. Explicit argument
+    2. Request Context (set via execution_context)
+    3. Environment variables (Fallback)
 
     Args:
         provided_token: Optional token from Authorization header
@@ -22,18 +47,23 @@ def _github_token(provided_token: Optional[str] = None) -> str:
     Raises:
         HTTPException: If no token is available
     """
-    # Prefer provided token (from OAuth or header)
+    # 1. Prefer explicitly provided token
     if provided_token:
         return provided_token
 
-    # Fallback to environment variables (for CLI/server mode)
+    # 2. Check Request Context (injected by API middleware/endpoint)
+    ctx_token = _request_token.get()
+    if ctx_token:
+        return ctx_token
+
+    # 3. Fallback to environment variables (for CLI/Server mode)
     token = os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
     if not token:
         raise HTTPException(
             status_code=401,
             detail=(
                 "GitHub authentication required. "
-                "Please log in or set GITPILOT_GITHUB_TOKEN in your environment."
+                "Please log in via the UI or set GITPILOT_GITHUB_TOKEN in your environment."
             ),
         )
     return token
@@ -64,6 +94,11 @@ async def github_request(
             msg = data.get("message") or resp.text
         except Exception:
             msg = resp.text
+        
+        # Handle 401 specifically to provide a better error for tools
+        if resp.status_code == 401:
+             msg = "GitHub Token Expired or Invalid. Please refresh your login."
+             
         raise HTTPException(status_code=resp.status_code, detail=msg)
 
     if resp.status_code == 204:
@@ -160,18 +195,7 @@ async def delete_file(
     message: str,
     token: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Delete a file from the repository.
-
-    Args:
-        owner: Repository owner
-        repo: Repository name
-        path: Path to the file to delete
-        message: Commit message for the deletion
-        token: Optional GitHub access token
-
-    Returns:
-        Dictionary with deletion details including commit info
-    """
+    """Delete a file from the repository."""
     # Get current file SHA (required for deletion)
     existing = await github_request(f"/repos/{owner}/{repo}/contents/{path}", token=token)
     sha = existing.get("sha")
