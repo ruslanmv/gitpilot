@@ -11,6 +11,7 @@ export default function ProjectContextPanel({ repo }) {
   const [branch, setBranch] = useState("main");
   const [analyzing, setAnalyzing] = useState(false);
   const [authIssue, setAuthIssue] = useState(false);
+  const [accessInfo, setAccessInfo] = useState(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0); // For manual retry
 
   // Fetch the GitHub App Installation URL on mount
@@ -23,13 +24,14 @@ export default function ProjectContextPanel({ repo }) {
       .catch((err) => console.error("Failed to fetch App URL:", err));
   }, []);
 
-  // Fetch simple repo stats whenever repo changes or user retries
+  // Fetch repo access info and stats whenever repo changes or user retries
   useEffect(() => {
     if (!repo) return;
 
     setBranch(repo.default_branch || "main");
     setAnalyzing(true);
     setAuthIssue(false);
+    setAccessInfo(null);
 
     // Attach GitHub access token if we have one (OAuth Token)
     let headers = {};
@@ -42,6 +44,27 @@ export default function ProjectContextPanel({ repo }) {
       console.warn("Unable to read github_token from localStorage:", e);
     }
 
+    // First, check repo access (write permissions)
+    fetch(`/api/auth/repo-access?owner=${repo.owner}&repo=${repo.name}`, { headers })
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        
+        if (!res.ok) {
+          console.error("Failed to check repo access:", data);
+          // Don't block on this error, continue to load tree
+        } else {
+          setAccessInfo(data);
+          // If we can't write, show auth issue
+          if (!data.can_write) {
+            setAuthIssue(true);
+          }
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to check repo access:", err);
+      });
+
+    // Then fetch file tree for stats
     fetch(`/api/repos/${repo.owner}/${repo.name}/tree`, { headers })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
@@ -92,7 +115,8 @@ export default function ProjectContextPanel({ repo }) {
     warningBg: "rgba(245, 158, 11, 0.1)",
     warningBorder: "rgba(245, 158, 11, 0.2)",
     warningText: "#F59E0B",
-    cardBg: "#18181B"
+    cardBg: "#18181B",
+    successColor: "#10B981",
   };
 
   const styles = {
@@ -171,6 +195,15 @@ export default function ProjectContextPanel({ repo }) {
       color: theme.textSecondary,
       lineHeight: "1.5",
     },
+    accessDetail: {
+      fontSize: "12px",
+      color: theme.textSecondary,
+      fontFamily: "monospace",
+      backgroundColor: "rgba(0, 0, 0, 0.2)",
+      padding: "8px",
+      borderRadius: "4px",
+      marginTop: "4px",
+    },
     buttonRow: {
         display: 'flex',
         gap: '10px',
@@ -237,6 +270,23 @@ export default function ProjectContextPanel({ repo }) {
       ? repo.full_name.slice(0, 26) + "…"
       : repo.full_name || `${repo.owner}/${repo.name}`;
 
+  // Determine status display
+  let statusText = "Checking...";
+  let statusColor = theme.textSecondary;
+  
+  if (!analyzing && accessInfo) {
+    if (accessInfo.can_write) {
+      statusText = "Write Access";
+      statusColor = theme.successColor;
+    } else {
+      statusText = "Read Only";
+      statusColor = theme.warningText;
+    }
+  } else if (!analyzing) {
+    statusText = authIssue ? "Access Needed" : "Connected";
+    statusColor = authIssue ? theme.warningText : theme.successColor;
+  }
+
   return (
     <div style={styles.container}>
       {/* Header */}
@@ -258,24 +308,31 @@ export default function ProjectContextPanel({ repo }) {
           </div>
           <div style={styles.statRow}>
             <span style={styles.label}>Status:</span>
-            <span style={{...styles.value, color: authIssue ? theme.warningText : "#10B981"}}>
-                 {authIssue ? "Access Needed" : "Connected"}
+            <span style={{...styles.value, color: statusColor}}>
+                 {statusText}
             </span>
           </div>
         </div>
 
-        {/* INSTALL ACTION CARD: Only shows if there is an issue */}
-        {authIssue && (
+        {/* INSTALL ACTION CARD: Shows when write access is needed */}
+        {authIssue && accessInfo && !accessInfo.can_write && (
           <div style={styles.installCard}>
             <div style={styles.installHeader}>
               <span>⚡</span>
-              <span>Enable Agent Access</span>
+              <span>Enable Agent Write Access</span>
             </div>
 
             <p style={styles.installText}>
-              GitPilot needs permission to access this repository. 
-              Install the GitHub App to enable agent capabilities without configuration files.
+              GitPilot can read this repository but needs write permissions to create, 
+              modify, or delete files. Install the GitHub App to enable full agent capabilities.
             </p>
+
+            {accessInfo.auth_type && (
+              <div style={styles.accessDetail}>
+                Current Auth: {accessInfo.auth_type}
+                {accessInfo.app_installed && <span> | App Installed ✓</span>}
+              </div>
+            )}
 
             <div style={styles.buttonRow}>
                 <button
@@ -293,7 +350,7 @@ export default function ProjectContextPanel({ repo }) {
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405 1.02 0 2.04.135 3 .405 2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
                 </svg>
-                Install App
+                {accessInfo.app_installed ? "Grant Access" : "Install App"}
                 </button>
                 
                 <button 
