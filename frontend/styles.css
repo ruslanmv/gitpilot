@@ -2047,3 +2047,56 @@ body {
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* Secondary primary-style button for "Load available models" */
+.settings-load-btn {
+  margin-top: 8px;
+
+  /* Make it hug the text, not full width */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: auto !important;
+  min-width: 0;
+  align-self: flex-start;
+
+  /* Size: slightly smaller than Save but same family */
+  padding: 7px 14px;
+  border-radius: 999px;
+
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+
+  border: none;
+  outline: none;
+  cursor: pointer;
+
+  /* Match Save button color palette */
+  background: #ff7a3c;
+  color: #050608;
+
+  transition:
+    background 0.2s ease,
+    box-shadow 0.2s ease,
+    transform 0.15s ease,
+    opacity 0.2s ease;
+}
+
+.settings-load-btn:hover {
+  background: #ff8b52;
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgba(255, 122, 60, 0.28);
+}
+
+.settings-load-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 4px rgba(255, 122, 60, 0.25);
+}
+
+.settings-load-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
