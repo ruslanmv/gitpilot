@@ -28,6 +28,10 @@ from .github_oauth import (
     AuthSession,
     GitHubUser,
 )
+import os  # if not already imported
+import requests  # if not already imported
+from .model_catalog import list_models_for_provider
+
 
 app = FastAPI(
     title="GitPilot API",
@@ -101,6 +105,11 @@ class SettingsResponse(BaseModel):
     ollama: dict
     langflow_url: str
     has_langflow_plan_flow: bool
+
+class ProviderModelsResponse(BaseModel):
+    provider: LLMProvider
+    models: List[str] = Field(default_factory=list)
+    error: Optional[str] = None
 
 
 class ProviderUpdate(BaseModel):
@@ -213,6 +222,25 @@ async def api_get_settings():
         langflow_url=s.langflow_url,
         has_langflow_plan_flow=bool(s.langflow_plan_flow_id),
     )
+
+@app.get("/api/settings/models", response_model=ProviderModelsResponse)
+async def api_list_models(provider: Optional[LLMProvider] = Query(None)):
+    """
+    Return the list of LLM models available for a provider.
+
+    If 'provider' is not given, use the currently active provider from settings.
+    """
+    s: AppSettings = get_settings()
+    effective_provider = provider or s.provider
+
+    models, error = list_models_for_provider(effective_provider, s)
+
+    return ProviderModelsResponse(
+        provider=effective_provider,
+        models=models,
+        error=error,
+    )
+
 
 
 @app.post("/api/settings/provider", response_model=SettingsResponse)

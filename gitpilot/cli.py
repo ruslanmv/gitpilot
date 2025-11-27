@@ -15,6 +15,8 @@ from rich.table import Table
 
 from .version import __version__
 from .settings import get_settings, LLMProvider
+from .model_catalog import list_models_for_provider
+
 
 cli = typer.Typer(add_completion=False, help="GitPilot - Agentic AI assistant for GitHub")
 console = Console()
@@ -271,3 +273,52 @@ def serve_only():
     except KeyboardInterrupt:
         console.print("\n[yellow]Shutting down...[/yellow]")
         sys.exit(0)
+@cli.command("list-models")
+def list_models_cmd(
+    provider: str = typer.Option(
+        None,
+        "--provider",
+        "-p",
+        help="LLM provider (openai, claude, watsonx, ollama). Defaults to active provider.",
+    )
+):
+    """List LLM models available for the configured provider."""
+    settings = get_settings()
+
+    if provider is None:
+        target = settings.provider
+    else:
+        # Normalize to enum
+        try:
+            target = LLMProvider(provider)
+        except ValueError:
+            console.print(f"[red]Unknown provider:[/red] {provider}")
+            raise typer.Exit(code=1)
+
+    models, error = list_models_for_provider(target, settings)
+
+    console.print()
+    console.print(
+        Panel.fit(
+            f"[bold cyan]Models for provider[/bold cyan] [white]{target.value}[/white]",
+            border_style="cyan",
+        )
+    )
+
+    if error:
+        console.print(f"[yellow]Warning:[/yellow] {error}")
+
+    if not models:
+        console.print("No models found.")
+        return
+
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("#", style="dim", justify="right")
+    table.add_column("Model ID", style="white")
+
+    for i, m in enumerate(models, start=1):
+        table.add_row(str(i), m)
+
+    console.print(table)
+    console.print()
+

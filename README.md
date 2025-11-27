@@ -607,6 +607,9 @@ make publish
 ### Example: File Creation
 ![](assets/2025-11-16-01-01-40.png)
 
+### Example multiple operations
+![](assets/2025-11-27-00-25-53.png)
+
 ---
 
 ## 🤝 Contributing
