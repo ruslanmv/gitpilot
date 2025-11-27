@@ -10,13 +10,15 @@ from pydantic import BaseModel, Field
 
 from .version import __version__
 from .github_api import (
-    list_user_repos, 
+    list_user_repos,
+    list_user_repos_paginated,  # NEW: Pagination support
+    search_user_repos,  # NEW: Search across all repos
     get_repo_tree, 
     get_file, 
     put_file, 
-    execution_context  # Imported Context Manager
+    execution_context
 )
-from .github_app import check_repo_write_access  # NEW: GitHub App integration
+from .github_app import check_repo_write_access
 from .settings import AppSettings, get_settings, set_provider, update_settings, LLMProvider
 from .agentic import generate_plan, execute_plan, PlanResult, get_flow_definition
 from .github_oauth import (
@@ -28,8 +30,7 @@ from .github_oauth import (
     AuthSession,
     GitHubUser,
 )
-import os  # if not already imported
-import requests  # if not already imported
+import os
 from .model_catalog import list_models_for_provider
 
 
@@ -52,7 +53,6 @@ def get_github_token(authorization: Optional[str] = Header(None)) -> Optional[st
     if not authorization:
         return None
 
-    # Remove "Bearer " or "token " prefix if present
     if authorization.startswith("Bearer "):
         return authorization[7:]
     elif authorization.startswith("token "):
@@ -67,6 +67,16 @@ class RepoSummary(BaseModel):
     full_name: str
     private: bool
     owner: str
+
+
+class PaginatedReposResponse(BaseModel):
+    """Response model for paginated repository listing."""
+    repositories: List[RepoSummary]
+    page: int
+    per_page: int
+    total_count: Optional[int] = None
+    has_more: bool
+    query: Optional[str] = None
 
 
 class FileEntry(BaseModel):
@@ -105,6 +115,7 @@ class SettingsResponse(BaseModel):
     ollama: dict
     langflow_url: str
     has_langflow_plan_flow: bool
+
 
 class ProviderModelsResponse(BaseModel):
     provider: LLMProvider
@@ -153,23 +164,163 @@ class RepoAccessResponse(BaseModel):
     auth_type: str
 
 
-@app.get("/api/repos", response_model=List[RepoSummary])
+# ============================================================================
+# Repository Endpoints - Enterprise Grade with Pagination & Search
+# ============================================================================
+
+
+@app.get("/api/repos", response_model=PaginatedReposResponse)
 async def api_list_repos(
-    query: Optional[str] = Query(None),
+    query: Optional[str] = Query(None, description="Search query (searches across ALL repositories)"),
+    page: int = Query(1, ge=1, description="Page number (starts at 1)"),
+    per_page: int = Query(100, ge=1, le=100, description="Results per page (max 100)"),
     authorization: Optional[str] = Header(None),
 ):
+    """
+    List user repositories with enterprise-grade pagination and search.
+    
+    **Features:**
+    - Pagination: Load repositories in chunks (100 per page)
+    - Global Search: Query parameter searches across ALL user repositories
+    - Includes: owned, collaborator, and organization member repos
+    
+    **Search Behavior:**
+    - Without query: Returns paginated list of all repos (sorted by last updated)
+    - With query: Searches ALL repositories and returns paginated filtered results
+    
+    **Example Usage:**
+    - List first 100 repos: GET /api/repos?page=1&per_page=100
+    - Load next 100: GET /api/repos?page=2&per_page=100
+    - Search all repos: GET /api/repos?query=python (searches ALL 450 repos)
+    - Search + paginate: GET /api/repos?query=python&page=2&per_page=100
+    """
     token = get_github_token(authorization)
-    data = await list_user_repos(query=query, token=token)
-    return [
-        RepoSummary(
-            id=r["id"],
-            name=r["name"],
-            full_name=r["full_name"],
-            private=r["private"],
-            owner=r["owner"],
+    
+    try:
+        if query:
+            # SEARCH MODE: Search across ALL repositories
+            # This fetches all repos and filters them, then returns paginated results
+            result = await search_user_repos(
+                query=query,
+                page=page,
+                per_page=per_page,
+                token=token
+            )
+        else:
+            # PAGINATION MODE: Return repos page by page
+            result = await list_user_repos_paginated(
+                page=page,
+                per_page=per_page,
+                token=token
+            )
+        
+        # Convert to response model
+        repos = [
+            RepoSummary(
+                id=r["id"],
+                name=r["name"],
+                full_name=r["full_name"],
+                private=r["private"],
+                owner=r["owner"],
+            )
+            for r in result["repositories"]
+        ]
+        
+        return PaginatedReposResponse(
+            repositories=repos,
+            page=result["page"],
+            per_page=result["per_page"],
+            total_count=result.get("total_count"),
+            has_more=result["has_more"],
+            query=query,
         )
-        for r in data
-    ]
+        
+    except Exception as e:
+        # Log error and return friendly message
+        import logging
+        logging.exception("Error fetching repositories")
+        return JSONResponse(
+            content={
+                "error": f"Failed to fetch repositories: {str(e)}",
+                "repositories": [],
+                "page": page,
+                "per_page": per_page,
+                "has_more": False,
+            },
+            status_code=500
+        )
+
+
+@app.get("/api/repos/all")
+async def api_list_all_repos(
+    query: Optional[str] = Query(None, description="Search query"),
+    authorization: Optional[str] = Header(None),
+):
+    """
+    Fetch ALL user repositories at once (no pagination).
+    
+    **Warning:** This endpoint fetches all pages from GitHub API.
+    - May take 5-10 seconds for users with 450+ repos
+    - Makes multiple API calls (up to 15 requests)
+    - Use /api/repos with pagination for better UX
+    
+    **Recommended:** Use the paginated /api/repos endpoint instead.
+    """
+    token = get_github_token(authorization)
+    
+    try:
+        # Fetch all repositories (this will make multiple API calls)
+        all_repos = []
+        page = 1
+        max_pages = 15  # Safety limit: 1500 repos max (15 * 100)
+        
+        while page <= max_pages:
+            result = await list_user_repos_paginated(
+                page=page,
+                per_page=100,
+                token=token
+            )
+            
+            all_repos.extend(result["repositories"])
+            
+            if not result["has_more"]:
+                break
+            
+            page += 1
+        
+        # Filter by query if provided
+        if query:
+            query_lower = query.lower()
+            all_repos = [
+                r for r in all_repos
+                if query_lower in r["name"].lower() or query_lower in r["full_name"].lower()
+            ]
+        
+        # Convert to response model
+        repos = [
+            RepoSummary(
+                id=r["id"],
+                name=r["name"],
+                full_name=r["full_name"],
+                private=r["private"],
+                owner=r["owner"],
+            )
+            for r in all_repos
+        ]
+        
+        return {
+            "repositories": repos,
+            "total_count": len(repos),
+            "query": query,
+        }
+        
+    except Exception as e:
+        import logging
+        logging.exception("Error fetching all repositories")
+        return JSONResponse(
+            content={"error": f"Failed to fetch repositories: {str(e)}"},
+            status_code=500
+        )
 
 
 @app.get("/api/repos/{owner}/{repo}/tree", response_model=FileTreeResponse)
@@ -209,6 +360,11 @@ async def api_put_file(
     return CommitResponse(**result)
 
 
+# ============================================================================
+# Settings Endpoints
+# ============================================================================
+
+
 @app.get("/api/settings", response_model=SettingsResponse)
 async def api_get_settings():
     s: AppSettings = get_settings()
@@ -222,6 +378,7 @@ async def api_get_settings():
         langflow_url=s.langflow_url,
         has_langflow_plan_flow=bool(s.langflow_plan_flow_id),
     )
+
 
 @app.get("/api/settings/models", response_model=ProviderModelsResponse)
 async def api_list_models(provider: Optional[LLMProvider] = Query(None)):
@@ -240,7 +397,6 @@ async def api_list_models(provider: Optional[LLMProvider] = Query(None)):
         models=models,
         error=error,
     )
-
 
 
 @app.post("/api/settings/provider", response_model=SettingsResponse)
@@ -274,7 +430,10 @@ async def api_update_llm_settings(updates: dict):
     )
 
 
-# --- UPDATED CHAT ENDPOINTS TO USE CONTEXT ---
+# ============================================================================
+# Chat Endpoints
+# ============================================================================
+
 
 @app.post("/api/chat/plan", response_model=PlanResult)
 async def api_chat_plan(
@@ -282,10 +441,8 @@ async def api_chat_plan(
     authorization: Optional[str] = Header(None)
 ):
     token = get_github_token(authorization)
-    # Inject token into context so tools called deep in 'generate_plan' can use it
     with execution_context(token):
         full_name = f"{req.repo_owner}/{req.repo_name}"
-        # FIX: Pass token explicitly to ensure it propagates to tools in threads
         plan = await generate_plan(req.goal, full_name, token=token)
         return plan
 
@@ -296,10 +453,8 @@ async def api_chat_execute(
     authorization: Optional[str] = Header(None)
 ):
     token = get_github_token(authorization)
-    # Inject token into context so tools called deep in 'execute_plan' can use it
     with execution_context(token):
         full_name = f"{req.repo_owner}/{req.repo_name}"
-        # FIX: Pass token explicitly to ensure it propagates to tools in threads
         result = await execute_plan(req.plan, full_name, token=token)
         return result
 
@@ -356,8 +511,6 @@ async def api_validate_token(request: TokenValidationRequest):
     )
 
 
-# --- Device Flow Endpoints ---
-
 @app.post("/api/auth/device/code")
 async def api_device_code():
     """
@@ -366,7 +519,7 @@ async def api_device_code():
     """
     try:
         data = await initiate_device_flow()
-        return data  # Returns { device_code, user_code, verification_uri, interval, ... }
+        return data
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
@@ -383,9 +536,8 @@ async def api_device_poll(payload: dict):
     try:
         session = await poll_device_token(device_code)
         if session:
-            return session # Success!
+            return session
         
-        # 202 Accepted indicates "Pending - Keep Polling"
         return JSONResponse({"status": "pending"}, status_code=202)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
@@ -397,15 +549,13 @@ async def api_auth_status():
     Smart check: Do we have a secret (Web Flow) or just ID (Device Flow)?
     This tells the frontend which UI to render.
     """
-    import os
     has_secret = bool(os.getenv("GITHUB_CLIENT_SECRET"))
-    # Default Client ID is provided for convenience if environment var is missing
     has_id = bool(os.getenv("GITHUB_CLIENT_ID", "Iv23litmRp80Z6wmlyRn"))
     
     return {
         "mode": "web" if has_secret else "device", 
         "configured": has_id,
-        "oauth_configured": has_secret, # Legacy compat
+        "oauth_configured": has_secret,
         "pat_configured": bool(os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")),
     }
 
@@ -413,7 +563,6 @@ async def api_auth_status():
 @app.get("/api/auth/app-url")
 async def api_get_app_url():
     """Get GitHub App installation URL."""
-    import os
     app_slug = os.getenv("GITHUB_APP_SLUG", "gitpilota")
     app_url = f"https://github.com/apps/{app_slug}"
     return {
@@ -425,7 +574,6 @@ async def api_get_app_url():
 @app.get("/api/auth/installation-status")
 async def api_check_installation_status():
     """Check if GitHub App is installed for the current user."""
-    import os
     pat_token = os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
 
     if pat_token:
@@ -453,7 +601,6 @@ async def api_check_installation_status():
     }
 
 
-# NEW: Repository write access check endpoint
 @app.get("/api/auth/repo-access", response_model=RepoAccessResponse)
 async def api_check_repo_access(
     owner: str = Query(...),
@@ -483,13 +630,12 @@ async def api_check_repo_access(
 STATIC_DIR = Path(__file__).resolve().parent / "web"
 ASSETS_DIR = STATIC_DIR / "assets"
 
-# 1. Mount assets explicitly (Fixes React/Vite loading issues)
 if ASSETS_DIR.exists():
     app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
 
-# 2. Mount static folder generic
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
 
 @app.get("/", include_in_schema=False)
 async def index():
@@ -502,8 +648,7 @@ async def index():
         status_code=500,
     )
 
-# 3. Catch-All Route for SPA Routing (Must be last)
-# This allows paths like /login or /workspace to work on refresh
+
 @app.get("/{full_path:path}", include_in_schema=False)
 async def catch_all_spa_routes(full_path: str):
     """
