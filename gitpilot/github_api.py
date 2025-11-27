@@ -10,9 +10,7 @@ from fastapi import HTTPException
 
 GITHUB_API_BASE = "https://api.github.com"
 
-# Context variable to store the GitHub token for the current request/execution scope.
-# This allows deep functions (like tools used by agents) to access the token 
-# without passing it explicitly through every function call.
+# Context variable to store the GitHub token for the current request/execution scope
 _request_token: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("request_token", default=None)
 
 
@@ -22,7 +20,7 @@ def execution_context(token: Optional[str]):
     Context manager to set the GitHub token for the current execution scope.
     Usage:
         with execution_context(token):
-            # Code here (and functions it calls) can access the token via _github_token()
+            # Code here can access the token via _github_token()
     """
     token_var = _request_token.set(token)
     try:
@@ -47,16 +45,13 @@ def _github_token(provided_token: Optional[str] = None) -> str:
     Raises:
         HTTPException: If no token is available
     """
-    # 1. Prefer explicitly provided token
     if provided_token:
         return provided_token
 
-    # 2. Check Request Context (injected by API middleware/endpoint)
     ctx_token = _request_token.get()
     if ctx_token:
         return ctx_token
 
-    # 3. Fallback to environment variables (for CLI/Server mode)
     token = os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
     if not token:
         raise HTTPException(
@@ -95,7 +90,6 @@ async def github_request(
         except Exception:
             msg = resp.text
         
-        # Handle 401 specifically to provide a better error for tools
         if resp.status_code == 401:
              msg = "GitHub Token Expired or Invalid. Please refresh your login."
              
@@ -107,9 +101,15 @@ async def github_request(
 
 
 async def list_user_repos(query: str | None = None, token: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Legacy function - fetches first 100 repos.
+    Use list_user_repos_paginated() for pagination support.
+    """
     params = {
         "per_page": 100,
         "affiliation": "owner,collaborator,organization_member",
+        "sort": "updated",
+        "direction": "desc",
     }
     data = await github_request("/user/repos", params=params, token=token)
     repos = [
@@ -127,6 +127,142 @@ async def list_user_repos(query: str | None = None, token: Optional[str] = None)
         q = query.lower()
         repos = [r for r in repos if q in r["full_name"].lower()]
     return repos
+
+
+async def list_user_repos_paginated(
+    page: int = 1,
+    per_page: int = 100,
+    token: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Fetch user repositories with pagination support.
+    
+    Returns:
+        {
+            "repositories": [...],
+            "page": int,
+            "per_page": int,
+            "has_more": bool,
+        }
+    """
+    params = {
+        "page": page,
+        "per_page": min(per_page, 100),  # GitHub max is 100
+        "affiliation": "owner,collaborator,organization_member",
+        "sort": "updated",
+        "direction": "desc",
+    }
+    
+    # Make request and get response with headers
+    github_token = _github_token(token)
+    headers = {
+        "Authorization": f"Bearer {github_token}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "gitpilot",
+    }
+    
+    async with httpx.AsyncClient(base_url=GITHUB_API_BASE, headers=headers) as client:
+        resp = await client.get("/user/repos", params=params)
+    
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    
+    data = resp.json()
+    
+    repos = [
+        {
+            "id": r["id"],
+            "name": r["name"],
+            "full_name": r["full_name"],
+            "private": r["private"],
+            "owner": r["owner"]["login"],
+        }
+        for r in data
+    ]
+    
+    # Check Link header for pagination
+    link_header = resp.headers.get("Link", "")
+    has_more = 'rel="next"' in link_header
+    
+    return {
+        "repositories": repos,
+        "page": page,
+        "per_page": per_page,
+        "has_more": has_more,
+    }
+
+
+async def search_user_repos(
+    query: str,
+    page: int = 1,
+    per_page: int = 100,
+    token: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Search across ALL user repositories, then return paginated results.
+    
+    This function:
+    1. Fetches ALL repositories (may make multiple API calls)
+    2. Filters them by the search query
+    3. Returns a paginated subset of filtered results
+    
+    Args:
+        query: Search string (searches in repo name and full_name)
+        page: Page number for results
+        per_page: Results per page
+        token: GitHub token
+    
+    Returns:
+        {
+            "repositories": [...],  # Paginated filtered results
+            "page": int,
+            "per_page": int,
+            "total_count": int,    # Total matching repos
+            "has_more": bool,       # More pages available
+        }
+    """
+    # Fetch ALL repositories (across all pages)
+    all_repos = []
+    fetch_page = 1
+    max_pages = 15  # Safety limit: max 1500 repos
+    
+    while fetch_page <= max_pages:
+        result = await list_user_repos_paginated(
+            page=fetch_page,
+            per_page=100,
+            token=token
+        )
+        
+        all_repos.extend(result["repositories"])
+        
+        if not result["has_more"]:
+            break
+        
+        fetch_page += 1
+    
+    # Filter repositories by query
+    query_lower = query.lower()
+    filtered_repos = [
+        r for r in all_repos
+        if query_lower in r["name"].lower() or query_lower in r["full_name"].lower()
+    ]
+    
+    total_count = len(filtered_repos)
+    
+    # Calculate pagination for filtered results
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    
+    paginated_repos = filtered_repos[start_idx:end_idx]
+    has_more = end_idx < total_count
+    
+    return {
+        "repositories": paginated_repos,
+        "page": page,
+        "per_page": per_page,
+        "total_count": total_count,
+        "has_more": has_more,
+    }
 
 
 async def get_repo_tree(owner: str, repo: str, token: Optional[str] = None) -> list[dict[str, str]]:
@@ -180,7 +316,6 @@ async def put_file(
     if sha:
         body["sha"] = sha
 
-    # Use user token - it has write access if app is installed
     result = await github_request(
         f"/repos/{owner}/{repo}/contents/{path}",
         method="PUT",
@@ -208,7 +343,6 @@ async def delete_file(
     Uses the user's OAuth token. If the user doesn't have write access,
     they need to install the GitPilot GitHub App on the repository.
     """
-    # Get current file SHA (required for deletion)
     existing = await github_request(f"/repos/{owner}/{repo}/contents/{path}", token=token)
     sha = existing.get("sha")
 
@@ -218,7 +352,6 @@ async def delete_file(
             detail=f"File {path} not found or has no SHA"
         )
 
-    # Delete the file
     body = {
         "message": message,
         "sha": sha,
