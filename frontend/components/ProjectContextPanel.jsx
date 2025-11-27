@@ -1,9 +1,16 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import FileTree from "./FileTree.jsx";
 
 /**
  * GitPilot - Project Context Panel
- * WORKING VERSION: Shows correct status and includes refresh functionality
+ * FIXED VERSION: Automatically retries app detection to fix stale cache issue
+ * 
+ * BUG FIX: When GitHub App is installed, the backend sometimes returns stale cache
+ * showing "can_write: true" but "app_installed: false". This component now:
+ * 1. Detects this condition
+ * 2. Automatically retries after 1 second
+ * 3. Shows "Verifying..." status during retry
+ * 4. Only shows install card if truly no write access
  */
 export default function ProjectContextPanel({ repo }) {
   const [appUrl, setAppUrl] = useState("");
@@ -13,6 +20,10 @@ export default function ProjectContextPanel({ repo }) {
   const [accessInfo, setAccessInfo] = useState(null);
   const [treeError, setTreeError] = useState(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [retryCount, setRetryCount] = useState(0);
+  
+  // Use ref to track retry timeout
+  const retryTimeoutRef = useRef(null);
 
   // Fetch the GitHub App Installation URL on mount
   useEffect(() => {
@@ -32,6 +43,12 @@ export default function ProjectContextPanel({ repo }) {
     setAnalyzing(true);
     setAccessInfo(null);
     setTreeError(null);
+    
+    // Clear any pending retries when repo changes
+    if (retryTimeoutRef.current) {
+      clearTimeout(retryTimeoutRef.current);
+      retryTimeoutRef.current = null;
+    }
 
     // Get GitHub token from localStorage
     let headers = {};
@@ -44,11 +61,14 @@ export default function ProjectContextPanel({ repo }) {
       console.warn("Unable to read github_token from localStorage:", e);
     }
 
-    // Add cache busting parameter when user clicks refresh
-    const cacheBuster = refreshTrigger > 0 ? `&_t=${Date.now()}` : '';
+    // Add cache busting parameter
+    const cacheBuster = `&_t=${Date.now()}&retry=${retryCount}`;
 
-    // Check repo access
-    fetch(`/api/auth/repo-access?owner=${repo.owner}&repo=${repo.name}${cacheBuster}`, { headers })
+    // Check repo access with automatic retry logic
+    fetch(`/api/auth/repo-access?owner=${repo.owner}&repo=${repo.name}${cacheBuster}`, { 
+      headers,
+      cache: 'no-cache' // Force fresh request, bypass browser cache
+    })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
         
@@ -60,8 +80,24 @@ export default function ProjectContextPanel({ repo }) {
             auth_type: "none"
           });
         } else {
+          console.log(`✓ Access check (attempt ${retryCount + 1}):`, {
+            can_write: data.can_write,
+            app_installed: data.app_installed,
+            auth_type: data.auth_type
+          });
+          
           setAccessInfo(data);
-          console.log("Access info:", data);
+          
+          // AUTOMATIC RETRY LOGIC for stale cache bug
+          // If backend says "can push but app not installed", this is likely stale cache
+          // Automatically retry once after 1 second
+          if (data.can_write && !data.app_installed && retryCount === 0) {
+            console.warn("⚠️ Detected potential stale cache - auto-retry in 1s...");
+            retryTimeoutRef.current = setTimeout(() => {
+              console.log("↻ Retrying access check...");
+              setRetryCount(1);
+            }, 1000);
+          }
         }
       })
       .catch((err) => {
@@ -74,7 +110,10 @@ export default function ProjectContextPanel({ repo }) {
       });
 
     // Fetch file tree for stats
-    fetch(`/api/repos/${repo.owner}/${repo.name}/tree${cacheBuster ? '?' + cacheBuster.slice(1) : ''}`, { headers })
+    fetch(`/api/repos/${repo.owner}/${repo.name}/tree?_t=${Date.now()}`, { 
+      headers,
+      cache: 'no-cache'
+    })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
 
@@ -91,7 +130,15 @@ export default function ProjectContextPanel({ repo }) {
         setTreeError(err.message);
       })
       .finally(() => setAnalyzing(false));
-  }, [repo?.owner, repo?.name, repo?.default_branch, refreshTrigger]);
+      
+    // Cleanup function - cancel any pending retry
+    return () => {
+      if (retryTimeoutRef.current) {
+        clearTimeout(retryTimeoutRef.current);
+        retryTimeoutRef.current = null;
+      }
+    };
+  }, [repo?.owner, repo?.name, repo?.default_branch, refreshTrigger, retryCount]);
 
   const handleInstallClick = () => {
     if (!appUrl) return;
@@ -104,6 +151,7 @@ export default function ProjectContextPanel({ repo }) {
 
   const handleRefresh = () => {
     setAnalyzing(true);
+    setRetryCount(0); // Reset retry count on manual refresh
     setRefreshTrigger(prev => prev + 1);
   };
 
@@ -173,7 +221,6 @@ export default function ProjectContextPanel({ repo }) {
     label: { color: theme.textSecondary },
     value: { color: theme.textPrimary, fontWeight: "500" },
     
-    // Refresh button style
     refreshButton: {
       marginTop: "8px",
       height: "32px",
@@ -192,7 +239,6 @@ export default function ProjectContextPanel({ repo }) {
       transition: "all 0.2s",
     },
     
-    // Install Link (Subtle)
     installLink: {
       marginTop: "4px",
       fontSize: "12px",
@@ -205,7 +251,6 @@ export default function ProjectContextPanel({ repo }) {
       transition: "opacity 0.2s",
     },
     
-    // Enterprise Install Card
     installCard: {
       marginTop: "8px",
       padding: "16px",
@@ -251,20 +296,6 @@ export default function ProjectContextPanel({ repo }) {
       opacity: appUrl ? 1 : 0.6,
       transition: "background 0.2s ease",
     },
-    retryButton: {
-      height: "36px",
-      padding: "0 12px",
-      backgroundColor: "transparent",
-      color: theme.textSecondary,
-      border: `1px solid ${theme.border}`,
-      borderRadius: "6px",
-      fontSize: "13px",
-      fontWeight: "500",
-      cursor: "pointer",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-    },
     treeWrapper: {
       marginTop: "8px",
       paddingTop: "8px",
@@ -304,7 +335,7 @@ export default function ProjectContextPanel({ repo }) {
       ? repo.full_name.slice(0, 26) + "…"
       : repo.full_name || `${repo.owner}/${repo.name}`;
 
-  // Determine status - SIMPLIFIED: Just check app_installed
+  // IMPROVED STATUS LOGIC - handles retry and stale cache
   let statusText = "Checking...";
   let statusColor = theme.textSecondary;
   let showInstallCard = false;
@@ -312,13 +343,27 @@ export default function ProjectContextPanel({ repo }) {
   
   if (!analyzing && accessInfo) {
     if (accessInfo.app_installed) {
-      // App installed (user has push access)
+      // ✓ App confirmed installed
       statusText = "Write Access ✓";
       statusColor = theme.successColor;
       showInstallCard = false;
       showInstallLink = false;
+    } else if (accessInfo.can_write && retryCount === 0) {
+      // Edge case: Has push but app not detected yet
+      // This happens due to GitHub API cache - we'll auto-retry
+      statusText = "Verifying...";
+      statusColor = theme.textSecondary;
+      showInstallCard = false; // Don't show install card during verification
+      showInstallLink = false;
+    } else if (accessInfo.can_write && retryCount > 0) {
+      // After retry, still no app detected but has push
+      // This is rare but possible (user has direct push without app)
+      statusText = "Push Access";
+      statusColor = theme.warningText;
+      showInstallCard = true; // Show card to install app for agent features
+      showInstallLink = true;
     } else {
-      // No push access - show install prompt
+      // No write access at all
       statusText = "Read Only";
       statusColor = theme.warningText;
       showInstallCard = true;
@@ -352,7 +397,7 @@ export default function ProjectContextPanel({ repo }) {
             </span>
           </div>
           
-          {/* Refresh Button - Always visible */}
+          {/* Refresh Button */}
           <button
             type="button"
             style={styles.refreshButton}
@@ -406,7 +451,7 @@ export default function ProjectContextPanel({ repo }) {
           )}
         </div>
 
-        {/* INSTALL ACTION CARD: Shows when app not installed */}
+        {/* Install Card - only shows when truly needed */}
         {showInstallCard && (
           <div style={styles.installCard}>
             <div style={styles.installHeader}>
@@ -442,7 +487,7 @@ export default function ProjectContextPanel({ repo }) {
         )}
       </div>
 
-      {/* File Tree - Always show */}
+      {/* File Tree */}
       <div style={styles.treeWrapper}>
         {treeError ? (
           <div style={styles.errorState}>
