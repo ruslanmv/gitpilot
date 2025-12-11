@@ -1,0 +1,47 @@
+{
+  "version": 2,
+  "name": "gitpilot",
+  "builds": [
+    {
+      "src": "api/index.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "api/index.py"
+    },
+    {
+      "src": "/assets/(.*)",
+      "dest": "api/index.py"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "api/index.py"
+    }
+  ],
+  "functions": {
+    "api/index.py": {
+      "runtime": "python3.12",
+      "maxDuration": 60,
+      "memory": 1024
+    }
+  },
+  "env": {
+    "GITPILOT_VERCEL_DEPLOYMENT": "true"
+  },
+  "excludeFiles": [
+    "tests/**",
+    "docs/**",
+    "frontend/**",
+    "assets/**",
+    ".git/**",
+    ".github/**",
+    "*.md",
+    "Makefile",
+    ".env.template",
+    ".pypirc.template",
+    "MANIFEST.in"
+  ]
+}

@@ -60,7 +60,11 @@ class AppSettings(BaseModel):
 
     @classmethod
     def from_disk(cls) -> "AppSettings":
-        """Load settings from disk and merge with environment variables."""
+        """Load settings from disk and merge with environment variables.
+
+        On Vercel or serverless environments, relies entirely on environment variables
+        since the filesystem is ephemeral.
+        """
         # Start with defaults or saved settings
         if CONFIG_FILE.exists():
             import json
@@ -122,6 +126,16 @@ class AppSettings(BaseModel):
         return settings
 
     def save(self) -> None:
+        """Save settings to disk. Skipped on Vercel (ephemeral filesystem)."""
+        # Skip saving on Vercel - filesystem is ephemeral
+        if os.getenv("GITPILOT_VERCEL_DEPLOYMENT") or os.getenv("VERCEL"):
+            import logging
+            logging.warning(
+                "Settings persistence disabled on Vercel. "
+                "Use environment variables for configuration."
+            )
+            return
+
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         CONFIG_FILE.write_text(self.model_dump_json(indent=2), "utf-8")
 
