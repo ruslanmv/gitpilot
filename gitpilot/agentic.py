@@ -307,16 +307,57 @@ async def generate_plan(goal: str, repo_full_name: str, token: str | None = None
     return result
 
 
-async def execute_plan(plan: PlanResult, repo_full_name: str, token: str | None = None) -> dict:
+async def execute_plan(
+    plan: PlanResult,
+    repo_full_name: str,
+    token: str | None = None,
+    branch_name: str | None = None,
+) -> dict:
     """Execute the approved plan by applying changes to the GitHub repository.
 
-    Returns an execution log with details about each step.
+    All changes are committed to a feature branch (not the default branch).
+    This allows for safe review and manual PR creation by the user.
+
+    Args:
+        plan: The execution plan to apply
+        repo_full_name: Repository in format "owner/repo"
+        token: GitHub authentication token
+        branch_name: Optional branch name. If not provided, auto-generated from goal.
+
+    Returns an execution log with details about each step, including the branch name.
     """
-    from .github_api import get_file, put_file
+    from .github_api import get_file, put_file, create_branch, get_repo
+    import re
+    import time
 
     owner, repo = repo_full_name.split("/")
     execution_steps: list[dict] = []
     llm = build_llm()
+
+    # 1. Decide branch name (auto-generate if not provided)
+    if branch_name is None:
+        # Create a deterministic, clean branch name from the goal
+        # Format: gitpilot-<sanitized-goal>-<timestamp>
+        sanitized = re.sub(r'[^a-z0-9-]+', '-', plan.goal.lower())
+        sanitized = sanitized[:40].strip('-')
+        timestamp = str(int(time.time()))[-6:]  # Last 6 digits of timestamp
+        branch_name = f"gitpilot-{sanitized}-{timestamp}"
+
+    # 2. Create the feature branch from the default branch
+    try:
+        logger.info("[GitPilot] Creating feature branch: %s", branch_name)
+        await create_branch(owner, repo, branch_name, from_ref="HEAD", token=token)
+        logger.info("[GitPilot] Branch created successfully: %s", branch_name)
+        branch_created = True
+    except HTTPException as e:
+        # If branch already exists, we can either reuse it or fail
+        # For now, let's try to continue with the existing branch
+        logger.warning(
+            "[GitPilot] Branch %s already exists or creation failed: %s. Attempting to use existing branch.",
+            branch_name,
+            e.detail,
+        )
+        branch_created = False
 
     # Set repository context for tools (in case Code Writer needs them)
     set_repo_context(owner, repo, token=token)
@@ -409,13 +450,16 @@ async def execute_plan(plan: PlanResult, repo_full_name: str, token: str | None 
                         content,
                         f"GitPilot: Create {file.path} - {step.title}",
                         token=token,
+                        branch=branch_name,
                     )
                     step_summary += f"\n  ✓ Created {file.path}"
 
                 elif file.action == "MODIFY":
                     # Use LLM to intelligently modify the existing file
                     try:
-                        existing_content = await get_file(owner, repo, file.path, token=token)
+                        existing_content = await get_file(
+                            owner, repo, file.path, token=token, ref=branch_name
+                        )
 
                         modify_task = Task(
                             description=(
@@ -469,6 +513,7 @@ async def execute_plan(plan: PlanResult, repo_full_name: str, token: str | None 
                             modified_content,
                             f"GitPilot: Modify {file.path} - {step.title}",
                             token=token,
+                            branch=branch_name,
                         )
                         step_summary += f"\n  ✓ Modified {file.path}"
                     except Exception as e:  # noqa: BLE001
@@ -491,6 +536,7 @@ async def execute_plan(plan: PlanResult, repo_full_name: str, token: str | None 
                             file.path,
                             f"GitPilot: Delete {file.path} - {step.title}",
                             token=token,
+                            branch=branch_name,
                         )
                         step_summary += f"\n  ✓ Deleted {file.path}"
                     except Exception as e:  # noqa: BLE001
@@ -519,7 +565,9 @@ async def execute_plan(plan: PlanResult, repo_full_name: str, token: str | None 
 
     return {
         "status": "completed",
-        "message": f"Successfully executed {len(plan.steps)} steps on {repo_full_name}",
+        "message": f"Successfully executed {len(plan.steps)} steps on {repo_full_name} in branch '{branch_name}'",
+        "branch": branch_name,
+        "branch_url": f"https://github.com/{repo_full_name}/tree/{branch_name}",
         "executionLog": {"steps": execution_steps},
     }
 

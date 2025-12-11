@@ -137,6 +137,7 @@ class ExecutePlanRequest(BaseModel):
     repo_owner: str
     repo_name: str
     plan: PlanResult
+    branch_name: Optional[str] = None
 
 
 class AuthUrlResponse(BaseModel):
@@ -455,7 +456,9 @@ async def api_chat_execute(
     token = get_github_token(authorization)
     with execution_context(token):
         full_name = f"{req.repo_owner}/{req.repo_name}"
-        result = await execute_plan(req.plan, full_name, token=token)
+        result = await execute_plan(
+            req.plan, full_name, token=token, branch_name=req.branch_name
+        )
         return result
 
 
