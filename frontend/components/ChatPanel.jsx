@@ -16,38 +16,47 @@ export default function ChatPanel({
   onSessionChatStateChange,
 }) {
   // Initialize state from props or defaults
+  // We use a ref to track if we've initialized to avoid overwriting state on every render
   const [messages, setMessages] = useState(sessionChatState?.messages || []);
   const [goal, setGoal] = useState("");
   const [plan, setPlan] = useState(sessionChatState?.plan || null);
+  
   const [loadingPlan, setLoadingPlan] = useState(false);
   const [executing, setExecuting] = useState(false);
   const [status, setStatus] = useState("");
   const messagesEndRef = useRef(null);
 
   // ---------------------------------------------------------------------------
-  // 1. SESSION SYNC: Restore chat when branch changes
+  // 1. SESSION SYNC: Restore chat ONLY when branch changes
   // ---------------------------------------------------------------------------
   useEffect(() => {
-    // Apply incoming session state when branch changes.
-    setMessages(sessionChatState?.messages || []);
-    setPlan(sessionChatState?.plan || null);
-    setGoal("");
-    setStatus("");
-    setLoadingPlan(false);
-    setExecuting(false);
-  }, [currentBranch, sessionChatState]);
+    // When the branch changes, we load the new session state from the parent.
+    // This is the "Switch" action.
+    if (sessionChatState) {
+        setMessages(sessionChatState.messages || []);
+        setPlan(sessionChatState.plan || null);
+        setGoal("");
+        setStatus("");
+        setLoadingPlan(false);
+        setExecuting(false);
+    }
+  }, [currentBranch]); // Only trigger on branch switch, NOT on sessionChatState change
 
   // ---------------------------------------------------------------------------
-  // 2. PERSISTENCE: Save chat to App.jsx
+  // 2. PERSISTENCE: Save chat to Parent (Debounced or Conditional)
   // ---------------------------------------------------------------------------
   useEffect(() => {
+    // Only update parent if local state differs effectively or acts as a "save"
+    // We avoid circular dependency by NOT depending on sessionChatState here.
     if (typeof onSessionChatStateChange === "function") {
+      // Prevents wiping parent state if local state is empty on mount
       if (messages.length > 0 || plan) {
-        onSessionChatStateChange({ messages, plan });
+         // Create a stable object to compare or just push up
+         onSessionChatStateChange({ messages, plan });
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages, plan]);
+  }, [messages, plan]); 
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -62,15 +71,16 @@ export default function ChatPanel({
     if (!goal.trim()) return;
     
     // Normalize message structure
-    // We use 'role' for internal logic but map to 'from' for UI if needed
     const userMsg = { from: "user", text: goal.trim(), role: "user", content: goal.trim() };
-    const nextMessages = [...messages, userMsg];
     
+    // Optimistic update
+    const nextMessages = [...messages, userMsg];
     setMessages(nextMessages);
+    
     setLoadingPlan(true);
     setStatus("");
     setPlan(null);
-    setGoal(""); // Clear input immediately
+    setGoal(""); 
 
     try {
       const res = await fetch("/api/chat/plan", {
@@ -88,18 +98,18 @@ export default function ChatPanel({
       setPlan(data);
       
       // Add AI response about the plan
-      setMessages([...nextMessages, {
+      setMessages(prev => [...prev, {
         from: "ai",
         role: "assistant",
         answer: data.summary || "Here is the proposed plan for your request.",
         content: data.summary || "Here is the proposed plan for your request.",
-        plan: data // Store plan in message for history
+        plan: data // Store plan in message for history context
       }]);
 
     } catch (err) {
       console.error(err);
       setStatus(String(err.message || err));
-      setMessages([...nextMessages, { 
+      setMessages(prev => [...prev, { 
           from: "ai", role: "system", 
           text: `Error: ${err.message}`, content: `Error: ${err.message}` 
       }]);
@@ -115,6 +125,8 @@ export default function ChatPanel({
 
     try {
       // LOGIC: Sticky vs Hard Switch
+      // If we are on the default branch, we send 'undefined' so backend creates a NEW branch.
+      // If we are already on an AI branch, we send that name so backend commits to IT.
       const branch_name = currentBranch === defaultBranch ? undefined : currentBranch;
 
       const res = await fetch("/api/chat/execute", {
@@ -133,7 +145,23 @@ export default function ChatPanel({
 
       setStatus(data.message || "Execution completed.");
       
+      // Add AI completion message with Execution Log *BEFORE* notifying parent
+      // This ensures the logs are part of the state that gets saved to the NEW branch
+      const completionMsg = {
+          from: "ai",
+          role: "assistant",
+          answer: data.message || "Execution completed.",
+          content: data.message || "Execution completed.",
+          executionLog: data.executionLog, // CRITICAL: Pass logs to AssistantMessage
+      };
+
+      setMessages(prev => [...prev, completionMsg]);
+      setPlan(null); // Clear active plan UI (it's now in history)
+
       // CRITICAL: Inform App.jsx to update global state
+      // This triggers the branch switch in App.jsx.
+      // App.jsx will then take the *current* chat state (which now includes the logs)
+      // and copy it to the new branch bucket.
       if (typeof onExecutionComplete === "function") {
         onExecutionComplete({ 
             branch: data.branch || data.branch_name, 
@@ -142,20 +170,6 @@ export default function ChatPanel({
             message: data.message
         });
       }
-
-      // Add AI completion message with Execution Log
-      setMessages((prev) => [
-        ...prev,
-        {
-          from: "ai",
-          role: "assistant",
-          answer: data.message || "Execution completed.",
-          content: data.message || "Execution completed.",
-          executionLog: data.executionLog, // CRITICAL: Pass logs to AssistantMessage
-        },
-      ]);
-      
-      setPlan(null); // Clear active plan UI (it's now in history)
 
     } catch (err) {
       console.error(err);
@@ -246,7 +260,7 @@ export default function ChatPanel({
               <AssistantMessage
                 answer={m.answer || m.content}
                 plan={m.plan}
-                executionLog={m.executionLog}
+                executionLog={m.executionLog} // Preserves the logs
               />
             </div>
           );
