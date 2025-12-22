@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from "react";
+// frontend/App.jsx
+import React, { useEffect, useMemo, useState } from "react";
 import LoginPage from "./components/LoginPage.jsx";
 import RepoSelector from "./components/RepoSelector.jsx";
 import ProjectContextPanel from "./components/ProjectContextPanel.jsx";
@@ -6,6 +7,15 @@ import ChatPanel from "./components/ChatPanel.jsx";
 import LlmSettings from "./components/LlmSettings.jsx";
 import FlowViewer from "./components/FlowViewer.jsx";
 import Footer from "./components/Footer.jsx";
+
+function makeRepoKey(repo) {
+  if (!repo) return null;
+  return repo.full_name || `${repo.owner}/${repo.name}`;
+}
+
+function uniq(arr) {
+  return Array.from(new Set((arr || []).filter(Boolean)));
+}
 
 export default function App() {
   const [repo, setRepo] = useState(null);
@@ -15,122 +25,244 @@ export default function App() {
   const [userInfo, setUserInfo] = useState(null);
 
   // ---------------------------------------------------------------------------
-  // Branch/session state
+  // Repo + Session State Machine (per repo)
   // ---------------------------------------------------------------------------
-  // Visual Context (what the user is browsing) must match Execution Context (where AI writes).
-  // - defaultBranch: production branch (main/master/etc)
-  // - currentBranch: the branch currently displayed in the UI (file tree + context)
-  // - sessionBranch: the AI-created branch for the current workflow session
-  const [defaultBranch, setDefaultBranch] = useState("main");
-  const [currentBranch, setCurrentBranch] = useState("main");
-  const [sessionBranch, setSessionBranch] = useState(null); // e.g. gitpilot-...-417032
+  // We store state PER REPO so switching repos doesn't blow away sessions.
+  //
+  // shape:
+  // repoStateByKey[repoKey] = {
+  //   defaultBranch: "main" | "master" | ...
+  //   currentBranch: string
+  //   sessionBranches: string[]  // all AI branches created in this repo during this app lifetime
+  //   lastExecution: { mode, branch, ts } | null
+  //   pulseNonce: number
+  //   chatByBranch: { [branchName]: { messages: [], plan: any } }
+  // }
+  const [repoStateByKey, setRepoStateByKey] = useState({});
   const [toast, setToast] = useState(null); // { title, message }
 
-  // Per-branch chat persistence.
-  // - For main/defaultBranch: chat resets (fresh start).
-  // - For AI branches: chat is saved/restored when user toggles branches.
-  const [chatByBranch, setChatByBranch] = useState({});
+  const repoKey = useMemo(() => makeRepoKey(repo), [repo]);
 
-  // Visual feedback triggers
-  const [pulseNonce, setPulseNonce] = useState(0);
-  const [lastExecution, setLastExecution] = useState(null); // { mode, branch, ts }
+  // Convenient selectors for current repo state
+  const currentRepoState = repoKey ? repoStateByKey[repoKey] : null;
 
-  // When repo changes, reset session state to the repo's default branch.
+  const defaultBranch =
+    currentRepoState?.defaultBranch || repo?.default_branch || "main";
+  const currentBranch = currentRepoState?.currentBranch || defaultBranch;
+  const sessionBranches = currentRepoState?.sessionBranches || [];
+  const lastExecution = currentRepoState?.lastExecution || null;
+  const pulseNonce = currentRepoState?.pulseNonce || 0;
+  const chatByBranch = currentRepoState?.chatByBranch || {};
+
+  // Init / reconcile repo state when repo changes / first selected
   useEffect(() => {
-    if (!repo) return;
-    const d = repo.default_branch || "main";
-    setDefaultBranch(d);
-    setCurrentBranch(d);
-    setSessionBranch(null);
+    if (!repoKey || !repo) return;
 
-    // Reset chat state across repos.
-    setChatByBranch({});
-    setLastExecution(null);
-    setPulseNonce(0);
-  }, [repo?.full_name, repo?.default_branch]);
+    setRepoStateByKey((prev) => {
+      const existing = prev[repoKey];
+      const d = repo.default_branch || "main";
+
+      // If repo has never been seen in this app lifetime, initialize it
+      if (!existing) {
+        return {
+          ...prev,
+          [repoKey]: {
+            defaultBranch: d,
+            currentBranch: d,
+            sessionBranches: [],
+            lastExecution: null,
+            pulseNonce: 0,
+            chatByBranch: {
+              // Persist production chat bucket too (no surprise deletes)
+              [d]: { messages: [], plan: null },
+            },
+          },
+        };
+      }
+
+      // Reconcile defaultBranch if it changed
+      const next = { ...existing };
+      next.defaultBranch = d;
+
+      // Ensure default branch chat bucket exists
+      if (!next.chatByBranch?.[d]) {
+        next.chatByBranch = {
+          ...(next.chatByBranch || {}),
+          [d]: { messages: [], plan: null },
+        };
+      }
+
+      // Ensure currentBranch is set (fallback)
+      if (!next.currentBranch) next.currentBranch = d;
+
+      return { ...prev, [repoKey]: next };
+    });
+  }, [repoKey, repo?.id, repo?.default_branch]);
 
   const showToast = (title, message) => {
     setToast({ title, message });
-    // auto-hide after 5s
     window.setTimeout(() => setToast(null), 5000);
   };
 
-  // Called by ChatPanel after an execution finishes.
-  // Implements:
-  // - Rule 1 (Hard Switch) when starting from defaultBranch
-  // - Rule 2 (Sticky Context) when already in a session branch
-  const handleExecutionComplete = ({ branch, mode }) => {
-    if (!branch) return;
+  // ---------------------------------------------------------------------------
+  // Chat persistence helpers (per repo + per branch)
+  // ---------------------------------------------------------------------------
+  const updateChatForCurrentBranch = (patch) => {
+    if (!repoKey) return;
 
-    setLastExecution({ mode, branch, ts: Date.now() });
+    setRepoStateByKey((prev) => {
+      const cur = prev[repoKey];
+      if (!cur) return prev;
+
+      const branchKey =
+        cur.currentBranch || cur.defaultBranch || defaultBranch;
+      const existing = cur.chatByBranch?.[branchKey] || {
+        messages: [],
+        plan: null,
+      };
+
+      return {
+        ...prev,
+        [repoKey]: {
+          ...cur,
+          chatByBranch: {
+            ...(cur.chatByBranch || {}),
+            [branchKey]: { ...existing, ...patch },
+          },
+        },
+      };
+    });
+  };
+
+  const currentChatState = useMemo(() => {
+    const b = currentBranch || defaultBranch;
+    return chatByBranch[b] || { messages: [], plan: null };
+  }, [chatByBranch, currentBranch, defaultBranch]);
+
+  // ---------------------------------------------------------------------------
+  // Branch change (manual)
+  // ---------------------------------------------------------------------------
+  const handleBranchChange = (nextBranch) => {
+    if (!repoKey) return;
+    if (!nextBranch || nextBranch === currentBranch) return;
+
+    setRepoStateByKey((prev) => {
+      const cur = prev[repoKey];
+      if (!cur) return prev;
+
+      return {
+        ...prev,
+        [repoKey]: {
+          ...cur,
+          currentBranch: nextBranch,
+          // NOTE: We do NOT delete chat for any branch.
+          // Switching is purely a view/context change.
+        },
+      };
+    });
+
+    // UX nudge only (no destructive behavior)
+    if (nextBranch === defaultBranch && sessionBranches.length > 0) {
+      showToast(
+        "Viewing production branch",
+        `You are viewing ${defaultBranch}. AI session branches are available in the dropdown.`
+      );
+    } else {
+      showToast("Context Switched", `Now viewing ${nextBranch}.`);
+    }
+  };
+
+  // ---------------------------------------------------------------------------
+  // Execution complete (from ChatPanel)
+  // Implements:
+  // - Hard Switch: from default branch -> AI branch created, auto-switch UI to it
+  // - Sticky Context: already on AI branch -> commit to same branch, stay there
+  //
+  // CRITICAL FIX:
+  // ✅ DO NOT reset chat after hard-switch.
+  // ✅ Keep prior conversation and restore per branch.
+  // ---------------------------------------------------------------------------
+  const handleExecutionComplete = ({ branch, mode }) => {
+    if (!repoKey || !branch) return;
+
+    setRepoStateByKey((prev) => {
+      const cur =
+        prev[repoKey] || {
+          defaultBranch,
+          currentBranch: defaultBranch,
+          sessionBranches: [],
+          lastExecution: null,
+          pulseNonce: 0,
+          chatByBranch: { [defaultBranch]: { messages: [], plan: null } },
+        };
+
+      const next = { ...cur };
+      next.lastExecution = { mode, branch, ts: Date.now() };
+
+      if (mode === "hard-switch") {
+        // Track all AI session branches for this repo
+        next.sessionBranches = uniq([...(next.sessionBranches || []), branch]);
+
+        // Auto-follow AI execution context (visual context = execution context)
+        next.currentBranch = branch;
+
+        // Pulse header
+        next.pulseNonce = (next.pulseNonce || 0) + 1;
+
+        // Ensure chat bucket exists for new branch.
+        // Preserve chat continuity by seeding new branch with the previous branch chat
+        // if it doesn't exist yet.
+        const prevBranchKey =
+          cur.currentBranch || cur.defaultBranch || defaultBranch;
+        const prevChat =
+          (cur.chatByBranch && cur.chatByBranch[prevBranchKey]) || {
+            messages: [],
+            plan: null,
+          };
+
+        if (!next.chatByBranch) next.chatByBranch = {};
+        if (!next.chatByBranch[branch]) {
+          next.chatByBranch[branch] = { ...prevChat };
+        }
+
+        // Ensure production bucket exists too
+        if (!next.chatByBranch[next.defaultBranch]) {
+          next.chatByBranch[next.defaultBranch] = { messages: [], plan: null };
+        }
+      } else if (mode === "sticky") {
+        // Stay on current branch; backend may also echo branch
+        next.currentBranch = cur.currentBranch || branch;
+      }
+
+      return { ...prev, [repoKey]: next };
+    });
 
     if (mode === "hard-switch") {
-      setSessionBranch(branch);
-      setCurrentBranch(branch);
-      setPulseNonce((n) => n + 1);
       showToast(
         "Context Switched",
         `Changes pushed to new branch ${branch}. Switched current session to this branch.`
       );
-    } else if (mode === "sticky") {
-      // No branch switch; keep currentBranch
-      showToast("Updated", `New commits added to ${branch}.`);
+    } else {
+      showToast("Changes Committed", `Updated ${branch} with new commits.`);
     }
   };
 
-  const handleBranchChange = (nextBranch) => {
-    if (!nextBranch || nextBranch === currentBranch) return;
-    setCurrentBranch(nextBranch);
-
-    // Chat persistence rules:
-    // - Switching to production (defaultBranch) resets chat (fresh start).
-    // - Switching to an AI branch restores its chat.
-    if (nextBranch === defaultBranch) {
-      setChatByBranch((prev) => {
-        const copy = { ...prev };
-        delete copy[defaultBranch];
-        return copy;
-      });
-    }
-
-    // Optional nudge when user leaves the AI session branch.
-    if (sessionBranch && nextBranch === defaultBranch) {
-      showToast(
-        "Viewing production branch",
-        `You are viewing ${defaultBranch}. AI changes are on ${sessionBranch}. New prompts will start a fresh session from ${defaultBranch}.`
-      );
-    }
-  };
-
-  const updateChatForCurrentBranch = (patch) => {
-    setChatByBranch((prev) => {
-      const key = currentBranch || defaultBranch;
-      const existing = prev[key] || { messages: [], plan: null };
-      return { ...prev, [key]: { ...existing, ...patch } };
-    });
-  };
-
-  const currentChatState =
-    chatByBranch[currentBranch || defaultBranch] ||
-    (currentBranch === defaultBranch
-      ? { messages: [], plan: null, reset: true }
-      : { messages: [], plan: null });
-
-  // Check for existing authentication on mount
+  // ---------------------------------------------------------------------------
+  // Authentication
+  // ---------------------------------------------------------------------------
   useEffect(() => {
     checkAuthentication();
   }, []);
 
   const checkAuthentication = async () => {
-    const token = localStorage.getItem('github_token');
-    const user = localStorage.getItem('github_user');
+    const token = localStorage.getItem("github_token");
+    const user = localStorage.getItem("github_user");
 
     if (token && user) {
       try {
-        // Validate the token is still valid
-        const response = await fetch('/api/auth/validate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+        const response = await fetch("/api/auth/validate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ access_token: token }),
         });
 
@@ -143,12 +275,11 @@ export default function App() {
           return;
         }
       } catch (err) {
-        console.error('Token validation failed:', err);
+        console.error("Token validation failed:", err);
       }
 
-      // Token invalid, clear storage
-      localStorage.removeItem('github_token');
-      localStorage.removeItem('github_user');
+      localStorage.removeItem("github_token");
+      localStorage.removeItem("github_user");
     }
 
     setIsAuthenticated(false);
@@ -161,14 +292,14 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('github_token');
-    localStorage.removeItem('github_user');
+    localStorage.removeItem("github_token");
+    localStorage.removeItem("github_user");
     setIsAuthenticated(false);
     setUserInfo(null);
     setRepo(null);
   };
 
-  // Show loading state while checking authentication
+  // Loading state
   if (isLoading) {
     return (
       <div className="app-root">
@@ -181,12 +312,12 @@ export default function App() {
     );
   }
 
-  // Show login page if not authenticated
+  // Not authenticated
   if (!isAuthenticated) {
     return <LoginPage onAuthenticated={handleAuthenticated} />;
   }
 
-  // Main application (authenticated)
+  // Main app
   return (
     <div className="app-root">
       <div className="main-wrapper">
@@ -244,7 +375,6 @@ export default function App() {
             </>
           )}
 
-          {/* User Profile Section */}
           {userInfo && (
             <div className="user-profile">
               <div className="user-profile-header">
@@ -254,7 +384,9 @@ export default function App() {
                   className="user-avatar"
                 />
                 <div className="user-info">
-                  <div className="user-name">{userInfo.name || userInfo.login}</div>
+                  <div className="user-name">
+                    {userInfo.name || userInfo.login}
+                  </div>
                   <div className="user-login">@{userInfo.login}</div>
                 </div>
               </div>
@@ -271,7 +403,6 @@ export default function App() {
 
         <main className="workspace">
           {activePage === "admin" && <LlmSettings />}
-
           {activePage === "flow" && <FlowViewer />}
 
           {activePage === "workspace" &&
@@ -282,16 +413,19 @@ export default function App() {
                     repo={repo}
                     defaultBranch={defaultBranch}
                     currentBranch={currentBranch}
-                    sessionBranch={sessionBranch}
+                    // IMPORTANT: show ALL session branches, not just the last one
+                    sessionBranches={sessionBranches}
                     onBranchChange={handleBranchChange}
                     pulseNonce={pulseNonce}
                     lastExecution={lastExecution}
                   />
                 </aside>
+
                 <main className="gp-chat-column">
                   <div className="panel-header">
                     <span>GitPilot chat</span>
                   </div>
+
                   <ChatPanel
                     repo={repo}
                     defaultBranch={defaultBranch}
@@ -315,6 +449,7 @@ export default function App() {
             ))}
         </main>
       </div>
+
       <Footer />
 
       {/* Toast */}

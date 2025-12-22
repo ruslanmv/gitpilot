@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, Query, Path as FPath, Header
+from fastapi import FastAPI, Query, Path as FPath, Header, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -11,8 +11,8 @@ from pydantic import BaseModel, Field
 from .version import __version__
 from .github_api import (
     list_user_repos,
-    list_user_repos_paginated,  # NEW: Pagination support
-    search_user_repos,  # NEW: Search across all repos
+    list_user_repos_paginated,  # Pagination support
+    search_user_repos,  # Search across all repos
     get_repo_tree,
     get_file, 
     put_file, 
@@ -62,12 +62,14 @@ def get_github_token(authorization: Optional[str] = Header(None)) -> Optional[st
         return authorization
 
 
+# --- FIXED: Added default_branch to model ---
 class RepoSummary(BaseModel):
     id: int
     name: str
     full_name: str
     private: bool
     owner: str
+    default_branch: str = "main"  # <--- CRITICAL FIX: Defaults to main, but can be master/dev
 
 
 class PaginatedReposResponse(BaseModel):
@@ -180,28 +182,13 @@ async def api_list_repos(
 ):
     """
     List user repositories with enterprise-grade pagination and search.
-    
-    **Features:**
-    - Pagination: Load repositories in chunks (100 per page)
-    - Global Search: Query parameter searches across ALL user repositories
-    - Includes: owned, collaborator, and organization member repos
-    
-    **Search Behavior:**
-    - Without query: Returns paginated list of all repos (sorted by last updated)
-    - With query: Searches ALL repositories and returns paginated filtered results
-    
-    **Example Usage:**
-    - List first 100 repos: GET /api/repos?page=1&per_page=100
-    - Load next 100: GET /api/repos?page=2&per_page=100
-    - Search all repos: GET /api/repos?query=python (searches ALL 450 repos)
-    - Search + paginate: GET /api/repos?query=python&page=2&per_page=100
+    Includes default_branch information for correct frontend routing.
     """
     token = get_github_token(authorization)
     
     try:
         if query:
             # SEARCH MODE: Search across ALL repositories
-            # This fetches all repos and filters them, then returns paginated results
             result = await search_user_repos(
                 query=query,
                 page=page,
@@ -216,7 +203,7 @@ async def api_list_repos(
                 token=token
             )
         
-        # Convert to response model
+        # --- FIXED: Mapping default_branch ---
         repos = [
             RepoSummary(
                 id=r["id"],
@@ -224,6 +211,7 @@ async def api_list_repos(
                 full_name=r["full_name"],
                 private=r["private"],
                 owner=r["owner"],
+                default_branch=r.get("default_branch", "main"), # <--- CRITICAL FIX
             )
             for r in result["repositories"]
         ]
@@ -238,7 +226,6 @@ async def api_list_repos(
         )
         
     except Exception as e:
-        # Log error and return friendly message
         import logging
         logging.exception("Error fetching repositories")
         return JSONResponse(
@@ -260,13 +247,7 @@ async def api_list_all_repos(
 ):
     """
     Fetch ALL user repositories at once (no pagination).
-    
-    **Warning:** This endpoint fetches all pages from GitHub API.
-    - May take 5-10 seconds for users with 450+ repos
-    - Makes multiple API calls (up to 15 requests)
-    - Use /api/repos with pagination for better UX
-    
-    **Recommended:** Use the paginated /api/repos endpoint instead.
+    Useful for quick searches, but paginated endpoint is preferred.
     """
     token = get_github_token(authorization)
     
@@ -298,7 +279,7 @@ async def api_list_all_repos(
                 if query_lower in r["name"].lower() or query_lower in r["full_name"].lower()
             ]
         
-        # Convert to response model
+        # --- FIXED: Mapping default_branch ---
         repos = [
             RepoSummary(
                 id=r["id"],
@@ -306,6 +287,7 @@ async def api_list_all_repos(
                 full_name=r["full_name"],
                 private=r["private"],
                 owner=r["owner"],
+                default_branch=r.get("default_branch", "main"), # <--- CRITICAL FIX
             )
             for r in all_repos
         ]
@@ -329,41 +311,45 @@ async def api_list_all_repos(
 async def api_repo_tree(
     owner: str = FPath(...),
     repo: str = FPath(...),
-    ref: Optional[str] = Query(None, description="Git reference (branch, tag, or commit SHA). Defaults to HEAD."),
+    # Retro-compatible:
+    # - old UI: calls without ref => defaults to HEAD behavior
+    # - new UI: calls ?ref=main or ?ref=<branch|tag|sha>
+    ref: Optional[str] = Query(
+        None,
+        description="Git reference (branch, tag, or commit SHA). If omitted, defaults to HEAD.",
+    ),
     authorization: Optional[str] = Header(None),
 ):
+    """
+    Get the file tree for a repository.
+    Handles 'main' vs 'master' discrepancies and empty repositories gracefully.
+    """
     token = get_github_token(authorization)
-    # GitHub's /git/trees endpoint wants a tree SHA.
-    # Our helper get_repo_tree defaults to HEAD and (for some repos) works, but
-    # for explicit branches we resolve branch -> commit -> tree sha for reliability.
-    resolved_ref = "HEAD"
-    if ref:
-        try:
-            # 1) Resolve a branch name to a commit SHA
-            #    GET /repos/{owner}/{repo}/git/ref/heads/{branch}
-            ref_data = await github_request(
-                f"/repos/{owner}/{repo}/git/ref/heads/{ref}",
-                token=token,
+
+    # Keep legacy behavior: missing/empty ref behaves like HEAD.
+    ref_value = (ref or "").strip() or "HEAD"
+
+    try:
+        tree = await get_repo_tree(owner, repo, token=token, ref=ref_value)
+        return FileTreeResponse(files=[FileEntry(**f) for f in tree])
+
+    except HTTPException as e:
+        # Case 1: Empty repository / no commits yet
+        # GitHub API v3 often returns 409 Conflict for git data endpoints on empty repos
+        if e.status_code == 409:
+            return FileTreeResponse(files=[])
+
+        # Case 2: Branch not found (e.g., frontend requested 'main' but repo uses 'master')
+        if e.status_code == 404:
+            return JSONResponse(
+                status_code=404, 
+                content={
+                    "detail": f"Ref '{ref_value}' not found. The repository might be using a different default branch (e.g., 'master')."
+                }
             )
-            commit_sha = (ref_data.get("object") or {}).get("sha")
 
-            # 2) Resolve commit SHA to tree SHA
-            if commit_sha:
-                commit_data = await github_request(
-                    f"/repos/{owner}/{repo}/git/commits/{commit_sha}",
-                    token=token,
-                )
-                tree_sha = (commit_data.get("tree") or {}).get("sha")
-                resolved_ref = tree_sha or commit_sha
-            else:
-                # If unexpected payload, fall back to ref as-is
-                resolved_ref = ref
-        except Exception:
-            # If ref isn't a branch (tag/sha) or resolution fails, fall back to using ref directly.
-            resolved_ref = ref
-
-    tree = await get_repo_tree(owner, repo, token=token, ref=resolved_ref)
-    return FileTreeResponse(files=[FileEntry(**f) for f in tree])
+        # Bubble up other errors (401 Auth, 403 Rate Limit, etc.)
+        raise e
 
 
 @app.get("/api/repos/{owner}/{repo}/file", response_model=FileContent)
