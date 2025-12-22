@@ -4,15 +4,18 @@ import React, { useState, useEffect } from "react";
  * Simple recursive file tree viewer with refresh support
  * Fetches tree data directly using the API.
  */
-export default function FileTree({ repo, refreshTrigger }) {
+export default function FileTree({ repo, refreshTrigger, branch }) {
   const [tree, setTree] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [showLoading, setShowLoading] = useState(false);
   const [error, setError] = useState(null);
   const [localRefresh, setLocalRefresh] = useState(0);
 
   useEffect(() => {
     if (!repo) return;
     setLoading(true);
+    setShowLoading(false);
+    const spinnerTimer = window.setTimeout(() => setShowLoading(true), 200);
     setError(null);
     
     // Construct headers manually
@@ -26,8 +29,9 @@ export default function FileTree({ repo, refreshTrigger }) {
       console.warn("Unable to read github_token", e);
     }
 
-    // Add cache busting
-    const cacheBuster = `?_t=${Date.now()}`;
+    // Add cache busting + selected branch ref
+    const refParam = branch ? `&ref=${encodeURIComponent(branch)}` : "";
+    const cacheBuster = `?_t=${Date.now()}${refParam}`;
 
     fetch(`/api/repos/${repo.owner}/${repo.name}/tree${cacheBuster}`, { headers })
       .then(async (res) => {
@@ -49,8 +53,12 @@ export default function FileTree({ repo, refreshTrigger }) {
         setError(err.message);
         console.error("FileTree error:", err);
       })
-      .finally(() => setLoading(false));
-  }, [repo, refreshTrigger, localRefresh]);
+      .finally(() => {
+        window.clearTimeout(spinnerTimer);
+        setShowLoading(false);
+        setLoading(false);
+      });
+  }, [repo, branch, refreshTrigger, localRefresh]);
 
   const handleRefresh = () => {
     setLocalRefresh(prev => prev + 1);
@@ -161,7 +169,7 @@ export default function FileTree({ repo, refreshTrigger }) {
       </div>
 
       {/* Content */}
-      {loading && (
+      {showLoading && (
         <div style={styles.loadingText}>Loading files...</div>
       )}
 
