@@ -1,0 +1,56 @@
+# Development and testing
+tests/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Frontend source (built output is in gitpilot/web)
+frontend/node_modules/
+frontend/src/
+
+# Assets and media
+assets/
+*.mov
+*.mp4
+*.gif
+*.jpg
+*.jpeg
+*.png
+!gitpilot/web/**/*.png
+!gitpilot/web/**/*.jpg
+!gitpilot/web/**/*.svg
+
+# Development tools
+.git/
+.github/
+.gitignore
+.env
+.env.*
+!.env.template
+Makefile
+.pypirc.template
+MANIFEST.in
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Packaging
+PACKAGING.md
+PRODUCTION.md
+CHANGELOG.md
