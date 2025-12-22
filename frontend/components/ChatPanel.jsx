@@ -1,16 +1,21 @@
 import React, { useState, useRef, useEffect } from "react";
 import AssistantMessage from "./AssistantMessage.jsx";
-import { getAuthHeaders } from "../utils/api.js";
+
+// Helper to get headers (inline safety if utility is missing)
+const getHeaders = () => ({
+  "Content-Type": "application/json",
+  "Authorization": `Bearer ${localStorage.getItem("github_token") || ""}`,
+});
 
 export default function ChatPanel({
   repo,
   defaultBranch = "main",
   currentBranch = "main",
   onExecutionComplete,
-  // Session-aware chat persistence
   sessionChatState,
   onSessionChatStateChange,
 }) {
+  // Initialize state from props or defaults
   const [messages, setMessages] = useState(sessionChatState?.messages || []);
   const [goal, setGoal] = useState("");
   const [plan, setPlan] = useState(sessionChatState?.plan || null);
@@ -20,72 +25,84 @@ export default function ChatPanel({
   const messagesEndRef = useRef(null);
 
   // ---------------------------------------------------------------------------
-  // Session State Machine: save/restore chat per branch
-  // - Switching to production branch resets chat (fresh start).
-  // - Switching back to AI branch restores previous chat.
+  // 1. SESSION SYNC: Restore chat when branch changes
   // ---------------------------------------------------------------------------
   useEffect(() => {
     // Apply incoming session state when branch changes.
-    // Note: we intentionally keep the input box (goal) cleared on context switches.
-    const nextMessages = sessionChatState?.messages || [];
-    const nextPlan = sessionChatState?.plan || null;
-    setMessages(nextMessages);
-    setPlan(nextPlan);
+    setMessages(sessionChatState?.messages || []);
+    setPlan(sessionChatState?.plan || null);
     setGoal("");
     setStatus("");
     setLoadingPlan(false);
     setExecuting(false);
-  }, [currentBranch]);
+  }, [currentBranch, sessionChatState]);
 
-  // Persist on change
+  // ---------------------------------------------------------------------------
+  // 2. PERSISTENCE: Save chat to App.jsx
+  // ---------------------------------------------------------------------------
   useEffect(() => {
-    if (typeof onSessionChatStateChange !== "function") return;
-    onSessionChatStateChange({ messages, plan });
+    if (typeof onSessionChatStateChange === "function") {
+      if (messages.length > 0 || plan) {
+        onSessionChatStateChange({ messages, plan });
+      }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages, plan]);
 
-  // Auto-scroll to bottom when new messages are added
+  // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, plan, loadingPlan, executing]);
+
+  // ---------------------------------------------------------------------------
+  // HANDLERS
+  // ---------------------------------------------------------------------------
 
   const send = async () => {
     if (!goal.trim()) return;
-    const userMsg = { from: "user", text: goal.trim() };
-    setMessages((msgs) => [...msgs, userMsg]);
+    
+    // Normalize message structure
+    // We use 'role' for internal logic but map to 'from' for UI if needed
+    const userMsg = { from: "user", text: goal.trim(), role: "user", content: goal.trim() };
+    const nextMessages = [...messages, userMsg];
+    
+    setMessages(nextMessages);
     setLoadingPlan(true);
     setStatus("");
     setPlan(null);
+    setGoal(""); // Clear input immediately
 
     try {
       const res = await fetch("/api/chat/plan", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...getAuthHeaders(), // Inject Authorization header
-        },
+        headers: getHeaders(),
         body: JSON.stringify({
           repo_owner: repo.owner,
           repo_name: repo.name,
-          goal: goal.trim(),
+          goal: userMsg.content,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Failed to generate plan");
 
       setPlan(data);
-      setMessages((msgs) => [
-        ...msgs,
-        {
-          from: "ai",
-          answer: data.summary || "Here is the proposed plan for your request.",
-          plan: data,
-        },
-      ]);
-      setGoal("");
+      
+      // Add AI response about the plan
+      setMessages([...nextMessages, {
+        from: "ai",
+        role: "assistant",
+        answer: data.summary || "Here is the proposed plan for your request.",
+        content: data.summary || "Here is the proposed plan for your request.",
+        plan: data // Store plan in message for history
+      }]);
+
     } catch (err) {
       console.error(err);
       setStatus(String(err.message || err));
+      setMessages([...nextMessages, { 
+          from: "ai", role: "system", 
+          text: `Error: ${err.message}`, content: `Error: ${err.message}` 
+      }]);
     } finally {
       setLoadingPlan(false);
     }
@@ -95,45 +112,51 @@ export default function ChatPanel({
     if (!plan) return;
     setExecuting(true);
     setStatus("");
+
     try {
-      // Sticky context: if the user is browsing a non-default branch, keep committing there.
-      // Hard switch: if the user is on defaultBranch, allow backend to create a new AI branch.
-      const branch_name =
-        currentBranch && currentBranch !== defaultBranch ? currentBranch : undefined;
+      // LOGIC: Sticky vs Hard Switch
+      const branch_name = currentBranch === defaultBranch ? undefined : currentBranch;
 
       const res = await fetch("/api/chat/execute", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...getAuthHeaders(), // Inject Authorization header
-        },
+        headers: getHeaders(),
         body: JSON.stringify({
           repo_owner: repo.owner,
           repo_name: repo.name,
           plan,
-          branch_name,
+          branch_name, 
         }),
       });
+      
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Execution failed");
-      setStatus(data.message || "Execution completed.");
 
-      // Inform App about branch context changes.
-      // If we did NOT pass a branch_name, the backend may have created a new branch.
-      const executedBranch = data.branch || branch_name;
-      const mode = data.mode || (branch_name ? "sticky" : "hard-switch");
+      setStatus(data.message || "Execution completed.");
+      
+      // CRITICAL: Inform App.jsx to update global state
       if (typeof onExecutionComplete === "function") {
-        onExecutionComplete({ branch: executedBranch, mode });
+        onExecutionComplete({ 
+            branch: data.branch || data.branch_name, 
+            mode: data.mode,
+            commit_url: data.commit_url || data.html_url,
+            message: data.message
+        });
       }
 
-      setMessages((msgs) => [
-        ...msgs,
+      // Add AI completion message with Execution Log
+      setMessages((prev) => [
+        ...prev,
         {
           from: "ai",
+          role: "assistant",
           answer: data.message || "Execution completed.",
-          executionLog: data.executionLog,
+          content: data.message || "Execution completed.",
+          executionLog: data.executionLog, // CRITICAL: Pass logs to AssistantMessage
         },
       ]);
+      
+      setPlan(null); // Clear active plan UI (it's now in history)
+
     } catch (err) {
       console.error(err);
       setStatus(String(err.message || err));
@@ -142,25 +165,102 @@ export default function ChatPanel({
     }
   };
 
+  // ---------------------------------------------------------------------------
+  // RENDER
+  // ---------------------------------------------------------------------------
   return (
     <div className="chat-container">
+      {/* Inject minimal styles for success message support */}
+      <style>{`
+        .chat-container { display: flex; flex-direction: column; height: 100%; }
+        .chat-messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+        
+        .chat-message-user { 
+            align-self: flex-end; 
+            background: #27272A; 
+            color: #fff; 
+            padding: 12px 16px; 
+            border-radius: 8px; 
+            max-width: 85%; 
+            font-size: 14px; 
+            line-height: 1.5;
+        }
+        
+        /* Success System Message Styling */
+        .chat-msg-success { 
+            align-self: flex-start; 
+            width: 100%; 
+            background: rgba(16, 185, 129, 0.1); 
+            border: 1px solid rgba(16, 185, 129, 0.2); 
+            color: #D1FAE5;
+            padding: 12px 16px;
+            border-radius: 8px;
+            display: flex; gap: 12px;
+            font-size: 14px;
+        }
+        .success-icon { font-size: 18px; }
+        .success-link { display: inline-block; margin-top: 6px; font-weight: 600; color: #34D399; text-decoration: none; }
+        .success-link:hover { text-decoration: underline; }
+
+        .chat-input-box { padding: 16px; border-top: 1px solid #27272A; background: #131316; }
+        .chat-input-row { display: flex; gap: 10px; }
+        .chat-input { flex: 1; background: #18181B; border: 1px solid #27272A; color: white; padding: 10px; border-radius: 6px; outline: none; }
+        .chat-btn { background: #EDEDED; color: black; border: none; padding: 0 16px; border-radius: 6px; font-weight: 600; cursor: pointer; }
+        .chat-btn.secondary { background: transparent; border: 1px solid #3F3F46; color: #A1A1AA; }
+        .chat-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        
+        .chat-empty-state { text-align: center; color: #52525B; margin-top: 40px; font-size: 14px; }
+      `}</style>
+
       <div className="chat-messages">
-        {messages.map((m, idx) => (
-          <div key={idx}>
-            {m.from === "user" ? (
-              <div className="chat-message-user">
-                <span>{m.text}</span>
+        {messages.map((m, idx) => {
+          // 1. Success Message (Injected by App.jsx logic)
+          if (m.isSuccess) {
+            return (
+              <div key={idx} className="chat-msg-success">
+                <div className="success-icon">🚀</div>
+                <div>
+                  <div style={{whiteSpace: 'pre-wrap'}}>{m.content}</div>
+                  {m.link && (
+                    <a href={m.link} target="_blank" rel="noreferrer" className="success-link">
+                      View Changes on GitHub &rarr;
+                    </a>
+                  )}
+                </div>
               </div>
-            ) : (
+            );
+          }
+
+          // 2. User Message
+          if (m.from === "user" || m.role === "user") {
+            return (
+              <div key={idx} className="chat-message-user">
+                <span>{m.text || m.content}</span>
+              </div>
+            );
+          }
+
+          // 3. AI / Assistant Message (Uses the nice UI component)
+          return (
+            <div key={idx}>
               <AssistantMessage
-                answer={m.answer}
+                answer={m.answer || m.content}
                 plan={m.plan}
                 executionLog={m.executionLog}
               />
-            )}
-          </div>
-        ))}
-        {!messages.length && (
+            </div>
+          );
+        })}
+
+        {/* Loading Indicator */}
+        {loadingPlan && (
+             <div className="chat-message-ai" style={{color: '#A1A1AA', fontStyle: 'italic', padding: '10px'}}>
+                Thinking...
+             </div>
+        )}
+
+        {/* Empty State */}
+        {!messages.length && !plan && !loadingPlan && (
           <div className="chat-empty-state">
             <div className="chat-empty-icon">💬</div>
             <p>Tell GitPilot what you want to do with this repository.</p>
@@ -169,11 +269,13 @@ export default function ChatPanel({
             </p>
           </div>
         )}
+        
         <div ref={messagesEndRef} />
       </div>
+
       <div className="chat-input-box">
         {status && (
-          <div style={{ fontSize: 11, color: "#ffb3b7" }}>{status}</div>
+          <div style={{ fontSize: 11, color: "#ffb3b7", marginBottom: 8 }}>{status}</div>
         )}
         <div className="chat-input-row">
           <input
@@ -187,23 +289,28 @@ export default function ChatPanel({
                 if (!loadingPlan) send();
               }
             }}
+            disabled={loadingPlan || executing}
           />
           <button
             className="chat-btn"
             type="button"
             onClick={send}
-            disabled={loadingPlan}
+            disabled={loadingPlan || executing || !!plan} // Disable send if plan is pending
           >
             {loadingPlan ? "Planning..." : "Generate plan"}
           </button>
-          <button
-            className="chat-btn secondary"
-            type="button"
-            onClick={execute}
-            disabled={!plan || executing}
-          >
-            {executing ? "Executing..." : "Approve & execute"}
-          </button>
+          
+          {/* Show Execute button only if a plan is pending approval */}
+          {plan && (
+              <button
+                className="chat-btn secondary"
+                type="button"
+                onClick={execute}
+                disabled={executing}
+              >
+                {executing ? "Executing..." : "Approve & execute"}
+              </button>
+          )}
         </div>
       </div>
     </div>

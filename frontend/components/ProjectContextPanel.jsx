@@ -18,9 +18,9 @@ const animationStyles = `
  *
  * Controlled component:
  * - Branch source of truth is App.jsx:
- *   - defaultBranch (prod)
- *   - currentBranch (what user sees)
- *   - sessionBranch (active AI session branch)
+ * - defaultBranch (prod)
+ * - currentBranch (what user sees)
+ * - sessionBranches (list of all active AI session branches)
  *
  * Responsibilities:
  * - Show project context + branch dropdown + AI badge/banner
@@ -31,7 +31,8 @@ export default function ProjectContextPanel({
   repo,
   defaultBranch,
   currentBranch,
-  sessionBranch,
+  sessionBranch, // Active session branch (optional, for specific highlighting)
+  sessionBranches = [], // List of all AI branches
   onBranchChange,
   pulseNonce,
 }) {
@@ -54,10 +55,12 @@ export default function ProjectContextPanel({
   const [animateHeader, setAnimateHeader] = useState(false);
   const [toast, setToast] = useState({ visible: false, title: "", msg: "" });
 
-  const isAiSession = Boolean(sessionBranch) && currentBranch === sessionBranch;
-
+  // Calculate effective default to prevent 'main' fallback errors
   const effectiveDefaultBranch = defaultBranch || repo?.default_branch || "main";
   const branch = currentBranch || effectiveDefaultBranch;
+
+  // Determine if we are currently viewing an AI Session branch
+  const isAiSession = (sessionBranches.includes(branch)) || (sessionBranch === branch && branch !== effectiveDefaultBranch);
 
   // Fetch App URL on mount
   useEffect(() => {
@@ -99,7 +102,7 @@ export default function ProjectContextPanel({
 
     const cacheBuster = `&_t=${Date.now()}&retry=${retryCount}`;
 
-    // A) Access
+    // A) Access Check (with Stale Cache Fix)
     fetch(`/api/auth/repo-access?owner=${repo.owner}&repo=${repo.name}${cacheBuster}`, {
       headers,
       cache: "no-cache",
@@ -114,7 +117,7 @@ export default function ProjectContextPanel({
 
         setAccessInfo(data);
 
-        // stale cache auto-retry
+        // Auto-retry if user has push access but App is not detected yet (Stale Cache)
         if (data.can_write && !data.app_installed && retryCount === 0) {
           retryTimeoutRef.current = setTimeout(() => {
             setRetryCount(1);
@@ -125,7 +128,7 @@ export default function ProjectContextPanel({
         setAccessInfo({ can_write: false, app_installed: false, auth_type: "none" });
       });
 
-    // B) Tree count for the selected branch
+    // B) Tree count for the selected branch (Uses specific branch to avoid 404s)
     setAnalyzing(true);
     fetch(`/api/repos/${repo.owner}/${repo.name}/tree?ref=${encodeURIComponent(branch)}&_t=${Date.now()}`, {
       headers,
@@ -163,15 +166,15 @@ export default function ProjectContextPanel({
       return;
     }
 
-    // local UI feedback (App will do the real switch)
-    const goingAi = Boolean(sessionBranch) && targetBranch === sessionBranch;
+    // Local UI feedback (App.jsx will handle the actual state change)
+    const goingAi = sessionBranches.includes(targetBranch);
     showToast(
       goingAi ? "Context Switched" : "Switched to Production",
       goingAi ? `Viewing AI Session: ${targetBranch}` : `Viewing ${targetBranch}.`
     );
 
     setIsDropdownOpen(false);
-    onBranchChange?.(targetBranch);
+    if (onBranchChange) onBranchChange(targetBranch);
   };
 
   const handleRefresh = () => {
@@ -467,20 +470,26 @@ export default function ProjectContextPanel({
                   {effectiveDefaultBranch} (Prod)
                 </div>
 
-                {/* Current AI Session */}
-                {sessionBranch && (
-                  <div
-                    style={{
-                      ...styles.dropdownItem,
-                      color: theme.aiText,
-                      backgroundColor: branch === sessionBranch ? "rgba(59, 130, 246, 0.10)" : "transparent",
-                      borderBottom: "none",
-                    }}
-                    onMouseDown={() => handleManualSwitch(sessionBranch)}
-                  >
-                    <span style={{ opacity: branch === sessionBranch ? 1 : 0 }}>✓</span>
-                    {sessionBranch}
-                  </div>
+                {/* AI Session Branches List */}
+                {sessionBranches && sessionBranches.length > 0 && (
+                  <>
+                    <div style={{ borderBottom: `1px solid ${theme.border}`, margin: '4px 0' }}></div>
+                    {sessionBranches.map(sb => (
+                      <div
+                        key={sb}
+                        style={{
+                          ...styles.dropdownItem,
+                          color: theme.aiText,
+                          backgroundColor: branch === sb ? "rgba(59, 130, 246, 0.10)" : "transparent",
+                          borderBottom: "none",
+                        }}
+                        onMouseDown={() => handleManualSwitch(sb)}
+                      >
+                        <span style={{ opacity: branch === sb ? 1 : 0 }}>✓</span>
+                        {sb}
+                      </div>
+                    ))}
+                  </>
                 )}
               </div>
             )}

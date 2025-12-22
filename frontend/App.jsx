@@ -150,22 +150,25 @@ export default function App() {
       const cur = prev[repoKey];
       if (!cur) return prev;
 
-      return {
-        ...prev,
-        [repoKey]: {
-          ...cur,
-          currentBranch: nextBranch,
-          // NOTE: We do NOT delete chat for any branch.
-          // Switching is purely a view/context change.
-        },
-      };
+      const nextState = { ...cur, currentBranch: nextBranch };
+
+      // LOGIC FIX: If switching BACK to Main/Default -> CLEAR CHAT (Start fresh)
+      if (nextBranch === cur.defaultBranch) {
+        nextState.chatByBranch = {
+          ...nextState.chatByBranch,
+          [nextBranch]: { messages: [], plan: null } // Wipe history for main
+        };
+      }
+      // LOGIC: If switching to AI branch -> History is preserved in 'chatByBranch' automatically
+
+      return { ...prev, [repoKey]: nextState };
     });
 
     // UX nudge only (no destructive behavior)
-    if (nextBranch === defaultBranch && sessionBranches.length > 0) {
+    if (nextBranch === defaultBranch) {
       showToast(
-        "Viewing production branch",
-        `You are viewing ${defaultBranch}. AI session branches are available in the dropdown.`
+        "New Session",
+        `Switched to ${defaultBranch}. Chat cleared for new task.`
       );
     } else {
       showToast("Context Switched", `Now viewing ${nextBranch}.`);
@@ -181,8 +184,9 @@ export default function App() {
   // CRITICAL FIX:
   // ✅ DO NOT reset chat after hard-switch.
   // ✅ Keep prior conversation and restore per branch.
+  // ✅ Inject System Success Message with Link
   // ---------------------------------------------------------------------------
-  const handleExecutionComplete = ({ branch, mode }) => {
+  const handleExecutionComplete = ({ branch, mode, commit_url, message }) => {
     if (!repoKey || !branch) return;
 
     setRepoStateByKey((prev) => {
@@ -211,7 +215,6 @@ export default function App() {
 
         // Ensure chat bucket exists for new branch.
         // Preserve chat continuity by seeding new branch with the previous branch chat
-        // if it doesn't exist yet.
         const prevBranchKey =
           cur.currentBranch || cur.defaultBranch || defaultBranch;
         const prevChat =
@@ -221,9 +224,20 @@ export default function App() {
           };
 
         if (!next.chatByBranch) next.chatByBranch = {};
-        if (!next.chatByBranch[branch]) {
-          next.chatByBranch[branch] = { ...prevChat };
-        }
+        
+        // Seed new branch with history + System Success Message
+        next.chatByBranch[branch] = { 
+            messages: [
+                ...prevChat.messages, 
+                { 
+                    role: "system", 
+                    content: `🌱 **Session Started:** Created branch \`${branch}\`.`,
+                    isSuccess: true,
+                    link: commit_url
+                }
+            ], 
+            plan: null // Clear plan UI after execution
+        };
 
         // Ensure production bucket exists too
         if (!next.chatByBranch[next.defaultBranch]) {
@@ -232,6 +246,25 @@ export default function App() {
       } else if (mode === "sticky") {
         // Stay on current branch; backend may also echo branch
         next.currentBranch = cur.currentBranch || branch;
+        
+        // Append Success Message to current history
+        const existingChat = (next.chatByBranch && next.chatByBranch[branch]) || { messages: [] };
+        
+        // Ensure chatByBranch exists
+        if (!next.chatByBranch) next.chatByBranch = {};
+        
+        next.chatByBranch[branch] = {
+            messages: [
+                ...existingChat.messages,
+                {
+                    role: "system",
+                    content: `✅ **Update Published:** Commits pushed to \`${branch}\`.`,
+                    isSuccess: true,
+                    link: commit_url
+                }
+            ],
+            plan: null // Clear plan UI
+        };
       }
 
       return { ...prev, [repoKey]: next };
