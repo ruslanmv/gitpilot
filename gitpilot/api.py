@@ -13,10 +13,11 @@ from .github_api import (
     list_user_repos,
     list_user_repos_paginated,  # NEW: Pagination support
     search_user_repos,  # NEW: Search across all repos
-    get_repo_tree, 
+    get_repo_tree,
     get_file, 
     put_file, 
-    execution_context
+    execution_context,
+    github_request,
 )
 from .github_app import check_repo_write_access
 from .settings import AppSettings, get_settings, set_provider, update_settings, LLMProvider
@@ -328,10 +329,40 @@ async def api_list_all_repos(
 async def api_repo_tree(
     owner: str = FPath(...),
     repo: str = FPath(...),
+    ref: Optional[str] = Query(None, description="Git reference (branch, tag, or commit SHA). Defaults to HEAD."),
     authorization: Optional[str] = Header(None),
 ):
     token = get_github_token(authorization)
-    tree = await get_repo_tree(owner, repo, token=token)
+    # GitHub's /git/trees endpoint wants a tree SHA.
+    # Our helper get_repo_tree defaults to HEAD and (for some repos) works, but
+    # for explicit branches we resolve branch -> commit -> tree sha for reliability.
+    resolved_ref = "HEAD"
+    if ref:
+        try:
+            # 1) Resolve a branch name to a commit SHA
+            #    GET /repos/{owner}/{repo}/git/ref/heads/{branch}
+            ref_data = await github_request(
+                f"/repos/{owner}/{repo}/git/ref/heads/{ref}",
+                token=token,
+            )
+            commit_sha = (ref_data.get("object") or {}).get("sha")
+
+            # 2) Resolve commit SHA to tree SHA
+            if commit_sha:
+                commit_data = await github_request(
+                    f"/repos/{owner}/{repo}/git/commits/{commit_sha}",
+                    token=token,
+                )
+                tree_sha = (commit_data.get("tree") or {}).get("sha")
+                resolved_ref = tree_sha or commit_sha
+            else:
+                # If unexpected payload, fall back to ref as-is
+                resolved_ref = ref
+        except Exception:
+            # If ref isn't a branch (tag/sha) or resolution fails, fall back to using ref directly.
+            resolved_ref = ref
+
+    tree = await get_repo_tree(owner, repo, token=token, ref=resolved_ref)
     return FileTreeResponse(files=[FileEntry(**f) for f in tree])
 
 
@@ -459,6 +490,13 @@ async def api_chat_execute(
         result = await execute_plan(
             req.plan, full_name, token=token, branch_name=req.branch_name
         )
+        # UI hint: whether this was a new-session hard switch or a sticky commit.
+        # Frontend can still infer this, but sending it makes the behavior explicit.
+        if isinstance(result, dict):
+            result.setdefault(
+                "mode",
+                "sticky" if req.branch_name else "hard-switch",
+            )
         return result
 
 

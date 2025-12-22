@@ -2,14 +2,47 @@ import React, { useState, useRef, useEffect } from "react";
 import AssistantMessage from "./AssistantMessage.jsx";
 import { getAuthHeaders } from "../utils/api.js";
 
-export default function ChatPanel({ repo }) {
-  const [messages, setMessages] = useState([]);
+export default function ChatPanel({
+  repo,
+  defaultBranch = "main",
+  currentBranch = "main",
+  onExecutionComplete,
+  // Session-aware chat persistence
+  sessionChatState,
+  onSessionChatStateChange,
+}) {
+  const [messages, setMessages] = useState(sessionChatState?.messages || []);
   const [goal, setGoal] = useState("");
-  const [plan, setPlan] = useState(null);
+  const [plan, setPlan] = useState(sessionChatState?.plan || null);
   const [loadingPlan, setLoadingPlan] = useState(false);
   const [executing, setExecuting] = useState(false);
   const [status, setStatus] = useState("");
   const messagesEndRef = useRef(null);
+
+  // ---------------------------------------------------------------------------
+  // Session State Machine: save/restore chat per branch
+  // - Switching to production branch resets chat (fresh start).
+  // - Switching back to AI branch restores previous chat.
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    // Apply incoming session state when branch changes.
+    // Note: we intentionally keep the input box (goal) cleared on context switches.
+    const nextMessages = sessionChatState?.messages || [];
+    const nextPlan = sessionChatState?.plan || null;
+    setMessages(nextMessages);
+    setPlan(nextPlan);
+    setGoal("");
+    setStatus("");
+    setLoadingPlan(false);
+    setExecuting(false);
+  }, [currentBranch]);
+
+  // Persist on change
+  useEffect(() => {
+    if (typeof onSessionChatStateChange !== "function") return;
+    onSessionChatStateChange({ messages, plan });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, plan]);
 
   // Auto-scroll to bottom when new messages are added
   useEffect(() => {
@@ -63,6 +96,11 @@ export default function ChatPanel({ repo }) {
     setExecuting(true);
     setStatus("");
     try {
+      // Sticky context: if the user is browsing a non-default branch, keep committing there.
+      // Hard switch: if the user is on defaultBranch, allow backend to create a new AI branch.
+      const branch_name =
+        currentBranch && currentBranch !== defaultBranch ? currentBranch : undefined;
+
       const res = await fetch("/api/chat/execute", {
         method: "POST",
         headers: {
@@ -73,11 +111,21 @@ export default function ChatPanel({ repo }) {
           repo_owner: repo.owner,
           repo_name: repo.name,
           plan,
+          branch_name,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Execution failed");
       setStatus(data.message || "Execution completed.");
+
+      // Inform App about branch context changes.
+      // If we did NOT pass a branch_name, the backend may have created a new branch.
+      const executedBranch = data.branch || branch_name;
+      const mode = data.mode || (branch_name ? "sticky" : "hard-switch");
+      if (typeof onExecutionComplete === "function") {
+        onExecutionComplete({ branch: executedBranch, mode });
+      }
+
       setMessages((msgs) => [
         ...msgs,
         {

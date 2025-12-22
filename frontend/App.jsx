@@ -14,6 +14,108 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [userInfo, setUserInfo] = useState(null);
 
+  // ---------------------------------------------------------------------------
+  // Branch/session state
+  // ---------------------------------------------------------------------------
+  // Visual Context (what the user is browsing) must match Execution Context (where AI writes).
+  // - defaultBranch: production branch (main/master/etc)
+  // - currentBranch: the branch currently displayed in the UI (file tree + context)
+  // - sessionBranch: the AI-created branch for the current workflow session
+  const [defaultBranch, setDefaultBranch] = useState("main");
+  const [currentBranch, setCurrentBranch] = useState("main");
+  const [sessionBranch, setSessionBranch] = useState(null); // e.g. gitpilot-...-417032
+  const [toast, setToast] = useState(null); // { title, message }
+
+  // Per-branch chat persistence.
+  // - For main/defaultBranch: chat resets (fresh start).
+  // - For AI branches: chat is saved/restored when user toggles branches.
+  const [chatByBranch, setChatByBranch] = useState({});
+
+  // Visual feedback triggers
+  const [pulseNonce, setPulseNonce] = useState(0);
+  const [lastExecution, setLastExecution] = useState(null); // { mode, branch, ts }
+
+  // When repo changes, reset session state to the repo's default branch.
+  useEffect(() => {
+    if (!repo) return;
+    const d = repo.default_branch || "main";
+    setDefaultBranch(d);
+    setCurrentBranch(d);
+    setSessionBranch(null);
+
+    // Reset chat state across repos.
+    setChatByBranch({});
+    setLastExecution(null);
+    setPulseNonce(0);
+  }, [repo?.full_name, repo?.default_branch]);
+
+  const showToast = (title, message) => {
+    setToast({ title, message });
+    // auto-hide after 5s
+    window.setTimeout(() => setToast(null), 5000);
+  };
+
+  // Called by ChatPanel after an execution finishes.
+  // Implements:
+  // - Rule 1 (Hard Switch) when starting from defaultBranch
+  // - Rule 2 (Sticky Context) when already in a session branch
+  const handleExecutionComplete = ({ branch, mode }) => {
+    if (!branch) return;
+
+    setLastExecution({ mode, branch, ts: Date.now() });
+
+    if (mode === "hard-switch") {
+      setSessionBranch(branch);
+      setCurrentBranch(branch);
+      setPulseNonce((n) => n + 1);
+      showToast(
+        "Context Switched",
+        `Changes pushed to new branch ${branch}. Switched current session to this branch.`
+      );
+    } else if (mode === "sticky") {
+      // No branch switch; keep currentBranch
+      showToast("Updated", `New commits added to ${branch}.`);
+    }
+  };
+
+  const handleBranchChange = (nextBranch) => {
+    if (!nextBranch || nextBranch === currentBranch) return;
+    setCurrentBranch(nextBranch);
+
+    // Chat persistence rules:
+    // - Switching to production (defaultBranch) resets chat (fresh start).
+    // - Switching to an AI branch restores its chat.
+    if (nextBranch === defaultBranch) {
+      setChatByBranch((prev) => {
+        const copy = { ...prev };
+        delete copy[defaultBranch];
+        return copy;
+      });
+    }
+
+    // Optional nudge when user leaves the AI session branch.
+    if (sessionBranch && nextBranch === defaultBranch) {
+      showToast(
+        "Viewing production branch",
+        `You are viewing ${defaultBranch}. AI changes are on ${sessionBranch}. New prompts will start a fresh session from ${defaultBranch}.`
+      );
+    }
+  };
+
+  const updateChatForCurrentBranch = (patch) => {
+    setChatByBranch((prev) => {
+      const key = currentBranch || defaultBranch;
+      const existing = prev[key] || { messages: [], plan: null };
+      return { ...prev, [key]: { ...existing, ...patch } };
+    });
+  };
+
+  const currentChatState =
+    chatByBranch[currentBranch || defaultBranch] ||
+    (currentBranch === defaultBranch
+      ? { messages: [], plan: null, reset: true }
+      : { messages: [], plan: null });
+
   // Check for existing authentication on mount
   useEffect(() => {
     checkAuthentication();
@@ -176,13 +278,28 @@ export default function App() {
             (repo ? (
               <div className="workspace-grid">
                 <aside className="gp-context-column">
-                  <ProjectContextPanel repo={repo} />
+                  <ProjectContextPanel
+                    repo={repo}
+                    defaultBranch={defaultBranch}
+                    currentBranch={currentBranch}
+                    sessionBranch={sessionBranch}
+                    onBranchChange={handleBranchChange}
+                    pulseNonce={pulseNonce}
+                    lastExecution={lastExecution}
+                  />
                 </aside>
                 <main className="gp-chat-column">
                   <div className="panel-header">
                     <span>GitPilot chat</span>
                   </div>
-                  <ChatPanel repo={repo} />
+                  <ChatPanel
+                    repo={repo}
+                    defaultBranch={defaultBranch}
+                    currentBranch={currentBranch}
+                    onExecutionComplete={handleExecutionComplete}
+                    sessionChatState={currentChatState}
+                    onSessionChatStateChange={updateChatForCurrentBranch}
+                  />
                 </main>
               </div>
             ) : (
@@ -199,6 +316,33 @@ export default function App() {
         </main>
       </div>
       <Footer />
+
+      {/* Toast */}
+      {toast && (
+        <div
+          style={{
+            position: "fixed",
+            top: 72,
+            right: 18,
+            zIndex: 9999,
+            background: "#0b0b0d",
+            color: "#EDEDED",
+            border: "1px solid rgba(255,255,255,0.12)",
+            borderLeft: "3px solid #3B82F6",
+            borderRadius: 10,
+            padding: "12px 14px",
+            minWidth: 320,
+            boxShadow: "0 10px 30px rgba(0,0,0,0.4)",
+          }}
+          role="status"
+          aria-live="polite"
+        >
+          <div style={{ fontSize: 12, fontWeight: 700 }}>{toast.title}</div>
+          <div style={{ fontSize: 12, opacity: 0.82, marginTop: 2 }}>
+            {toast.message}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
