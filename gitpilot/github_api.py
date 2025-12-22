@@ -265,9 +265,87 @@ async def search_user_repos(
     }
 
 
-async def get_repo_tree(owner: str, repo: str, token: Optional[str] = None) -> list[dict[str, str]]:
+async def get_repo(owner: str, repo: str, token: Optional[str] = None) -> dict[str, Any]:
+    """
+    Get repository information including default branch.
+
+    Returns:
+        Repository data including default_branch field
+    """
+    return await github_request(f"/repos/{owner}/{repo}", token=token)
+
+
+async def create_branch(
+    owner: str,
+    repo: str,
+    new_branch: str,
+    from_ref: str = "HEAD",
+    token: Optional[str] = None,
+) -> str:
+    """
+    Create a new branch in the repository.
+
+    Args:
+        owner: Repository owner
+        repo: Repository name
+        new_branch: Name of the new branch to create
+        from_ref: Reference to branch from (default: HEAD = default branch)
+        token: GitHub token
+
+    Returns:
+        The ref string of the created branch
+
+    Raises:
+        HTTPException: If branch creation fails
+    """
+    # 1. Resolve from_ref to a SHA
+    if from_ref == "HEAD":
+        repo_data = await get_repo(owner, repo, token=token)
+        base_branch = repo_data.get("default_branch", "main")
+    else:
+        base_branch = from_ref
+
+    # Get the commit SHA of the base branch
+    ref_data = await github_request(
+        f"/repos/{owner}/{repo}/git/ref/heads/{base_branch}",
+        token=token,
+    )
+    base_sha = ref_data["object"]["sha"]
+
+    # 2. Create new branch ref
+    body = {
+        "ref": f"refs/heads/{new_branch}",
+        "sha": base_sha,
+    }
+    new_ref = await github_request(
+        f"/repos/{owner}/{repo}/git/refs",
+        method="POST",
+        json=body,
+        token=token,
+    )
+    return new_ref["ref"]
+
+
+async def get_repo_tree(
+    owner: str,
+    repo: str,
+    token: Optional[str] = None,
+    ref: str = "HEAD",
+) -> list[dict[str, str]]:
+    """
+    Get the file tree of a repository at a specific ref.
+
+    Args:
+        owner: Repository owner
+        repo: Repository name
+        token: GitHub token
+        ref: Git reference (branch name, tag, or SHA). Defaults to HEAD.
+
+    Returns:
+        List of files with their paths and types
+    """
     data = await github_request(
-        f"/repos/{owner}/{repo}/git/trees/HEAD",
+        f"/repos/{owner}/{repo}/git/trees/{ref}",
         params={"recursive": 1},
         token=token,
     )
@@ -278,10 +356,34 @@ async def get_repo_tree(owner: str, repo: str, token: Optional[str] = None) -> l
     ]
 
 
-async def get_file(owner: str, repo: str, path: str, token: Optional[str] = None) -> str:
+async def get_file(
+    owner: str,
+    repo: str,
+    path: str,
+    token: Optional[str] = None,
+    ref: Optional[str] = None,
+) -> str:
+    """
+    Get file content from a repository.
+
+    Args:
+        owner: Repository owner
+        repo: Repository name
+        path: File path
+        token: GitHub token
+        ref: Optional git reference (branch, tag, or commit SHA)
+
+    Returns:
+        File content as string
+    """
     from base64 import b64decode
 
-    data = await github_request(f"/repos/{owner}/{repo}/contents/{path}", token=token)
+    params = {"ref": ref} if ref else None
+    data = await github_request(
+        f"/repos/{owner}/{repo}/contents/{path}",
+        params=params,
+        token=token,
+    )
     content_b64 = data.get("content") or ""
     return b64decode(content_b64.encode("utf-8")).decode("utf-8", errors="replace")
 
@@ -293,10 +395,20 @@ async def put_file(
     content: str,
     message: str,
     token: Optional[str] = None,
+    branch: Optional[str] = None,
 ) -> dict[str, Any]:
     """
     Create or update a file in the repository.
-    
+
+    Args:
+        owner: Repository owner
+        repo: Repository name
+        path: File path
+        content: File content
+        message: Commit message
+        token: GitHub token
+        branch: Optional branch name to commit to (defaults to repository's default branch)
+
     Uses the user's OAuth token. If the user doesn't have write access,
     they need to install the GitPilot GitHub App on the repository.
     """
@@ -304,7 +416,13 @@ async def put_file(
 
     sha: str | None = None
     try:
-        existing = await github_request(f"/repos/{owner}/{repo}/contents/{path}", token=token)
+        # When checking for existing file, use the branch if provided
+        params = {"ref": branch} if branch else None
+        existing = await github_request(
+            f"/repos/{owner}/{repo}/contents/{path}",
+            params=params,
+            token=token,
+        )
         sha = existing.get("sha")
     except HTTPException:
         sha = None
@@ -315,6 +433,8 @@ async def put_file(
     }
     if sha:
         body["sha"] = sha
+    if branch:
+        body["branch"] = branch
 
     result = await github_request(
         f"/repos/{owner}/{repo}/contents/{path}",
@@ -336,14 +456,29 @@ async def delete_file(
     path: str,
     message: str,
     token: Optional[str] = None,
+    branch: Optional[str] = None,
 ) -> dict[str, Any]:
     """
     Delete a file from the repository.
-    
+
+    Args:
+        owner: Repository owner
+        repo: Repository name
+        path: File path
+        message: Commit message
+        token: GitHub token
+        branch: Optional branch name to delete from (defaults to repository's default branch)
+
     Uses the user's OAuth token. If the user doesn't have write access,
     they need to install the GitPilot GitHub App on the repository.
     """
-    existing = await github_request(f"/repos/{owner}/{repo}/contents/{path}", token=token)
+    # Get the file SHA, optionally from a specific branch
+    params = {"ref": branch} if branch else None
+    existing = await github_request(
+        f"/repos/{owner}/{repo}/contents/{path}",
+        params=params,
+        token=token,
+    )
     sha = existing.get("sha")
 
     if not sha:
@@ -356,7 +491,9 @@ async def delete_file(
         "message": message,
         "sha": sha,
     }
-    
+    if branch:
+        body["branch"] = branch
+
     result = await github_request(
         f"/repos/{owner}/{repo}/contents/{path}",
         method="DELETE",
