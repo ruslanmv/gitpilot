@@ -3,6 +3,13 @@
   "name": "gitpilot",
   "builds": [
     {
+      "src": "frontend/package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "frontend/dist"
+      }
+    },
+    {
       "src": "api/index.py",
       "use": "@vercel/python"
     }
@@ -13,12 +20,11 @@
       "dest": "api/index.py"
     },
     {
-      "src": "/assets/(.*)",
-      "dest": "api/index.py"
+      "handle": "filesystem"
     },
     {
       "src": "/(.*)",
-      "dest": "api/index.py"
+      "dest": "frontend/dist/index.html"
     }
   ],
   "functions": {
@@ -30,18 +36,5 @@
   },
   "env": {
     "GITPILOT_VERCEL_DEPLOYMENT": "true"
-  },
-  "excludeFiles": [
-    "tests/**",
-    "docs/**",
-    "frontend/**",
-    "assets/**",
-    ".git/**",
-    ".github/**",
-    "*.md",
-    "Makefile",
-    ".env.template",
-    ".pypirc.template",
-    "MANIFEST.in"
-  ]
+  }
 }
