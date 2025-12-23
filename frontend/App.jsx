@@ -19,24 +19,21 @@ function uniq(arr) {
 
 export default function App() {
   const [repo, setRepo] = useState(null);
-  const [activePage, setActivePage] = useState("workspace"); 
+  const [activePage, setActivePage] = useState("workspace");
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [userInfo, setUserInfo] = useState(null);
 
-  // ---------------------------------------------------------------------------
   // Repo + Session State Machine
-  // ---------------------------------------------------------------------------
   const [repoStateByKey, setRepoStateByKey] = useState({});
-  const [toast, setToast] = useState(null); 
+  const [toast, setToast] = useState(null);
 
   const repoKey = useMemo(() => makeRepoKey(repo), [repo]);
 
   // Convenient selectors
   const currentRepoState = repoKey ? repoStateByKey[repoKey] : null;
 
-  const defaultBranch =
-    currentRepoState?.defaultBranch || repo?.default_branch || "main";
+  const defaultBranch = currentRepoState?.defaultBranch || repo?.default_branch || "main";
   const currentBranch = currentRepoState?.currentBranch || defaultBranch;
   const sessionBranches = currentRepoState?.sessionBranches || [];
   const lastExecution = currentRepoState?.lastExecution || null;
@@ -98,9 +95,8 @@ export default function App() {
       const cur = prev[repoKey];
       if (!cur) return prev;
 
-      const branchKey =
-        cur.currentBranch || cur.defaultBranch || defaultBranch;
-      
+      const branchKey = cur.currentBranch || cur.defaultBranch || defaultBranch;
+
       const existing = cur.chatByBranch?.[branchKey] || {
         messages: [],
         plan: null,
@@ -137,14 +133,14 @@ export default function App() {
 
       const nextState = { ...cur, currentBranch: nextBranch };
 
-      // UX: If switching BACK to Main -> Clear Main Chat (New Task Start)
+      // If switching BACK to main/default -> clear main chat (new task start)
       if (nextBranch === cur.defaultBranch) {
         nextState.chatByBranch = {
           ...nextState.chatByBranch,
-          [nextBranch]: { messages: [], plan: null } 
+          [nextBranch]: { messages: [], plan: null },
         };
       }
-      
+
       return { ...prev, [repoKey]: nextState };
     });
 
@@ -158,96 +154,117 @@ export default function App() {
   // ---------------------------------------------------------------------------
   // Execution complete
   // ---------------------------------------------------------------------------
-  const handleExecutionComplete = ({ branch, mode, commit_url, message }) => {
+  // ✅ FIX: accept completionMsg and seed branch with it
+  const handleExecutionComplete = ({
+    branch,
+    mode,
+    commit_url,
+    message,
+    completionMsg,
+    sourceBranch,
+  }) => {
     if (!repoKey || !branch) return;
 
     setRepoStateByKey((prev) => {
-      const cur = prev[repoKey] || {
+      const cur =
+        prev[repoKey] || {
           defaultBranch,
           currentBranch: defaultBranch,
           sessionBranches: [],
           lastExecution: null,
           pulseNonce: 0,
           chatByBranch: { [defaultBranch]: { messages: [], plan: null } },
-      };
+        };
 
       const next = { ...cur };
       next.lastExecution = { mode, branch, ts: Date.now() };
 
-      // Ensure chatByBranch container exists
       if (!next.chatByBranch) next.chatByBranch = {};
 
+      // Determine the branch we executed from (best-effort, but stable)
+      const prevBranchKey =
+        sourceBranch || cur.currentBranch || cur.defaultBranch || defaultBranch;
+
+      const successSystemMsg = {
+        role: "system",
+        isSuccess: true,
+        link: commit_url,
+        content:
+          mode === "hard-switch"
+            ? `🌱 **Session Started:** Created branch \`${branch}\`.`
+            : `✅ **Update Published:** Commits pushed to \`${branch}\`.`,
+      };
+
+      // Make sure completionMsg is valid and normalized
+      const normalizedCompletion =
+        completionMsg && (completionMsg.answer || completionMsg.content || completionMsg.executionLog)
+          ? {
+              from: completionMsg.from || "ai",
+              role: completionMsg.role || "assistant",
+              answer: completionMsg.answer,
+              content: completionMsg.content,
+              executionLog: completionMsg.executionLog,
+            }
+          : null;
+
       if (mode === "hard-switch") {
-        // 1. Register branch
+        // 1) Register branch
         next.sessionBranches = uniq([...(next.sessionBranches || []), branch]);
-        
-        // 2. Switch UI context
+
+        // 2) Switch UI context
         next.currentBranch = branch;
         next.pulseNonce = (next.pulseNonce || 0) + 1;
 
-        // 3. Handle Chat History (The Fix)
-        // Check if we already have history for this branch to avoid overwriting it
+        // 3) Handle chat history seeding/appending (✅ FIX)
         const existingTargetChat = next.chatByBranch[branch];
-        const isExistingSession = existingTargetChat && existingTargetChat.messages.length > 0;
+        const isExistingSession =
+          existingTargetChat && (existingTargetChat.messages || []).length > 0;
 
         if (isExistingSession) {
-             // SCENARIO: Pushing to EXISTING branch (Sticky behavior via hard-switch)
-             // Just append success message to existing history.
-             next.chatByBranch[branch] = {
-                 ...existingTargetChat,
-                 messages: [
-                     ...existingTargetChat.messages,
-                     {
-                         role: "system",
-                         content: `✅ **Update Published:** Pushed commits to \`${branch}\`.`,
-                         isSuccess: true,
-                         link: commit_url
-                     }
-                 ],
-                 plan: null // Clear plan
-             };
-        } else {
-            // SCENARIO: Creating NEW branch.
-            // Seed with history from previous branch so context is preserved.
-            const prevBranchKey = cur.currentBranch || cur.defaultBranch || defaultBranch;
-            const prevChat = (cur.chatByBranch && cur.chatByBranch[prevBranchKey]) || { messages: [] };
+          // Existing branch: append completion + success message
+          const appended = [
+            ...(existingTargetChat.messages || []),
+            ...(normalizedCompletion ? [normalizedCompletion] : []),
+            successSystemMsg,
+          ];
 
-            next.chatByBranch[branch] = {
-                messages: [
-                    ...prevChat.messages,
-                    {
-                        role: "system",
-                        content: `🌱 **Session Started:** Created branch \`${branch}\`.`,
-                        isSuccess: true,
-                        link: commit_url
-                    }
-                ],
-                plan: null
-            };
+          next.chatByBranch[branch] = {
+            ...existingTargetChat,
+            messages: appended,
+            plan: null,
+          };
+        } else {
+          // New branch: seed from previous branch history + completion + success
+          const prevChat =
+            (cur.chatByBranch && cur.chatByBranch[prevBranchKey]) || { messages: [], plan: null };
+
+          next.chatByBranch[branch] = {
+            messages: [
+              ...(prevChat.messages || []),
+              ...(normalizedCompletion ? [normalizedCompletion] : []),
+              successSystemMsg,
+            ],
+            plan: null,
+          };
         }
 
         // Ensure default branch bucket exists
         if (!next.chatByBranch[next.defaultBranch]) {
-            next.chatByBranch[next.defaultBranch] = { messages: [], plan: null };
+          next.chatByBranch[next.defaultBranch] = { messages: [], plan: null };
         }
-
       } else if (mode === "sticky") {
-        // Sticky Mode: Stay on current, just update history
+        // Sticky mode: stay on current branch, update that branch history
         next.currentBranch = cur.currentBranch || branch;
-        
-        const targetChat = next.chatByBranch[branch] || { messages: [] };
-        
+
+        const targetChat = next.chatByBranch[branch] || { messages: [], plan: null };
+
         next.chatByBranch[branch] = {
-            messages: [
-                ...targetChat.messages,
-                {
-                    role: "system",
-                    content: `✅ **Update Published:** Commits pushed to \`${branch}\`.`,
-                    isSuccess: true,
-                    link: commit_url
-                }
-            ],
-            plan: null
+          messages: [
+            ...(targetChat.messages || []),
+            ...(normalizedCompletion ? [normalizedCompletion] : []),
+            successSystemMsg,
+          ],
+          plan: null,
         };
       }
 
@@ -262,9 +279,11 @@ export default function App() {
   };
 
   // ---------------------------------------------------------------------------
-  // Auth & Render (Standard)
+  // Auth & Render
   // ---------------------------------------------------------------------------
-  useEffect(() => { checkAuthentication(); }, []);
+  useEffect(() => {
+    checkAuthentication();
+  }, []);
 
   const checkAuthentication = async () => {
     const token = localStorage.getItem("github_token");
@@ -283,7 +302,9 @@ export default function App() {
           setIsLoading(false);
           return;
         }
-      } catch (err) { console.error(err); }
+      } catch (err) {
+        console.error(err);
+      }
       localStorage.removeItem("github_token");
       localStorage.removeItem("github_user");
     }
@@ -304,7 +325,13 @@ export default function App() {
     setRepo(null);
   };
 
-  if (isLoading) return <div className="app-root"><div className="loading-spinner"></div></div>;
+  if (isLoading)
+    return (
+      <div className="app-root">
+        <div className="loading-spinner"></div>
+      </div>
+    );
+
   if (!isAuthenticated) return <LoginPage onAuthenticated={handleAuthenticated} />;
 
   return (
@@ -323,15 +350,21 @@ export default function App() {
             <button
               className={"nav-btn" + (activePage === "workspace" ? " nav-btn-active" : "")}
               onClick={() => setActivePage("workspace")}
-            >📁 Workspace</button>
+            >
+              📁 Workspace
+            </button>
             <button
               className={"nav-btn" + (activePage === "flow" ? " nav-btn-active" : "")}
               onClick={() => setActivePage("flow")}
-            >🔄 Agent Flow</button>
+            >
+              🔄 Agent Flow
+            </button>
             <button
               className={"nav-btn" + (activePage === "admin" ? " nav-btn-active" : "")}
               onClick={() => setActivePage("admin")}
-            >⚙️ Admin / Settings</button>
+            >
+              ⚙️ Admin / Settings
+            </button>
           </div>
 
           {activePage === "workspace" && (
@@ -340,7 +373,9 @@ export default function App() {
               {repo && (
                 <div className="sidebar-repo-info">
                   <div className="sidebar-repo-name">{repo.full_name}</div>
-                  <div className="sidebar-repo-meta">{repo.private ? "Private" : "Public"} repository</div>
+                  <div className="sidebar-repo-meta">
+                    {repo.private ? "Private" : "Public"} repository
+                  </div>
                 </div>
               )}
             </>
@@ -355,7 +390,9 @@ export default function App() {
                   <div className="user-login">@{userInfo.login}</div>
                 </div>
               </div>
-              <button className="btn-logout" onClick={handleLogout}>Logout</button>
+              <button className="btn-logout" onClick={handleLogout}>
+                Logout
+              </button>
             </div>
           )}
         </aside>
@@ -377,8 +414,12 @@ export default function App() {
                     lastExecution={lastExecution}
                   />
                 </aside>
+
                 <main className="gp-chat-column">
-                  <div className="panel-header"><span>GitPilot chat</span></div>
+                  <div className="panel-header">
+                    <span>GitPilot chat</span>
+                  </div>
+
                   <ChatPanel
                     repo={repo}
                     defaultBranch={defaultBranch}
@@ -398,20 +439,30 @@ export default function App() {
             ))}
         </main>
       </div>
+
       <Footer />
+
       {toast && (
         <div className="toast-notification">
-           <div style={{ fontSize: 12, fontWeight: 700 }}>{toast.title}</div>
-           <div style={{ fontSize: 12, opacity: 0.82 }}>{toast.message}</div>
+          <div style={{ fontSize: 12, fontWeight: 700 }}>{toast.title}</div>
+          <div style={{ fontSize: 12, opacity: 0.82 }}>{toast.message}</div>
         </div>
       )}
+
       <style>{`
         .toast-notification {
-            position: fixed; top: 72px; right: 18px; z-index: 9999;
-            background: #0b0b0d; color: #EDEDED;
-            border: 1px solid rgba(255,255,255,0.12); border-left: 3px solid #3B82F6;
-            border-radius: 10px; padding: 12px 14px; min-width: 320px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+          position: fixed;
+          top: 72px;
+          right: 18px;
+          z-index: 9999;
+          background: #0b0b0d;
+          color: #EDEDED;
+          border: 1px solid rgba(255,255,255,0.12);
+          border-left: 3px solid #3B82F6;
+          border-radius: 10px;
+          padding: 12px 14px;
+          min-width: 320px;
+          box-shadow: 0 10px 30px rgba(0,0,0,0.4);
         }
       `}</style>
     </div>
