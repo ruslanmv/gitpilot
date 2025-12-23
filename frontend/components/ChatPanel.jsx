@@ -11,7 +11,7 @@ const getHeaders = () => ({
 export default function ChatPanel({
   repo,
   defaultBranch = "main",
-  currentBranch = "main",
+  currentBranch, // ✅ do NOT default here; parent must pass the real one
   onExecutionComplete,
   sessionChatState,
   onSessionChatStateChange,
@@ -97,6 +97,9 @@ export default function ChatPanel({
     setStatus("");
     setPlan(null);
 
+    // ✅ Guard: never send null/undefined branch_name
+    const effectiveBranch = currentBranch || defaultBranch || "HEAD";
+
     try {
       const res = await fetch("/api/chat/plan", {
         method: "POST",
@@ -105,6 +108,7 @@ export default function ChatPanel({
           repo_owner: repo.owner,
           repo_name: repo.name,
           goal: text,
+          branch_name: effectiveBranch,
         }),
       });
 
@@ -147,10 +151,14 @@ export default function ChatPanel({
     setStatus("");
 
     try {
+      // Guard: currentBranch might be missing if parent didn't pass it yet
+      const safeCurrent = currentBranch || defaultBranch || "HEAD";
+      const safeDefault = defaultBranch || "main";
+
       // Sticky vs Hard Switch:
       // - If on default branch -> undefined (backend creates new branch)
       // - If already on AI branch -> currentBranch (backend updates existing)
-      const branch_name = currentBranch === defaultBranch ? undefined : currentBranch;
+      const branch_name = safeCurrent === safeDefault ? undefined : safeCurrent;
 
       const res = await fetch("/api/chat/execute", {
         method: "POST",
@@ -190,7 +198,7 @@ export default function ChatPanel({
           commit_url: data.commit_url || data.html_url,
           message: data.message,
           completionMsg,
-          sourceBranch: currentBranch,
+          sourceBranch: safeCurrent,
         });
       }
     } catch (err) {

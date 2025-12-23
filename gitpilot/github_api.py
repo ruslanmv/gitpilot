@@ -21,21 +21,27 @@ _request_token: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
 # Git SHA (40-hex) validator
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
+# add near _request_token
+_request_ref: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "request_ref", default=None
+)
+
 
 @contextmanager
-def execution_context(token: Optional[str]):
-    """
-    Context manager to set the GitHub token for the current execution scope.
-
-    Usage:
-        with execution_context(token):
-            ...
-    """
+def execution_context(token: Optional[str], ref: Optional[str] = None):
     token_var = _request_token.set(token)
+    ref_var = _request_ref.set(ref)
     try:
         yield
     finally:
         _request_token.reset(token_var)
+        _request_ref.reset(ref_var)
+
+
+def _github_ref(provided_ref: Optional[str] = None) -> Optional[str]:
+    if provided_ref:
+        return provided_ref
+    return _request_ref.get()
 
 
 def _github_token(provided_token: Optional[str] = None) -> str:
@@ -131,7 +137,7 @@ async def list_user_repos(
         "direction": "desc",
     }
     data = await github_request("/user/repos", params=params, token=token)
-    
+
     # FIXED: Added default_branch mapping
     repos = [
         {
@@ -140,7 +146,7 @@ async def list_user_repos(
             "full_name": r["full_name"],
             "private": r["private"],
             "owner": r["owner"]["login"],
-            "default_branch": r.get("default_branch", "main"), # Critical Fix
+            "default_branch": r.get("default_branch", "main"),  # Critical Fix
         }
         for r in data
     ]
@@ -193,7 +199,7 @@ async def list_user_repos_paginated(
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
 
     data = resp.json()
-    
+
     # FIXED: Added default_branch mapping
     repos = [
         {
@@ -202,7 +208,7 @@ async def list_user_repos_paginated(
             "full_name": r["full_name"],
             "private": r["private"],
             "owner": r["owner"]["login"],
-            "default_branch": r.get("default_branch", "main"), # Critical Fix
+            "default_branch": r.get("default_branch", "main"),  # Critical Fix
         }
         for r in data
     ]
@@ -296,17 +302,6 @@ async def _resolve_ref_to_commit_sha(
 ) -> str:
     """
     Resolve a ref (branch/tag/commit SHA/"HEAD"/None) to a commit SHA.
-
-    This is the key fix: GitHub's /git/trees endpoint needs a tree SHA,
-    and passing a branch name directly can fail (e.g. "No commit found for SHA: main")
-    depending on which endpoint you call.
-
-    Strategy:
-    - None/"HEAD" -> default branch name
-    - If already a 40-hex SHA -> use it
-    - Try git ref heads/<ref>
-    - Try git ref tags/<ref> (handle annotated tags)
-    - Fallback to /repos/.../commits/<ref> (GitHub resolves branch/tag names too)
     """
     if not ref or ref == "HEAD":
         ref = await _resolve_head_ref(owner, repo, token)
@@ -425,16 +420,13 @@ async def get_repo_tree(
     repo: str,
     token: Optional[str] = None,
     ref: str = "HEAD",
-) -> List[Dict[str, str]]:
-    """
-    Get the file tree of a repository at a specific ref (branch/tag/SHA).
+):
+    # ✅ FIX: Only use context ref if caller did NOT provide a specific ref
+    # i.e. only when ref is missing/empty or explicitly "HEAD"
+    ctx_ref = _github_ref(None)
+    if (not ref or ref == "HEAD") and ctx_ref:
+        ref = ctx_ref
 
-    Production fix:
-    - Resolve ref -> commit SHA -> tree SHA
-    - Call /git/trees/{tree_sha}?recursive=1
-
-    Returns only blobs (files) for UI simplicity.
-    """
     commit_sha = await _resolve_ref_to_commit_sha(owner, repo, ref, token)
     tree_sha = await _commit_sha_to_tree_sha(owner, repo, commit_sha, token)
 
@@ -458,9 +450,11 @@ async def get_file(
     token: Optional[str] = None,
     ref: Optional[str] = None,
 ) -> str:
-    """
-    Get file content from a repository (optionally at a specific ref/branch).
-    """
+    # ✅ FIX: Only use context ref if ref is missing or "HEAD"
+    ctx_ref = _github_ref(None)
+    if (not ref or ref == "HEAD") and ctx_ref:
+        ref = ctx_ref
+
     params = {"ref": ref} if ref else None
     data = await github_request(
         f"/repos/{owner}/{repo}/contents/{path}",
