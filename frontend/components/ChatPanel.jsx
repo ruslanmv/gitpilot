@@ -1,3 +1,4 @@
+// frontend/components/ChatPanel.jsx
 import React, { useState, useRef, useEffect } from "react";
 import AssistantMessage from "./AssistantMessage.jsx";
 
@@ -16,7 +17,6 @@ export default function ChatPanel({
   onSessionChatStateChange,
 }) {
   // Initialize state from props or defaults
-  // We use a ref to track if we've initialized to avoid overwriting state on every render
   const [messages, setMessages] = useState(sessionChatState?.messages || []);
   const [goal, setGoal] = useState("");
   const [plan, setPlan] = useState(sessionChatState?.plan || null);
@@ -31,7 +31,7 @@ export default function ChatPanel({
   // ---------------------------------------------------------------------------
   useEffect(() => {
     // When the branch changes, we load the new session state from the parent.
-    // This is the "Switch" action.
+    // This handles the "Context Switch" action visually.
     if (sessionChatState) {
         setMessages(sessionChatState.messages || []);
         setPlan(sessionChatState.plan || null);
@@ -40,18 +40,16 @@ export default function ChatPanel({
         setLoadingPlan(false);
         setExecuting(false);
     }
-  }, [currentBranch]); // Only trigger on branch switch, NOT on sessionChatState change
+  }, [currentBranch]); // Only trigger on branch switch
 
   // ---------------------------------------------------------------------------
-  // 2. PERSISTENCE: Save chat to Parent (Debounced or Conditional)
+  // 2. PERSISTENCE: Save chat to Parent
   // ---------------------------------------------------------------------------
   useEffect(() => {
-    // Only update parent if local state differs effectively or acts as a "save"
-    // We avoid circular dependency by NOT depending on sessionChatState here.
+    // Update parent state when local state changes
     if (typeof onSessionChatStateChange === "function") {
       // Prevents wiping parent state if local state is empty on mount
       if (messages.length > 0 || plan) {
-         // Create a stable object to compare or just push up
          onSessionChatStateChange({ messages, plan });
       }
     }
@@ -101,9 +99,9 @@ export default function ChatPanel({
       setMessages(prev => [...prev, {
         from: "ai",
         role: "assistant",
-        answer: data.summary || "Here is the proposed plan for your request.",
-        content: data.summary || "Here is the proposed plan for your request.",
-        plan: data // Store plan in message for history context
+        answer: data.summary || "Here is the proposed plan.",
+        content: data.summary || "Here is the proposed plan.",
+        plan: data 
       }]);
 
     } catch (err) {
@@ -124,9 +122,11 @@ export default function ChatPanel({
     setStatus("");
 
     try {
+      // -----------------------------------------------------------------------
       // LOGIC: Sticky vs Hard Switch
-      // If we are on the default branch, we send 'undefined' so backend creates a NEW branch.
-      // If we are already on an AI branch, we send that name so backend commits to IT.
+      // If we are on the default branch -> undefined (backend creates new branch)
+      // If we are already on an AI branch -> currentBranch (backend updates existing)
+      // -----------------------------------------------------------------------
       const branch_name = currentBranch === defaultBranch ? undefined : currentBranch;
 
       const res = await fetch("/api/chat/execute", {
@@ -152,16 +152,13 @@ export default function ChatPanel({
           role: "assistant",
           answer: data.message || "Execution completed.",
           content: data.message || "Execution completed.",
-          executionLog: data.executionLog, // CRITICAL: Pass logs to AssistantMessage
+          executionLog: data.executionLog, 
       };
 
       setMessages(prev => [...prev, completionMsg]);
       setPlan(null); // Clear active plan UI (it's now in history)
 
       // CRITICAL: Inform App.jsx to update global state
-      // This triggers the branch switch in App.jsx.
-      // App.jsx will then take the *current* chat state (which now includes the logs)
-      // and copy it to the new branch bucket.
       if (typeof onExecutionComplete === "function") {
         onExecutionComplete({ 
             branch: data.branch || data.branch_name, 
@@ -184,7 +181,7 @@ export default function ChatPanel({
   // ---------------------------------------------------------------------------
   return (
     <div className="chat-container">
-      {/* Inject minimal styles for success message support */}
+      {/* Retaining exact Enterprise Aesthetics */}
       <style>{`
         .chat-container { display: flex; flex-direction: column; height: 100%; }
         .chat-messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
@@ -254,7 +251,7 @@ export default function ChatPanel({
             );
           }
 
-          // 3. AI / Assistant Message (Uses the nice UI component)
+          // 3. AI / Assistant Message
           return (
             <div key={idx}>
               <AssistantMessage
@@ -277,10 +274,7 @@ export default function ChatPanel({
         {!messages.length && !plan && !loadingPlan && (
           <div className="chat-empty-state">
             <div className="chat-empty-icon">💬</div>
-            <p>Tell GitPilot what you want to do with this repository.</p>
-            <p style={{ fontSize: 12, color: "#676883", marginTop: 4 }}>
-              It will propose a safe step-by-step plan before any execution.
-            </p>
+            <p>Tell GitPilot what you want to do.</p>
           </div>
         )}
         
@@ -294,7 +288,7 @@ export default function ChatPanel({
         <div className="chat-input-row">
           <input
             className="chat-input"
-            placeholder="Describe the change you want to make..."
+            placeholder="Describe change..."
             value={goal}
             onChange={(e) => setGoal(e.target.value)}
             onKeyDown={(e) => {
@@ -309,7 +303,7 @@ export default function ChatPanel({
             className="chat-btn"
             type="button"
             onClick={send}
-            disabled={loadingPlan || executing || !!plan} // Disable send if plan is pending
+            disabled={loadingPlan || executing || !!plan}
           >
             {loadingPlan ? "Planning..." : "Generate plan"}
           </button>
