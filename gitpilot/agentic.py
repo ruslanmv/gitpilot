@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from .llm_provider import build_llm
 from .agent_tools import REPOSITORY_TOOLS, set_repo_context, get_repository_context_summary
-
+from fastapi import HTTPException
 logger = logging.getLogger(__name__)
 
 
