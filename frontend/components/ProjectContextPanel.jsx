@@ -1,31 +1,68 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import FileTree from "./FileTree.jsx";
 
+// --- INJECTED STYLES FOR ANIMATIONS ---
+const animationStyles = `
+  @keyframes highlight-pulse {
+    0% { background-color: rgba(59, 130, 246, 0.10); }
+    50% { background-color: rgba(59, 130, 246, 0.22); }
+    100% { background-color: transparent; }
+  }
+  .pulse-context {
+    animation: highlight-pulse 1.1s ease-out;
+  }
+`;
+
 /**
- * GitPilot - Project Context Panel
- * FIXED VERSION: Automatically retries app detection to fix stale cache issue
- * 
- * BUG FIX: When GitHub App is installed, the backend sometimes returns stale cache
- * showing "can_write: true" but "app_installed: false". This component now:
- * 1. Detects this condition
- * 2. Automatically retries after 1 second
- * 3. Shows "Verifying..." status during retry
- * 4. Only shows install card if truly no write access
+ * ProjectContextPanel (Production-ready)
+ *
+ * Controlled component:
+ * - Branch source of truth is App.jsx:
+ * - defaultBranch (prod)
+ * - currentBranch (what user sees)
+ * - sessionBranches (list of all active AI session branches)
+ *
+ * Responsibilities:
+ * - Show project context + branch dropdown + AI badge/banner
+ * - Fetch access status + file count for the currentBranch
+ * - Trigger visual pulse on pulseNonce (Hard Switch)
  */
-export default function ProjectContextPanel({ repo }) {
+export default function ProjectContextPanel({
+  repo,
+  defaultBranch,
+  currentBranch,
+  sessionBranch, // Active session branch (optional, for specific highlighting)
+  sessionBranches = [], // List of all AI branches
+  onBranchChange,
+  pulseNonce,
+}) {
   const [appUrl, setAppUrl] = useState("");
   const [fileCount, setFileCount] = useState(0);
-  const [branch, setBranch] = useState("main");
+
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+
+  // Data Loading State
   const [analyzing, setAnalyzing] = useState(false);
   const [accessInfo, setAccessInfo] = useState(null);
   const [treeError, setTreeError] = useState(null);
+
+  // Retry / Refresh Logic
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [retryCount, setRetryCount] = useState(0);
-  
-  // Use ref to track retry timeout
   const retryTimeoutRef = useRef(null);
 
-  // Fetch the GitHub App Installation URL on mount
+  // UX State
+  const [animateHeader, setAnimateHeader] = useState(false);
+  const [toast, setToast] = useState({ visible: false, title: "", msg: "" });
+
+  // Calculate effective default to prevent 'main' fallback errors
+  const effectiveDefaultBranch = defaultBranch || repo?.default_branch || "main";
+  const branch = currentBranch || effectiveDefaultBranch;
+
+  // Determine if we are currently viewing an AI Session branch
+  const isAiSession = (sessionBranches.includes(branch)) || (sessionBranch === branch && branch !== effectiveDefaultBranch);
+
+  // Fetch App URL on mount
   useEffect(() => {
     fetch("/api/auth/app-url")
       .then((res) => res.json())
@@ -35,467 +72,514 @@ export default function ProjectContextPanel({ repo }) {
       .catch((err) => console.error("Failed to fetch App URL:", err));
   }, []);
 
-  // Fetch repo access info and stats whenever repo changes or user retries
+  // Hard Switch pulse: whenever App increments pulseNonce
+  useEffect(() => {
+    if (!pulseNonce) return;
+    setAnimateHeader(true);
+    const t = window.setTimeout(() => setAnimateHeader(false), 1100);
+    return () => window.clearTimeout(t);
+  }, [pulseNonce]);
+
+  // Main data fetcher (Access + Tree stats) for currentBranch
   useEffect(() => {
     if (!repo) return;
 
-    setBranch(repo.default_branch || "main");
-    setAnalyzing(true);
-    setAccessInfo(null);
+    if (!accessInfo) setAnalyzing(true);
     setTreeError(null);
-    
-    // Clear any pending retries when repo changes
+
     if (retryTimeoutRef.current) {
       clearTimeout(retryTimeoutRef.current);
       retryTimeoutRef.current = null;
     }
 
-    // Get GitHub token from localStorage
     let headers = {};
     try {
       const token = localStorage.getItem("github_token");
-      if (token) {
-        headers = { Authorization: `Bearer ${token}` };
-      }
+      if (token) headers = { Authorization: `Bearer ${token}` };
     } catch (e) {
-      console.warn("Unable to read github_token from localStorage:", e);
+      console.warn("Unable to read github_token:", e);
     }
 
-    // Add cache busting parameter
     const cacheBuster = `&_t=${Date.now()}&retry=${retryCount}`;
 
-    // Check repo access with automatic retry logic
-    fetch(`/api/auth/repo-access?owner=${repo.owner}&repo=${repo.name}${cacheBuster}`, { 
+    // A) Access Check (with Stale Cache Fix)
+    fetch(`/api/auth/repo-access?owner=${repo.owner}&repo=${repo.name}${cacheBuster}`, {
       headers,
-      cache: 'no-cache' // Force fresh request, bypass browser cache
+      cache: "no-cache",
     })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
-        
+
         if (!res.ok) {
-          console.error("Failed to check repo access:", data);
-          setAccessInfo({
-            can_write: false,
-            app_installed: false,
-            auth_type: "none"
-          });
-        } else {
-          console.log(`✓ Access check (attempt ${retryCount + 1}):`, {
-            can_write: data.can_write,
-            app_installed: data.app_installed,
-            auth_type: data.auth_type
-          });
-          
-          setAccessInfo(data);
-          
-          // AUTOMATIC RETRY LOGIC for stale cache bug
-          // If backend says "can push but app not installed", this is likely stale cache
-          // Automatically retry once after 1 second
-          if (data.can_write && !data.app_installed && retryCount === 0) {
-            console.warn("⚠️ Detected potential stale cache - auto-retry in 1s...");
-            retryTimeoutRef.current = setTimeout(() => {
-              console.log("↻ Retrying access check...");
-              setRetryCount(1);
-            }, 1000);
-          }
+          setAccessInfo({ can_write: false, app_installed: false, auth_type: "none" });
+          return;
+        }
+
+        setAccessInfo(data);
+
+        // Auto-retry if user has push access but App is not detected yet (Stale Cache)
+        if (data.can_write && !data.app_installed && retryCount === 0) {
+          retryTimeoutRef.current = setTimeout(() => {
+            setRetryCount(1);
+          }, 1000);
         }
       })
-      .catch((err) => {
-        console.error("Failed to check repo access:", err);
-        setAccessInfo({
-          can_write: false,
-          app_installed: false,
-          auth_type: "none"
-        });
+      .catch(() => {
+        setAccessInfo({ can_write: false, app_installed: false, auth_type: "none" });
       });
 
-    // Fetch file tree for stats
-    fetch(`/api/repos/${repo.owner}/${repo.name}/tree?_t=${Date.now()}`, { 
+    // B) Tree count for the selected branch (Uses specific branch to avoid 404s)
+    setAnalyzing(true);
+    fetch(`/api/repos/${repo.owner}/${repo.name}/tree?ref=${encodeURIComponent(branch)}&_t=${Date.now()}`, {
       headers,
-      cache: 'no-cache'
+      cache: "no-cache",
     })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
-
         if (!res.ok) {
-          const message = data.detail || data.error || "Failed to load repository tree.";
-          setTreeError(message);
-        } else {
-          setFileCount(Array.isArray(data.files) ? data.files.length : 0);
-          setTreeError(null);
+          setTreeError(data.detail || "Failed to load tree");
+          setFileCount(0);
+          return;
         }
+        setFileCount(Array.isArray(data.files) ? data.files.length : 0);
       })
       .catch((err) => {
-        console.error("Failed to fetch file tree:", err);
         setTreeError(err.message);
+        setFileCount(0);
       })
       .finally(() => setAnalyzing(false));
-      
-    // Cleanup function - cancel any pending retry
-    return () => {
-      if (retryTimeoutRef.current) {
-        clearTimeout(retryTimeoutRef.current);
-        retryTimeoutRef.current = null;
-      }
-    };
-  }, [repo?.owner, repo?.name, repo?.default_branch, refreshTrigger, retryCount]);
 
-  const handleInstallClick = () => {
-    if (!appUrl) return;
-    const targetUrl = appUrl.endsWith("/") 
-        ? `${appUrl}installations/new` 
-        : `${appUrl}/installations/new`;
-    
-    window.open(targetUrl, "_blank", "noopener,noreferrer");
+    return () => {
+      if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repo?.owner, repo?.name, branch, refreshTrigger, retryCount]);
+
+  const showToast = (title, msg) => {
+    setToast({ visible: true, title, msg });
+    setTimeout(() => setToast((prev) => ({ ...prev, visible: false })), 3000);
+  };
+
+  const handleManualSwitch = (targetBranch) => {
+    if (!targetBranch || targetBranch === branch) {
+      setIsDropdownOpen(false);
+      return;
+    }
+
+    // Local UI feedback (App.jsx will handle the actual state change)
+    const goingAi = sessionBranches.includes(targetBranch);
+    showToast(
+      goingAi ? "Context Switched" : "Switched to Production",
+      goingAi ? `Viewing AI Session: ${targetBranch}` : `Viewing ${targetBranch}.`
+    );
+
+    setIsDropdownOpen(false);
+    if (onBranchChange) onBranchChange(targetBranch);
   };
 
   const handleRefresh = () => {
     setAnalyzing(true);
-    setRetryCount(0); // Reset retry count on manual refresh
-    setRefreshTrigger(prev => prev + 1);
+    setRetryCount(0);
+    setRefreshTrigger((prev) => prev + 1);
   };
 
-  // --- Styles (Anthropic/Claude Dark Theme) ---
-  const theme = {
-    bg: "#131316",
-    border: "#27272A",
-    textPrimary: "#EDEDED",
-    textSecondary: "#A1A1AA",
-    accent: "#D95C3D",
-    accentHover: "#C44F32",
-    warningBg: "rgba(245, 158, 11, 0.1)",
-    warningBorder: "rgba(245, 158, 11, 0.2)",
-    warningText: "#F59E0B",
-    cardBg: "#18181B",
-    successColor: "#10B981",
+  const handleInstallClick = () => {
+    if (!appUrl) return;
+    const targetUrl = appUrl.endsWith("/") ? `${appUrl}installations/new` : `${appUrl}/installations/new`;
+    window.open(targetUrl, "_blank", "noopener,noreferrer");
   };
 
-  const styles = {
-    container: {
-      height: "100%",
-      borderRight: `1px solid ${theme.border}`,
-      backgroundColor: theme.bg,
-      display: "flex",
-      flexDirection: "column",
-      fontFamily: '"Söhne", "Inter", -apple-system, system-ui, sans-serif',
-    },
-    header: {
-      padding: "16px 20px",
-      borderBottom: `1px solid ${theme.border}`,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-    },
-    title: {
-      fontSize: "13px",
-      fontWeight: "600",
-      color: theme.textPrimary,
-      letterSpacing: "-0.01em",
-    },
-    repoBadge: {
-      backgroundColor: "#27272A",
-      color: theme.textSecondary,
-      fontSize: "11px",
-      padding: "2px 8px",
-      borderRadius: "12px",
-      border: `1px solid ${theme.border}`,
-      fontFamily: "monospace",
-      maxWidth: "200px",
-      overflow: "hidden",
-      textOverflow: "ellipsis",
-      whiteSpace: "nowrap",
-    },
-    content: {
-      padding: "16px 20px 12px 20px",
-      display: "flex",
-      flexDirection: "column",
-      gap: "16px",
-      minHeight: 0,
-    },
-    statRow: {
-      display: "flex",
-      justifyContent: "space-between",
-      fontSize: "13px",
-      marginBottom: "4px",
-    },
-    label: { color: theme.textSecondary },
-    value: { color: theme.textPrimary, fontWeight: "500" },
-    
-    refreshButton: {
-      marginTop: "8px",
-      height: "32px",
-      padding: "0 12px",
-      backgroundColor: "transparent",
-      color: theme.textSecondary,
-      border: `1px solid ${theme.border}`,
-      borderRadius: "6px",
-      fontSize: "12px",
-      fontWeight: "500",
-      cursor: "pointer",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      gap: "6px",
-      transition: "all 0.2s",
-    },
-    
-    installLink: {
-      marginTop: "4px",
-      fontSize: "12px",
-      color: theme.accent,
-      textDecoration: "none",
-      cursor: "pointer",
-      display: "flex",
-      alignItems: "center",
-      gap: "6px",
-      transition: "opacity 0.2s",
-    },
-    
-    installCard: {
-      marginTop: "8px",
-      padding: "16px",
-      borderRadius: "8px",
-      backgroundColor: theme.cardBg,
-      border: `1px solid ${theme.warningBorder}`,
-      display: "flex",
-      flexDirection: "column",
-      gap: "12px",
-    },
-    installHeader: {
-      display: "flex",
-      alignItems: "center",
-      gap: "10px",
-      fontSize: "14px",
-      fontWeight: "600",
-      color: theme.textPrimary,
-    },
-    installText: {
-      fontSize: "13px",
-      color: theme.textSecondary,
-      lineHeight: "1.5",
-    },
-    buttonRow: {
-        display: 'flex',
-        gap: '10px',
-        marginTop: '4px'
-    },
-    installButton: {
-      flex: 1,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      gap: "8px",
-      height: "36px",
-      backgroundColor: theme.accent,
-      color: "#FFFFFF",
-      border: "none",
-      borderRadius: "6px",
-      fontSize: "13px",
-      fontWeight: "500",
-      cursor: appUrl ? "pointer" : "not-allowed",
-      opacity: appUrl ? 1 : 0.6,
-      transition: "background 0.2s ease",
-    },
-    treeWrapper: {
-      marginTop: "8px",
-      paddingTop: "8px",
-      borderTop: `1px solid ${theme.border}`,
-      overflow: "auto",
-      flex: 1,
-    },
-    emptyState: {
-      padding: "20px",
-      color: theme.textSecondary,
-      fontSize: "13px",
-    },
-    errorState: {
-      padding: "20px",
-      color: theme.warningText,
-      fontSize: "12px",
-      backgroundColor: theme.warningBg,
-      border: `1px solid ${theme.warningBorder}`,
-      borderRadius: "6px",
-      margin: "10px 20px",
-    },
-  };
+  // --- STYLES ---
+  const theme = useMemo(
+    () => ({
+      bg: "#131316",
+      border: "#27272A",
+      textPrimary: "#EDEDED",
+      textSecondary: "#A1A1AA",
+      accent: "#3b82f6",
+      warningBorder: "rgba(245, 158, 11, 0.2)",
+      warningText: "#F59E0B",
+      successColor: "#10B981",
+      cardBg: "#18181B",
+      aiBg: "rgba(59, 130, 246, 0.10)",
+      aiBorder: "rgba(59, 130, 246, 0.30)",
+      aiText: "#60a5fa",
+    }),
+    []
+  );
+
+  const styles = useMemo(
+    () => ({
+      container: {
+        height: "100%",
+        borderRight: `1px solid ${theme.border}`,
+        backgroundColor: theme.bg,
+        display: "flex",
+        flexDirection: "column",
+        fontFamily: '"Söhne", "Inter", sans-serif',
+        position: "relative",
+        overflow: "hidden",
+      },
+      header: {
+        padding: "16px 20px",
+        borderBottom: `1px solid ${theme.border}`,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        transition: "background-color 0.3s ease",
+      },
+      titleGroup: { display: "flex", alignItems: "center", gap: "8px" },
+      title: { fontSize: "13px", fontWeight: "600", color: theme.textPrimary },
+      repoBadge: {
+        backgroundColor: "#27272A",
+        color: theme.textSecondary,
+        fontSize: "11px",
+        padding: "2px 8px",
+        borderRadius: "12px",
+        border: `1px solid ${theme.border}`,
+        fontFamily: "monospace",
+      },
+      aiBadge: {
+        display: "flex",
+        alignItems: "center",
+        gap: "6px",
+        backgroundColor: theme.aiBg,
+        color: theme.aiText,
+        fontSize: "10px",
+        fontWeight: "bold",
+        padding: "2px 8px",
+        borderRadius: "12px",
+        border: `1px solid ${theme.aiBorder}`,
+        textTransform: "uppercase",
+        letterSpacing: "0.5px",
+      },
+      content: {
+        padding: "16px 20px 12px 20px",
+        display: "flex",
+        flexDirection: "column",
+        gap: "12px",
+      },
+      statRow: { display: "flex", justifyContent: "space-between", fontSize: "13px", marginBottom: "4px" },
+      label: { color: theme.textSecondary },
+      value: { color: theme.textPrimary, fontWeight: "500" },
+      dropdownContainer: { position: "relative" },
+      branchButton: {
+        display: "flex",
+        alignItems: "center",
+        gap: "6px",
+        padding: "4px 8px",
+        borderRadius: "4px",
+        border: `1px solid ${isAiSession ? theme.aiBorder : theme.border}`,
+        backgroundColor: isAiSession ? "rgba(59, 130, 246, 0.05)" : "transparent",
+        color: isAiSession ? theme.aiText : theme.textPrimary,
+        fontSize: "13px",
+        cursor: "pointer",
+        fontFamily: "monospace",
+      },
+      dropdownMenu: {
+        position: "absolute",
+        top: "100%",
+        left: 0,
+        marginTop: "4px",
+        width: "240px",
+        backgroundColor: "#1F1F23",
+        border: `1px solid ${theme.border}`,
+        borderRadius: "6px",
+        boxShadow: "0 4px 12px rgba(0,0,0,0.5)",
+        zIndex: 50,
+        display: isDropdownOpen ? "block" : "none",
+        overflow: "hidden",
+      },
+      dropdownItem: {
+        padding: "8px 12px",
+        fontSize: "13px",
+        color: theme.textSecondary,
+        cursor: "pointer",
+        display: "flex",
+        alignItems: "center",
+        gap: "8px",
+        borderBottom: `1px solid ${theme.border}`,
+      },
+      contextBanner: {
+        backgroundColor: theme.aiBg,
+        borderTop: `1px solid ${theme.aiBorder}`,
+        padding: "8px 20px",
+        fontSize: "11px",
+        color: theme.aiText,
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+      },
+      toast: {
+        position: "absolute",
+        top: "16px",
+        right: "16px",
+        backgroundColor: "#18181B",
+        border: `1px solid ${theme.border}`,
+        borderLeft: `3px solid ${theme.accent}`,
+        borderRadius: "6px",
+        padding: "12px",
+        boxShadow: "0 4px 12px rgba(0,0,0,0.5)",
+        zIndex: 100,
+        minWidth: "240px",
+        transition: "all 0.3s cubic-bezier(0.16, 1, 0.3, 1)",
+        transform: toast.visible ? "translateX(0)" : "translateX(120%)",
+        opacity: toast.visible ? 1 : 0,
+      },
+      toastTitle: { fontSize: "13px", fontWeight: "bold", color: theme.textPrimary, marginBottom: "2px" },
+      toastMsg: { fontSize: "11px", color: theme.textSecondary },
+      refreshButton: {
+        marginTop: "8px",
+        height: "32px",
+        padding: "0 12px",
+        backgroundColor: "transparent",
+        color: theme.textSecondary,
+        border: `1px solid ${theme.border}`,
+        borderRadius: "6px",
+        fontSize: "12px",
+        cursor: analyzing ? "not-allowed" : "pointer",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: "6px",
+      },
+      treeWrapper: { flex: 1, overflow: "auto", borderTop: `1px solid ${theme.border}` },
+      installCard: {
+        marginTop: "8px",
+        padding: "12px",
+        borderRadius: "8px",
+        backgroundColor: theme.cardBg,
+        border: `1px solid ${theme.warningBorder}`,
+      },
+      installHeader: {
+        display: "flex",
+        alignItems: "center",
+        gap: "10px",
+        fontSize: "14px",
+        fontWeight: "600",
+        color: theme.textPrimary,
+      },
+      installText: {
+        fontSize: "13px",
+        color: theme.textSecondary,
+        lineHeight: "1.5",
+      },
+    }),
+    [analyzing, isAiSession, isDropdownOpen, theme, toast.visible]
+  );
+
+  // Determine status text
+  let statusText = "Checking...";
+  let statusColor = theme.textSecondary;
+  let showInstallCard = false;
+
+  if (!analyzing && accessInfo) {
+    if (accessInfo.app_installed) {
+      statusText = "Write Access ✓";
+      statusColor = theme.successColor;
+    } else if (accessInfo.can_write && retryCount === 0) {
+      statusText = "Verifying...";
+    } else if (accessInfo.can_write || accessInfo.auth_type === "none") {
+      statusText = accessInfo.can_write ? "Push Access (No App)" : "Read Only";
+      statusColor = theme.warningText;
+      showInstallCard = true;
+    }
+  }
 
   if (!repo) {
     return (
       <div style={styles.container}>
-        <div style={styles.header}>
-          <span style={styles.title}>Project context</span>
-        </div>
-        <div style={styles.emptyState}>Select a repository to view context.</div>
+        <div style={styles.content}>Select a Repo</div>
       </div>
     );
   }
 
-  const shortName =
-    repo.full_name && repo.full_name.length > 26
-      ? repo.full_name.slice(0, 26) + "…"
-      : repo.full_name || `${repo.owner}/${repo.name}`;
-
-  // IMPROVED STATUS LOGIC - handles retry and stale cache
-  let statusText = "Checking...";
-  let statusColor = theme.textSecondary;
-  let showInstallCard = false;
-  let showInstallLink = false;
-  
-  if (!analyzing && accessInfo) {
-    if (accessInfo.app_installed) {
-      // ✓ App confirmed installed
-      statusText = "Write Access ✓";
-      statusColor = theme.successColor;
-      showInstallCard = false;
-      showInstallLink = false;
-    } else if (accessInfo.can_write && retryCount === 0) {
-      // Edge case: Has push but app not detected yet
-      // This happens due to GitHub API cache - we'll auto-retry
-      statusText = "Verifying...";
-      statusColor = theme.textSecondary;
-      showInstallCard = false; // Don't show install card during verification
-      showInstallLink = false;
-    } else if (accessInfo.can_write && retryCount > 0) {
-      // After retry, still no app detected but has push
-      // This is rare but possible (user has direct push without app)
-      statusText = "Push Access";
-      statusColor = theme.warningText;
-      showInstallCard = true; // Show card to install app for agent features
-      showInstallLink = true;
-    } else {
-      // No write access at all
-      statusText = "Read Only";
-      statusColor = theme.warningText;
-      showInstallCard = true;
-      showInstallLink = true;
-    }
-  }
-
   return (
     <div style={styles.container}>
-      {/* Header */}
-      <div style={styles.header}>
-        <span style={styles.title}>Project context</span>
-        <span style={styles.repoBadge}>{shortName}</span>
+      <style>{animationStyles}</style>
+
+      {/* TOAST */}
+      <div style={styles.toast}>
+        <div style={styles.toastTitle}>{toast.title}</div>
+        <div style={styles.toastMsg}>{toast.msg}</div>
       </div>
 
-      {/* Stats & Actions */}
-      <div style={styles.content}>
-        <div>
-          <div style={styles.statRow}>
-            <span style={styles.label}>Branch:</span>
-            <span style={styles.value}>{branch}</span>
-          </div>
-          <div style={styles.statRow}>
-            <span style={styles.label}>Files:</span>
-            <span style={styles.value}>{analyzing ? "…" : fileCount}</span>
-          </div>
-          <div style={styles.statRow}>
-            <span style={styles.label}>Status:</span>
-            <span style={{...styles.value, color: statusColor}}>
-                 {statusText}
+      {/* HEADER */}
+      <div style={styles.header} className={animateHeader ? "pulse-context" : ""}>
+        <div style={styles.titleGroup}>
+          <span style={styles.title}>Project context</span>
+          {isAiSession && (
+            <span style={styles.aiBadge}>
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+              </svg>
+              AI Session
             </span>
-          </div>
-          
-          {/* Refresh Button */}
-          <button
-            type="button"
-            style={styles.refreshButton}
-            onClick={handleRefresh}
-            disabled={analyzing}
-            onMouseOver={(e) => {
-              if (!analyzing) {
-                e.currentTarget.style.backgroundColor = "rgba(255, 255, 255, 0.05)";
-              }
-            }}
-            onMouseOut={(e) => {
-              e.currentTarget.style.backgroundColor = "transparent";
-            }}
-          >
-            <svg 
-              width="14" 
-              height="14" 
-              viewBox="0 0 24 24" 
-              fill="none" 
-              stroke="currentColor" 
-              strokeWidth="2"
-              style={{
-                transform: analyzing ? "rotate(360deg)" : "rotate(0deg)",
-                transition: "transform 0.6s ease"
-              }}
-            >
-              <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
-            </svg>
-            {analyzing ? "Refreshing..." : "Refresh"}
-          </button>
-          
-          {/* Install App link if needed */}
-          {showInstallLink && appUrl && (
-            <div style={{ marginTop: "8px" }}>
-              <a
-                href="#"
-                style={styles.installLink}
-                onClick={(e) => {
-                  e.preventDefault();
-                  handleInstallClick();
-                }}
-                onMouseOver={(e) => { e.currentTarget.style.opacity = "0.8"; }}
-                onMouseOut={(e) => { e.currentTarget.style.opacity = "1"; }}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405 1.02 0 2.04.135 3 .405 2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
-                </svg>
-                Install GitPilot App to enable write access
-              </a>
-            </div>
           )}
         </div>
+        {!isAiSession && <span style={styles.repoBadge}>{repo.name}</span>}
+      </div>
 
-        {/* Install Card - only shows when truly needed */}
+      {/* CONTENT */}
+      <div style={styles.content}>
+        {/* Branch selector */}
+        <div style={styles.statRow}>
+          <span style={styles.label}>Branch:</span>
+
+          <div style={styles.dropdownContainer}>
+            <button
+              style={styles.branchButton}
+              onClick={() => setIsDropdownOpen((v) => !v)}
+              onBlur={() => setTimeout(() => setIsDropdownOpen(false), 200)}
+              type="button"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <line x1="6" y1="3" x2="6" y2="15"></line>
+                <circle cx="18" cy="6" r="3"></circle>
+                <circle cx="6" cy="18" r="3"></circle>
+                <path d="M18 9a9 9 0 0 1-9 9"></path>
+              </svg>
+              {branch}
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="6 9 12 15 18 9"></polyline>
+              </svg>
+            </button>
+
+            {isDropdownOpen && (
+              <div style={styles.dropdownMenu}>
+                <div
+                  style={{
+                    ...styles.dropdownItem,
+                    fontSize: "10px",
+                    color: theme.textSecondary,
+                    textTransform: "uppercase",
+                  }}
+                >
+                  Switch Branch
+                </div>
+
+                {/* Production */}
+                <div
+                  style={{
+                    ...styles.dropdownItem,
+                    backgroundColor: branch === effectiveDefaultBranch ? "#27272A" : "transparent",
+                  }}
+                  onMouseDown={() => handleManualSwitch(effectiveDefaultBranch)}
+                >
+                  <span style={{ opacity: branch === effectiveDefaultBranch ? 1 : 0 }}>✓</span>
+                  {effectiveDefaultBranch} (Prod)
+                </div>
+
+                {/* AI Session Branches List */}
+                {sessionBranches && sessionBranches.length > 0 && (
+                  <>
+                    <div style={{ borderBottom: `1px solid ${theme.border}`, margin: '4px 0' }}></div>
+                    {sessionBranches.map(sb => (
+                      <div
+                        key={sb}
+                        style={{
+                          ...styles.dropdownItem,
+                          color: theme.aiText,
+                          backgroundColor: branch === sb ? "rgba(59, 130, 246, 0.10)" : "transparent",
+                          borderBottom: "none",
+                        }}
+                        onMouseDown={() => handleManualSwitch(sb)}
+                      >
+                        <span style={{ opacity: branch === sb ? 1 : 0 }}>✓</span>
+                        {sb}
+                      </div>
+                    ))}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Stats */}
+        <div style={styles.statRow}>
+          <span style={styles.label}>Files:</span>
+          <span style={styles.value}>{analyzing ? "…" : fileCount}</span>
+        </div>
+
+        <div style={styles.statRow}>
+          <span style={styles.label}>Status:</span>
+          <span style={{ ...styles.value, color: statusColor }}>{statusText}</span>
+        </div>
+
+        {/* Tree error (optional display) */}
+        {treeError && (
+          <div style={{ fontSize: 11, color: theme.warningText }}>
+            {treeError}
+          </div>
+        )}
+
+        {/* Refresh */}
+        <button type="button" style={styles.refreshButton} onClick={handleRefresh} disabled={analyzing}>
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            style={{
+              transform: analyzing ? "rotate(360deg)" : "rotate(0deg)",
+              transition: "transform 0.6s ease",
+            }}
+          >
+            <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+          </svg>
+          {analyzing ? "Refreshing..." : "Refresh"}
+        </button>
+
+        {/* Install card */}
         {showInstallCard && (
           <div style={styles.installCard}>
             <div style={styles.installHeader}>
               <span>⚡</span>
-              <span>Enable Agent Write Access</span>
+              <span>Enable Write Access</span>
             </div>
-
-            <p style={styles.installText}>
-              Install the GitPilot GitHub App to enable AI agent operations 
-              (create, modify, delete files) on this repository.
+            <p style={{ ...styles.installText, margin: "8px 0" }}>
+              Install the GitPilot App to enable AI agent operations.
             </p>
-
-            <div style={styles.buttonRow}>
-                <button
-                type="button"
-                style={styles.installButton}
-                disabled={!appUrl}
-                onClick={handleInstallClick}
-                onMouseOver={(e) => {
-                    if (appUrl) e.currentTarget.style.backgroundColor = theme.accentHover;
-                }}
-                onMouseOut={(e) => {
-                    if (appUrl) e.currentTarget.style.backgroundColor = theme.accent;
-                }}
-                >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405 1.02 0 2.04.135 3 .405 2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
-                </svg>
-                Install App
-                </button>
-            </div>
+            <button
+              type="button"
+              style={{
+                ...styles.refreshButton,
+                width: "100%",
+                backgroundColor: theme.accent,
+                color: "#fff",
+                border: "none",
+              }}
+              onClick={handleInstallClick}
+            >
+              Install App
+            </button>
           </div>
         )}
       </div>
 
-      {/* File Tree */}
+      {/* Context banner */}
+      {isAiSession && (
+        <div style={styles.contextBanner}>
+          <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="16" x2="12" y2="12"></line>
+              <line x1="12" y1="8" x2="12.01" y2="8"></line>
+            </svg>
+            You are viewing an AI Session branch.
+          </span>
+          <span style={{ textDecoration: "underline", cursor: "pointer" }} onClick={() => handleManualSwitch(effectiveDefaultBranch)}>
+            Return to {effectiveDefaultBranch}
+          </span>
+        </div>
+      )}
+
+      {/* File tree (branch-aware) */}
       <div style={styles.treeWrapper}>
-        {treeError ? (
-          <div style={styles.errorState}>
-            ⚠️ Failed to load files: {treeError}
-          </div>
-        ) : (
-          <FileTree repo={repo} refreshTrigger={refreshTrigger} />
-        )}
+        <FileTree repo={repo} refreshTrigger={refreshTrigger} branch={branch} />
       </div>
     </div>
   );

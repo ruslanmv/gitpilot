@@ -1,9 +1,10 @@
+# gitpilot/api.py
 from __future__ import annotations
 
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, Query, Path as FPath, Header
+from fastapi import FastAPI, Query, Path as FPath, Header, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -11,12 +12,13 @@ from pydantic import BaseModel, Field
 from .version import __version__
 from .github_api import (
     list_user_repos,
-    list_user_repos_paginated,  # NEW: Pagination support
-    search_user_repos,  # NEW: Search across all repos
-    get_repo_tree, 
-    get_file, 
-    put_file, 
-    execution_context
+    list_user_repos_paginated,  # Pagination support
+    search_user_repos,  # Search across all repos
+    get_repo_tree,
+    get_file,
+    put_file,
+    execution_context,
+    github_request,
 )
 from .github_app import check_repo_write_access
 from .settings import AppSettings, get_settings, set_provider, update_settings, LLMProvider
@@ -31,8 +33,10 @@ from .github_oauth import (
     GitHubUser,
 )
 import os
+import logging
 from .model_catalog import list_models_for_provider
 
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="GitPilot API",
@@ -61,12 +65,14 @@ def get_github_token(authorization: Optional[str] = Header(None)) -> Optional[st
         return authorization
 
 
+# --- FIXED: Added default_branch to model ---
 class RepoSummary(BaseModel):
     id: int
     name: str
     full_name: str
     private: bool
     owner: str
+    default_branch: str = "main"  # <--- CRITICAL FIX: Defaults to main, but can be master/dev
 
 
 class PaginatedReposResponse(BaseModel):
@@ -131,6 +137,7 @@ class ChatPlanRequest(BaseModel):
     repo_owner: str
     repo_name: str
     goal: str
+    branch_name: Optional[str] = None
 
 
 class ExecutePlanRequest(BaseModel):
@@ -169,7 +176,6 @@ class RepoAccessResponse(BaseModel):
 # Repository Endpoints - Enterprise Grade with Pagination & Search
 # ============================================================================
 
-
 @app.get("/api/repos", response_model=PaginatedReposResponse)
 async def api_list_repos(
     query: Optional[str] = Query(None, description="Search query (searches across ALL repositories)"),
@@ -179,28 +185,13 @@ async def api_list_repos(
 ):
     """
     List user repositories with enterprise-grade pagination and search.
-    
-    **Features:**
-    - Pagination: Load repositories in chunks (100 per page)
-    - Global Search: Query parameter searches across ALL user repositories
-    - Includes: owned, collaborator, and organization member repos
-    
-    **Search Behavior:**
-    - Without query: Returns paginated list of all repos (sorted by last updated)
-    - With query: Searches ALL repositories and returns paginated filtered results
-    
-    **Example Usage:**
-    - List first 100 repos: GET /api/repos?page=1&per_page=100
-    - Load next 100: GET /api/repos?page=2&per_page=100
-    - Search all repos: GET /api/repos?query=python (searches ALL 450 repos)
-    - Search + paginate: GET /api/repos?query=python&page=2&per_page=100
+    Includes default_branch information for correct frontend routing.
     """
     token = get_github_token(authorization)
-    
+
     try:
         if query:
             # SEARCH MODE: Search across ALL repositories
-            # This fetches all repos and filters them, then returns paginated results
             result = await search_user_repos(
                 query=query,
                 page=page,
@@ -214,8 +205,8 @@ async def api_list_repos(
                 per_page=per_page,
                 token=token
             )
-        
-        # Convert to response model
+
+        # --- FIXED: Mapping default_branch ---
         repos = [
             RepoSummary(
                 id=r["id"],
@@ -223,10 +214,11 @@ async def api_list_repos(
                 full_name=r["full_name"],
                 private=r["private"],
                 owner=r["owner"],
+                default_branch=r.get("default_branch", "main"),  # <--- CRITICAL FIX
             )
             for r in result["repositories"]
         ]
-        
+
         return PaginatedReposResponse(
             repositories=repos,
             page=result["page"],
@@ -235,10 +227,8 @@ async def api_list_repos(
             has_more=result["has_more"],
             query=query,
         )
-        
+
     except Exception as e:
-        # Log error and return friendly message
-        import logging
         logging.exception("Error fetching repositories")
         return JSONResponse(
             content={
@@ -259,36 +249,30 @@ async def api_list_all_repos(
 ):
     """
     Fetch ALL user repositories at once (no pagination).
-    
-    **Warning:** This endpoint fetches all pages from GitHub API.
-    - May take 5-10 seconds for users with 450+ repos
-    - Makes multiple API calls (up to 15 requests)
-    - Use /api/repos with pagination for better UX
-    
-    **Recommended:** Use the paginated /api/repos endpoint instead.
+    Useful for quick searches, but paginated endpoint is preferred.
     """
     token = get_github_token(authorization)
-    
+
     try:
         # Fetch all repositories (this will make multiple API calls)
         all_repos = []
         page = 1
         max_pages = 15  # Safety limit: 1500 repos max (15 * 100)
-        
+
         while page <= max_pages:
             result = await list_user_repos_paginated(
                 page=page,
                 per_page=100,
                 token=token
             )
-            
+
             all_repos.extend(result["repositories"])
-            
+
             if not result["has_more"]:
                 break
-            
+
             page += 1
-        
+
         # Filter by query if provided
         if query:
             query_lower = query.lower()
@@ -296,8 +280,8 @@ async def api_list_all_repos(
                 r for r in all_repos
                 if query_lower in r["name"].lower() or query_lower in r["full_name"].lower()
             ]
-        
-        # Convert to response model
+
+        # --- FIXED: Mapping default_branch ---
         repos = [
             RepoSummary(
                 id=r["id"],
@@ -305,18 +289,18 @@ async def api_list_all_repos(
                 full_name=r["full_name"],
                 private=r["private"],
                 owner=r["owner"],
+                default_branch=r.get("default_branch", "main"),  # <--- CRITICAL FIX
             )
             for r in all_repos
         ]
-        
+
         return {
             "repositories": repos,
             "total_count": len(repos),
             "query": query,
         }
-        
+
     except Exception as e:
-        import logging
         logging.exception("Error fetching all repositories")
         return JSONResponse(
             content={"error": f"Failed to fetch repositories: {str(e)}"},
@@ -328,11 +312,38 @@ async def api_list_all_repos(
 async def api_repo_tree(
     owner: str = FPath(...),
     repo: str = FPath(...),
+    ref: Optional[str] = Query(
+        None,
+        description="Git reference (branch, tag, or commit SHA). If omitted, defaults to HEAD.",
+    ),
     authorization: Optional[str] = Header(None),
 ):
+    """
+    Get the file tree for a repository.
+    Handles 'main' vs 'master' discrepancies and empty repositories gracefully.
+    """
     token = get_github_token(authorization)
-    tree = await get_repo_tree(owner, repo, token=token)
-    return FileTreeResponse(files=[FileEntry(**f) for f in tree])
+
+    # Keep legacy behavior: missing/empty ref behaves like HEAD.
+    ref_value = (ref or "").strip() or "HEAD"
+
+    try:
+        tree = await get_repo_tree(owner, repo, token=token, ref=ref_value)
+        return FileTreeResponse(files=[FileEntry(**f) for f in tree])
+
+    except HTTPException as e:
+        if e.status_code == 409:
+            return FileTreeResponse(files=[])
+
+        if e.status_code == 404:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "detail": f"Ref '{ref_value}' not found. The repository might be using a different default branch (e.g., 'master')."
+                }
+            )
+
+        raise e
 
 
 @app.get("/api/repos/{owner}/{repo}/file", response_model=FileContent)
@@ -364,7 +375,6 @@ async def api_put_file(
 # ============================================================================
 # Settings Endpoints
 # ============================================================================
-
 
 @app.get("/api/settings", response_model=SettingsResponse)
 async def api_get_settings():
@@ -435,16 +445,21 @@ async def api_update_llm_settings(updates: dict):
 # Chat Endpoints
 # ============================================================================
 
-
 @app.post("/api/chat/plan", response_model=PlanResult)
-async def api_chat_plan(
-    req: ChatPlanRequest,
-    authorization: Optional[str] = Header(None)
-):
+async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Header(None)):
     token = get_github_token(authorization)
-    with execution_context(token):
+
+    # ✅ Added logging for branch_name received
+    logger.info(
+        "PLAN REQUEST: %s/%s | branch_name=%r",
+        req.repo_owner,
+        req.repo_name,
+        req.branch_name,
+    )
+
+    with execution_context(token, ref=req.branch_name):  # ✅ set ref context
         full_name = f"{req.repo_owner}/{req.repo_name}"
-        plan = await generate_plan(req.goal, full_name, token=token)
+        plan = await generate_plan(req.goal, full_name, token=token, branch_name=req.branch_name)
         return plan
 
 
@@ -454,11 +469,19 @@ async def api_chat_execute(
     authorization: Optional[str] = Header(None)
 ):
     token = get_github_token(authorization)
-    with execution_context(token):
+
+    # ✅ FIX: use execution_context(token, ref=req.branch_name) so tool calls that rely on context
+    # never accidentally run on HEAD/default when branch_name is provided.
+    with execution_context(token, ref=req.branch_name):
         full_name = f"{req.repo_owner}/{req.repo_name}"
         result = await execute_plan(
             req.plan, full_name, token=token, branch_name=req.branch_name
         )
+        if isinstance(result, dict):
+            result.setdefault(
+                "mode",
+                "sticky" if req.branch_name else "hard-switch",
+            )
         return result
 
 
@@ -472,7 +495,6 @@ async def api_get_flow():
 # ============================================================================
 # Authentication Endpoints (Web Flow + Device Flow)
 # ============================================================================
-
 
 @app.get("/api/auth/url", response_model=AuthUrlResponse)
 async def api_get_auth_url():
@@ -540,7 +562,7 @@ async def api_device_poll(payload: dict):
         session = await poll_device_token(device_code)
         if session:
             return session
-        
+
         return JSONResponse({"status": "pending"}, status_code=202)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
@@ -554,9 +576,9 @@ async def api_auth_status():
     """
     has_secret = bool(os.getenv("GITHUB_CLIENT_SECRET"))
     has_id = bool(os.getenv("GITHUB_CLIENT_ID", "Iv23litmRp80Z6wmlyRn"))
-    
+
     return {
-        "mode": "web" if has_secret else "device", 
+        "mode": "web" if has_secret else "device",
         "configured": has_id,
         "oauth_configured": has_secret,
         "pat_configured": bool(os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")),
@@ -612,13 +634,13 @@ async def api_check_repo_access(
 ):
     """
     Check if we have write access to a repository via User token or GitHub App.
-    
+
     This endpoint helps the frontend determine if it should show
     installation prompts or if the user already has sufficient permissions.
     """
     token = get_github_token(authorization)
     access_info = await check_repo_write_access(owner, repo, user_token=token)
-    
+
     return RepoAccessResponse(
         can_write=access_info["can_write"],
         app_installed=access_info["app_installed"],
@@ -660,11 +682,11 @@ async def catch_all_spa_routes(full_path: str):
     """
     if full_path.startswith("api/"):
         return JSONResponse({"detail": "Not Found"}, status_code=404)
-        
+
     index_file = STATIC_DIR / "index.html"
     if index_file.exists():
         return FileResponse(index_file)
-        
+
     return JSONResponse(
         {"message": "GitPilot UI not built. The static files directory is missing."},
         status_code=500,

@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from .llm_provider import build_llm
 from .agent_tools import REPOSITORY_TOOLS, set_repo_context, get_repository_context_summary
+from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
 
@@ -38,30 +39,36 @@ class PlanResult(BaseModel):
     steps: List[PlanStep]
 
 
-async def generate_plan(goal: str, repo_full_name: str, token: str | None = None) -> PlanResult:
+async def generate_plan(
+    goal: str,
+    repo_full_name: str,
+    token: str | None = None,
+    branch_name: str | None = None,
+) -> PlanResult:
     """Agentic planning: create a structured plan but DO NOT modify the repo.
 
-    This function uses a two-phase approach:
-    1. First, explore and understand the repository
-    2. Then, create a plan based on actual repository state
+    Two-phase approach:
+    1) Explore and understand the repository (on the correct branch)
+    2) Create a plan based on actual repository state
     """
     llm = build_llm()
 
-    # Set repository context for tools
     owner, repo = repo_full_name.split("/")
-    # CRITICAL: Pass token to context so tools can use it in threads
-    set_repo_context(owner, repo, token=token)
 
-    # PHASE 1: Explore the repository and gather context
-    logger.info("[GitPilot] Phase 1: Exploring repository %s...", repo_full_name)
-    # Pass token explicitly here too
-    repo_context_data = await get_repository_context_summary(owner, repo, token=token)
+    # CRITICAL: Set context INCLUDING branch so tools never fall back to HEAD/main
+    active_ref = branch_name or "HEAD"
+    set_repo_context(owner, repo, token=token, branch=active_ref)
+
+    # PHASE 1: Explore repository (correct branch)
+    logger.info("[GitPilot] Phase 1: Exploring repository %s (ref=%s)...", repo_full_name, active_ref)
+
+    repo_context_data = await get_repository_context_summary(owner, repo, token=token, branch=active_ref)
     logger.info(
-        "[GitPilot] Repository context gathered: %s files found",
+        "[GitPilot] Repository context gathered: %s files found (ref=%s)",
         repo_context_data.get("total_files", 0),
+        active_ref,
     )
 
-    # Create explorer agent
     explorer = Agent(
         role="Repository Explorer",
         goal="Thoroughly explore and document the current state of the repository",
@@ -76,10 +83,10 @@ async def generate_plan(goal: str, repo_full_name: str, token: str | None = None
         allow_delegation=False,
     )
 
-    # Exploration task - gather ALL repository information
     explore_task = Task(
         description=dedent(f"""
             Repository: {repo_full_name}
+            Active Ref (branch/tag/SHA): {active_ref}
 
             Your mission is to THOROUGHLY explore this repository and document its current state.
             You MUST use your tools to gather the following information:
@@ -120,19 +127,15 @@ async def generate_plan(goal: str, repo_full_name: str, token: str | None = None
     def _explore():
         return explore_crew.kickoff()
 
-    # FIX: Propagate context (token) to the thread for CrewAI execution
+    # Propagate context to thread for CrewAI execution
     ctx = contextvars.copy_context()
     exploration_result = await asyncio.to_thread(ctx.run, _explore)
 
-    # Extract exploration report
     exploration_report = exploration_result.raw if hasattr(exploration_result, "raw") else str(exploration_result)
-    logger.info(
-        "[GitPilot] Exploration complete. Report length: %s chars",
-        len(exploration_report),
-    )
+    logger.info("[GitPilot] Exploration complete. Report length: %s chars", len(exploration_report))
 
-    # PHASE 2: Create the plan using the exploration context
-    logger.info("[GitPilot] Phase 2: Creating plan based on repository exploration...")
+    # PHASE 2: Plan creation based on exploration
+    logger.info("[GitPilot] Phase 2: Creating plan based on repository exploration (ref=%s)...", active_ref)
 
     planner = Agent(
         role="Repository Refactor Planner",
@@ -153,7 +156,7 @@ async def generate_plan(goal: str, repo_full_name: str, token: str | None = None
             "You never make changes yourself, only create detailed plans."
         ),
         llm=llm,
-        tools=REPOSITORY_TOOLS,  # Still has access to verify if needed
+        tools=REPOSITORY_TOOLS,
         verbose=True,
         allow_delegation=False,
     )
@@ -162,6 +165,7 @@ async def generate_plan(goal: str, repo_full_name: str, token: str | None = None
         description=dedent(f"""
             User goal: {{goal}}
             Repository: {repo_full_name}
+            Active Ref (branch/tag/SHA): {active_ref}
 
             REPOSITORY EXPLORATION REPORT (CRITICAL CONTEXT):
             ==================================================
@@ -232,33 +236,6 @@ async def generate_plan(goal: str, repo_full_name: str, token: str | None = None
             - Do NOT wrap the JSON in markdown code fences
             - Do NOT add any explanation before or after the JSON
             - The ENTIRE response MUST be ONLY the JSON object, starting with '{{' and ending with '}}'
-
-            EXAMPLE 1 - Analysis and Generation:
-            Goal: "analyze README.md and generate Python code to explain the content"
-            Exploration found: ["README.md"]
-            Your plan should:
-              Step 1: "Analyze README.md content and generate demonstration code"
-                Files: [
-                  {{"path": "demo.py", "action": "CREATE"}},
-                  {{"path": "example.py", "action": "CREATE"}}
-                ]
-
-            EXAMPLE 2 - Deletion:
-            Goal: "delete all files except README.md"
-            Exploration found: ["README.md", "old_file.py", "test.txt"]
-            Your plan should DELETE: old_file.py, test.txt
-            Your plan should NOT mention: README.md (it's being kept)
-
-            EXAMPLE 3 - Tutorial Creation:
-            Goal: "create a tutorial based on the existing code"
-            Exploration found: ["src/main.py", "README.md"]
-            Your plan should:
-              Step 1: "Create comprehensive tutorial files"
-                Files: [
-                  {{"path": "docs/tutorial.md", "action": "CREATE"}},
-                  {{"path": "examples/basic_example.py", "action": "CREATE"}},
-                  {{"path": "examples/advanced_example.py", "action": "CREATE"}}
-                ]
         """),
         expected_output=dedent("""
             A single valid JSON object matching the PlanResult schema:
@@ -271,12 +248,6 @@ async def generate_plan(goal: str, repo_full_name: str, token: str | None = None
               - files: array of { "path": string, "action": "CREATE" | "MODIFY" | "DELETE" | "READ" }
               - risks: string or null
             The response must contain ONLY pure JSON (no markdown, no prose, no code fences, NO COMMENTS).
-
-            IMPORTANT:
-            - For analysis/generation tasks: Include CREATE actions for new files (demos, examples, tutorials)
-            - For deletion scenarios: Only include files that should be DELETED or MODIFIED
-            - Empty steps array is ONLY acceptable if the goal is purely informational (no action needed)
-            - If the user wants content generated/created, steps array MUST contain CREATE actions
         """),
         agent=planner,
         output_pydantic=PlanResult,
@@ -292,17 +263,14 @@ async def generate_plan(goal: str, repo_full_name: str, token: str | None = None
     def _plan():
         return plan_crew.kickoff(inputs={"goal": goal})
 
-    # FIX: Propagate context to the planning thread
     ctx = contextvars.copy_context()
     result = await asyncio.to_thread(ctx.run, _plan)
 
-    # CrewAI returns CrewOutput with .pydantic attribute containing the PlanResult
     if hasattr(result, "pydantic") and result.pydantic:
         plan = result.pydantic
-        logger.info("[GitPilot] Plan created with %s steps", len(plan.steps))
+        logger.info("[GitPilot] Plan created with %s steps (ref=%s)", len(plan.steps), active_ref)
         return plan
 
-    # Fallback: this should not usually happen if output_pydantic is respected
     logger.warning("[GitPilot] Unexpected planning result type: %r", type(result))
     return result
 
@@ -313,19 +281,7 @@ async def execute_plan(
     token: str | None = None,
     branch_name: str | None = None,
 ) -> dict:
-    """Execute the approved plan by applying changes to the GitHub repository.
-
-    All changes are committed to a feature branch (not the default branch).
-    This allows for safe review and manual PR creation by the user.
-
-    Args:
-        plan: The execution plan to apply
-        repo_full_name: Repository in format "owner/repo"
-        token: GitHub authentication token
-        branch_name: Optional branch name. If not provided, auto-generated from goal.
-
-    Returns an execution log with details about each step, including the branch name.
-    """
+    """Execute the approved plan by applying changes to the GitHub repository."""
     from .github_api import get_file, put_file, create_branch, get_repo
     import re
     import time
@@ -334,35 +290,26 @@ async def execute_plan(
     execution_steps: list[dict] = []
     llm = build_llm()
 
-    # 1. Decide branch name (auto-generate if not provided)
     if branch_name is None:
-        # Create a deterministic, clean branch name from the goal
-        # Format: gitpilot-<sanitized-goal>-<timestamp>
-        sanitized = re.sub(r'[^a-z0-9-]+', '-', plan.goal.lower())
-        sanitized = sanitized[:40].strip('-')
-        timestamp = str(int(time.time()))[-6:]  # Last 6 digits of timestamp
+        sanitized = re.sub(r"[^a-z0-9-]+", "-", plan.goal.lower())
+        sanitized = sanitized[:40].strip("-")
+        timestamp = str(int(time.time()))[-6:]
         branch_name = f"gitpilot-{sanitized}-{timestamp}"
 
-    # 2. Create the feature branch from the default branch
     try:
         logger.info("[GitPilot] Creating feature branch: %s", branch_name)
         await create_branch(owner, repo, branch_name, from_ref="HEAD", token=token)
         logger.info("[GitPilot] Branch created successfully: %s", branch_name)
-        branch_created = True
     except HTTPException as e:
-        # If branch already exists, we can either reuse it or fail
-        # For now, let's try to continue with the existing branch
         logger.warning(
             "[GitPilot] Branch %s already exists or creation failed: %s. Attempting to use existing branch.",
             branch_name,
             e.detail,
         )
-        branch_created = False
 
-    # Set repository context for tools (in case Code Writer needs them)
-    set_repo_context(owner, repo, token=token)
+    # CRITICAL: ensure tools read from the ACTIVE execution branch
+    set_repo_context(owner, repo, token=token, branch=branch_name)
 
-    # Create a Code Writer agent that generates actual content
     code_writer = Agent(
         role="Expert Code Writer",
         goal="Generate high-quality, production-ready code and documentation based on requirements.",
@@ -378,8 +325,8 @@ async def execute_plan(
             "You never create generic examples - you create content specific to THIS repository."
         ),
         llm=llm,
-        tools=REPOSITORY_TOOLS,  # Give Code Writer access to repository tools
-        verbose=True,  # Enable verbose to see tool usage
+        tools=REPOSITORY_TOOLS,
+        verbose=True,
         allow_delegation=False,
     )
 
@@ -389,7 +336,6 @@ async def execute_plan(
         for file in step.files:
             try:
                 if file.action == "CREATE":
-                    # Use LLM to generate appropriate content for the new file
                     create_task = Task(
                         description=(
                             f"Generate complete content for a new file: {file.path}\n\n"
@@ -425,16 +371,13 @@ async def execute_plan(
                             verbose=False,
                         )
                         result = crew.kickoff()
-                        # Extract the raw output from CrewOutput
                         if hasattr(result, "raw"):
                             return result.raw
                         return str(result)
 
-                    # FIX: Propagate context to the creation thread
                     ctx = contextvars.copy_context()
                     content = await asyncio.to_thread(ctx.run, _create)
 
-                    # Clean up any markdown code blocks that might be included
                     content = content.strip()
                     if content.startswith("```"):
                         lines = content.split("\n")
@@ -455,7 +398,6 @@ async def execute_plan(
                     step_summary += f"\n  ✓ Created {file.path}"
 
                 elif file.action == "MODIFY":
-                    # Use LLM to intelligently modify the existing file
                     try:
                         existing_content = await get_file(
                             owner, repo, file.path, token=token, ref=branch_name
@@ -493,11 +435,9 @@ async def execute_plan(
                                 return result.raw
                             return str(result)
 
-                        # FIX: Propagate context to the modification thread
                         ctx = contextvars.copy_context()
                         modified_content = await asyncio.to_thread(ctx.run, _modify)
 
-                        # Clean up any markdown code blocks
                         modified_content = modified_content.strip()
                         if modified_content.startswith("```"):
                             lines = modified_content.split("\n")
@@ -526,7 +466,6 @@ async def execute_plan(
                         step_summary += f"\n  ✗ Failed to modify {file.path}: {str(e)}"
 
                 elif file.action == "DELETE":
-                    # Actually delete the file from the repository
                     from .github_api import delete_file
 
                     try:
@@ -549,7 +488,6 @@ async def execute_plan(
                         step_summary += f"\n  ✗ Failed to delete {file.path}: {str(e)}"
 
                 elif file.action == "READ":
-                    # READ is a planning/analysis action only, no repo change
                     step_summary += f"\n  ℹ️ READ-only: inspected {file.path}"
 
             except Exception as e:  # noqa: BLE001
@@ -573,10 +511,7 @@ async def execute_plan(
 
 
 async def get_flow_definition() -> dict:
-    """Return the current CrewAI agent workflow as a visual graph.
-
-    This represents the multi-agent system used for planning and execution.
-    """
+    """Return the current CrewAI agent workflow as a visual graph."""
     return {
         "nodes": [
             {
