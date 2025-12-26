@@ -1,6 +1,10 @@
 {
   "version": 2,
   "name": "gitpilot",
+  "buildCommand": "cd frontend && npm run build",
+  "devCommand": "cd frontend && npm run dev",
+  "installCommand": "cd frontend && npm install",
+  "framework": null,
   "builds": [
     {
       "src": "frontend/package.json",
@@ -11,7 +15,10 @@
     },
     {
       "src": "api/index.py",
-      "use": "@vercel/python"
+      "use": "@vercel/python",
+      "config": {
+        "maxLambdaSize": "15mb"
+      }
     }
   ],
   "routes": [
@@ -27,13 +34,6 @@
       "dest": "frontend/dist/index.html"
     }
   ],
-  "functions": {
-    "api/index.py": {
-      "runtime": "python3.12",
-      "maxDuration": 60,
-      "memory": 1024
-    }
-  },
   "env": {
     "GITPILOT_VERCEL_DEPLOYMENT": "true"
   }

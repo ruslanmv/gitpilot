@@ -9,7 +9,9 @@ export default defineConfig({
     // making it reachable from the Windows host in WSL.
     port: 5173,
     host: true, // <--- Add this line
-    proxy: {
+    // Only proxy API requests when NOT running in Vercel dev
+    // (Vercel dev handles API routing to serverless functions)
+    proxy: process.env.VERCEL ? undefined : {
       "/api": "http://localhost:8000"
     }
   }
