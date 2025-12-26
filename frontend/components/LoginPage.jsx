@@ -1,5 +1,6 @@
 // frontend/components/LoginPage.jsx
 import React, { useState, useEffect, useRef } from "react";
+import { apiUrl, safeFetchJSON } from "../utils/api.js";
 
 /**
  * GitPilot – Enterprise Agentic Login
@@ -42,8 +43,7 @@ export default function LoginPage({ onAuthenticated }) {
     }
 
     // B. Otherwise, check Server Capabilities to decide UI Mode
-    fetch("/api/auth/status")
-      .then((res) => res.json())
+    safeFetchJSON(apiUrl("/api/auth/status"))
       .then((data) => {
         setMode(data.mode === "web" ? "web" : "device");
       })
@@ -75,17 +75,11 @@ export default function LoginPage({ onAuthenticated }) {
     window.history.replaceState({}, document.title, window.location.pathname);
 
     try {
-      const response = await fetch("/api/auth/callback", {
+      const data = await safeFetchJSON(apiUrl("/api/auth/callback"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code, state: state || "" }),
       });
-
-      const data = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        throw new Error(data.detail || data.error || "Authentication handshake failed.");
-      }
 
       handleSuccess(data);
     } catch (err) {
@@ -101,17 +95,7 @@ export default function LoginPage({ onAuthenticated }) {
     setAuthProcessing(true);
 
     try {
-      const response = await fetch("/api/auth/url");
-      const data = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        if (response.status === 404 || response.status === 500) {
-           setMissingClientId(true);
-           setAuthProcessing(false);
-           return;
-        }
-        throw new Error(data.detail || "Could not reach auth endpoint.");
-      }
+      const data = await safeFetchJSON(apiUrl("/api/auth/url"));
 
       if (data.state) {
         sessionStorage.setItem("gitpilot_oauth_state", data.state);
@@ -120,7 +104,12 @@ export default function LoginPage({ onAuthenticated }) {
       window.location.href = data.authorization_url;
     } catch (err) {
       console.error("Auth Start Error:", err);
-      setError(err instanceof Error ? err.message : "Could not start sign-in.");
+      // Check for missing client ID (404/500 errors)
+      if (err.message && (err.message.includes('404') || err.message.includes('500'))) {
+        setMissingClientId(true);
+      } else {
+        setError(err instanceof Error ? err.message : "Could not start sign-in.");
+      }
       setAuthProcessing(false);
     }
   }
@@ -135,9 +124,8 @@ export default function LoginPage({ onAuthenticated }) {
     stopPolling.current = false; // Reset stop flag
 
     try {
-      const res = await fetch("/api/auth/device/code", { method: "POST" });
-      const data = await res.json();
-      
+      const data = await safeFetchJSON(apiUrl("/api/auth/device/code"), { method: "POST" });
+
       // Handle Errors
       if (data.error) {
         if (data.error.includes("400") || data.error.includes("Bad Request")) {
@@ -145,11 +133,11 @@ export default function LoginPage({ onAuthenticated }) {
         }
         throw new Error(data.error);
       }
-      
+
       if (!data.device_code) throw new Error("Invalid device code response");
 
       setDeviceData(data);
-      setAuthProcessing(false); 
+      setAuthProcessing(false);
 
       // Start Polling (Recursive Timeout Pattern)
       pollDeviceToken(data.device_code, data.interval || 5);
@@ -164,43 +152,43 @@ export default function LoginPage({ onAuthenticated }) {
     if (stopPolling.current) return;
 
     try {
-      const res = await fetch("/api/auth/device/poll", {
+      const response = await fetch(apiUrl("/api/auth/device/poll"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ device_code: deviceCode })
       });
-      
+
       // 1. Success (200)
-      if (res.status === 200) {
-        const data = await res.json();
+      if (response.status === 200) {
+        const data = await response.json();
         handleSuccess(data);
         return;
       }
 
       // 2. Pending (202) -> Continue Polling
-      if (res.status === 202) {
+      if (response.status === 202) {
         // Schedule next poll
         pollTimer.current = setTimeout(
-            () => pollDeviceToken(deviceCode, interval), 
+            () => pollDeviceToken(deviceCode, interval),
             interval * 1000
         );
         return;
       }
 
       // 3. Error (4xx/5xx) -> Stop Polling & Show Error
-      const errData = await res.json().catch(() => ({ error: "Unknown polling error" }));
-      
+      const errData = await response.json().catch(() => ({ error: "Unknown polling error" }));
+
       // Special case: If it's just a 'slow_down' warning (sometimes 400), we just wait longer
       if (errData.error === "slow_down") {
           pollTimer.current = setTimeout(
-            () => pollDeviceToken(deviceCode, interval + 5), 
+            () => pollDeviceToken(deviceCode, interval + 5),
             (interval + 5) * 1000
           );
           return;
       }
 
       // Terminal errors
-      throw new Error(errData.error || `Polling failed: ${res.status}`);
+      throw new Error(errData.error || `Polling failed: ${response.status}`);
 
     } catch (e) {
       console.error("Poll error:", e);
@@ -213,18 +201,18 @@ export default function LoginPage({ onAuthenticated }) {
 
   const handleManualCheck = async () => {
     if (!deviceData?.device_code) return;
-    
+
     try {
-        const res = await fetch("/api/auth/device/poll", {
+        const response = await fetch(apiUrl("/api/auth/device/poll"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ device_code: deviceData.device_code })
         });
-        
-        if (res.status === 200) {
-            const data = await res.json();
+
+        if (response.status === 200) {
+            const data = await response.json();
             handleSuccess(data);
-        } else if (res.status === 202) {
+        } else if (response.status === 202) {
             // Visual feedback for pending state
             const btn = document.getElementById("manual-check-btn");
             if (btn) {
