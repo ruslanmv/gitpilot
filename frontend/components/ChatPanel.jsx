@@ -29,7 +29,7 @@ export default function ChatPanel({
   const prevMsgCountRef = useRef((sessionChatState?.messages || []).length);
 
   // ---------------------------------------------------------------------------
-  // 1) SESSION SYNC: Restore chat ONLY when branch changes
+  // 1) SESSION SYNC: Restore chat when branch OR repo changes
   // IMPORTANT: Do NOT depend on sessionChatState here (prevents prop/state loop)
   // ---------------------------------------------------------------------------
   useEffect(() => {
@@ -39,7 +39,7 @@ export default function ChatPanel({
     setMessages(nextMessages);
     setPlan(nextPlan);
 
-    // Reset transient UI state on branch switch
+    // Reset transient UI state on branch/repo switch
     setGoal("");
     setStatus("");
     setLoadingPlan(false);
@@ -48,7 +48,7 @@ export default function ChatPanel({
     // Update msg count tracker so auto-scroll doesn't "jump" on switch
     prevMsgCountRef.current = nextMessages.length;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentBranch]);
+  }, [currentBranch, repo?.full_name]);
 
   // ---------------------------------------------------------------------------
   // 2) PERSISTENCE: Save chat to Parent (no loop now because sync only on branch)
