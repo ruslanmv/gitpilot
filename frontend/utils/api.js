@@ -3,6 +3,24 @@
  */
 
 /**
+ * Get backend URL from environment or use relative path (for local dev)
+ * - Production (Vercel): Uses VITE_BACKEND_URL env var (e.g., https://gitpilot-backend.onrender.com)
+ * - Development (local): Uses relative paths (proxied by Vite to localhost:8000)
+ */
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
+
+/**
+ * Construct full API URL
+ * @param {string} path - API endpoint path (e.g., '/api/chat/plan')
+ * @returns {string} Full URL to API endpoint
+ */
+export function apiUrl(path) {
+  // Ensure path starts with /
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  return `${BACKEND_URL}${cleanPath}`;
+}
+
+/**
  * Get authorization headers with GitHub token
  * @returns {Object} Headers object with Authorization if token exists
  */
