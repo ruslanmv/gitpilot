@@ -662,6 +662,12 @@ if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
+@app.get("/api/health")
+async def health_check():
+    """Health check endpoint for monitoring and diagnostics."""
+    return {"status": "healthy", "service": "gitpilot-backend"}
+
+
 @app.get("/", include_in_schema=False)
 async def index():
     """Serve the React App entry point."""
