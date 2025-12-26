@@ -7,9 +7,13 @@ UV      ?= uv
 PYTHON  ?= python3.11
 PORT    ?= 8000
 
+# Docker Compose command (prefer v2 over v1)
+DOCKER_COMPOSE := $(shell if command -v docker > /dev/null && docker compose version > /dev/null 2>&1; then echo "docker compose"; elif command -v docker-compose > /dev/null; then echo "docker-compose"; else echo "docker compose"; fi)
+
 .PHONY: help install uv-install frontend-install frontend-build \
         dev run test lint fmt build publish-test publish clean stop \
-        vercel vercel-build vercel-deploy
+        vercel vercel-build vercel-deploy \
+        build-container run-container stop-container logs-container clean-container publish-container
 
 ## Show available targets
 help:
@@ -33,6 +37,14 @@ help:
 	@echo "  make vercel           Run Vercel dev server locally (test deployment)"
 	@echo "  make vercel-build     Test Vercel build locally without deploying"
 	@echo "  make vercel-deploy    Deploy to Vercel (requires authentication)"
+	@echo ""
+	@echo "Docker Container Commands:"
+	@echo "  make build-container  Build Docker containers for backend and frontend"
+	@echo "  make run-container    Run both containers with docker-compose"
+	@echo "  make stop-container   Stop and remove all containers"
+	@echo "  make logs-container   View logs from all containers"
+	@echo "  make clean-container  Remove containers, images, and volumes"
+	@echo "  make publish-container Publish Docker images to Docker Hub"
 	@echo ""
 
 ## High-level install: backend + frontend
@@ -169,3 +181,132 @@ vercel-deploy:
 	@echo "🚀 Deploying to Vercel..."
 	@vercel --prod
 	@echo "✅ Deployment complete"
+
+## Build Docker containers for backend and frontend
+build-container:
+	@echo "🐳 Building Docker containers..."
+	@if [ ! -f .env ]; then \
+		echo "⚠️  Warning: .env file not found. Creating from template..."; \
+		cp .env.example .env; \
+		echo "📝 Please edit .env and add your credentials before running containers"; \
+	fi
+	@$(DOCKER_COMPOSE) build
+	@echo "✅ Docker containers built successfully"
+	@echo ""
+	@echo "Images created:"
+	@docker images | grep gitpilot || echo "  (no gitpilot images found)"
+
+## Run both containers with docker-compose
+run-container:
+	@echo "🚀 Starting GitPilot containers..."
+	@if [ ! -f .env ]; then \
+		echo "❌ Error: .env file not found!"; \
+		echo "📝 Please copy .env.example to .env and configure your credentials"; \
+		exit 1; \
+	fi
+	@echo "📝 Backend will be available at http://localhost:8000"
+	@echo "📝 Frontend will be available at http://localhost:3000"
+	@echo ""
+	@$(DOCKER_COMPOSE) up -d
+	@echo ""
+	@echo "✅ Containers started successfully!"
+	@echo ""
+	@echo "View logs: make logs-container"
+	@echo "Stop containers: make stop-container"
+
+## Stop and remove all containers
+stop-container:
+	@echo "🛑 Stopping GitPilot containers..."
+	@$(DOCKER_COMPOSE) down
+	@echo "✅ Containers stopped and removed"
+
+## View logs from all containers
+logs-container:
+	@echo "📋 Viewing container logs (Ctrl+C to exit)..."
+	@$(DOCKER_COMPOSE) logs -f
+
+## Remove containers, images, and volumes
+clean-container:
+	@echo "🧹 Cleaning up Docker resources..."
+	@$(DOCKER_COMPOSE) down -v --rmi all
+	@echo "✅ Docker cleanup complete"
+
+## Publish Docker images to Docker Hub for deployment
+publish-container:
+	@echo "🚀 Publishing Docker containers to Docker Hub..."
+	@echo ""
+	@# Check if DOCKERHUB_USERNAME is set
+	@if [ -z "$(DOCKERHUB_USERNAME)" ]; then \
+		echo "❌ Error: DOCKERHUB_USERNAME not set!"; \
+		echo ""; \
+		echo "Usage:"; \
+		echo "  export DOCKERHUB_USERNAME=your-dockerhub-username"; \
+		echo "  make publish-container"; \
+		echo ""; \
+		echo "Or:"; \
+		echo "  make publish-container DOCKERHUB_USERNAME=your-dockerhub-username"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@echo "📦 Docker Hub username: $(DOCKERHUB_USERNAME)"
+	@echo ""
+	@# Login to Docker Hub
+	@echo "🔐 Please login to Docker Hub..."
+	@docker login
+	@echo ""
+	@# Build containers if not already built
+	@echo "🔨 Building containers..."
+	@$(DOCKER_COMPOSE) build
+	@echo ""
+	@# Tag backend
+	@echo "🏷️  Tagging backend image..."
+	@docker tag gitpilot-backend $(DOCKERHUB_USERNAME)/gitpilot-backend:latest
+	@docker tag gitpilot-backend $(DOCKERHUB_USERNAME)/gitpilot-backend:$$(date +%Y%m%d-%H%M%S)
+	@echo "   → $(DOCKERHUB_USERNAME)/gitpilot-backend:latest"
+	@echo ""
+	@# Tag frontend
+	@echo "🏷️  Tagging frontend image..."
+	@docker tag gitpilot-frontend $(DOCKERHUB_USERNAME)/gitpilot-frontend:latest
+	@docker tag gitpilot-frontend $(DOCKERHUB_USERNAME)/gitpilot-frontend:$$(date +%Y%m%d-%H%M%S)
+	@echo "   → $(DOCKERHUB_USERNAME)/gitpilot-frontend:latest"
+	@echo ""
+	@# Push backend
+	@echo "📤 Pushing backend to Docker Hub..."
+	@docker push $(DOCKERHUB_USERNAME)/gitpilot-backend:latest
+	@echo ""
+	@# Push frontend
+	@echo "📤 Pushing frontend to Docker Hub..."
+	@docker push $(DOCKERHUB_USERNAME)/gitpilot-frontend:latest
+	@echo ""
+	@echo "✅ Successfully published to Docker Hub!"
+	@echo ""
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo "🎉 Your images are now available at:"
+	@echo ""
+	@echo "Backend:"
+	@echo "  docker.io/$(DOCKERHUB_USERNAME)/gitpilot-backend:latest"
+	@echo ""
+	@echo "Frontend:"
+	@echo "  docker.io/$(DOCKERHUB_USERNAME)/gitpilot-frontend:latest"
+	@echo ""
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo ""
+	@echo "📋 Next Steps:"
+	@echo ""
+	@echo "1. Deploy Backend on Render:"
+	@echo "   → Go to https://dashboard.render.com"
+	@echo "   → New → Web Service"
+	@echo "   → 'Deploy an existing image from a registry'"
+	@echo "   → Image URL: docker.io/$(DOCKERHUB_USERNAME)/gitpilot-backend:latest"
+	@echo "   → Add environment variables (see DEPLOYMENT_RENDER.md)"
+	@echo ""
+	@echo "2. Get your backend URL:"
+	@echo "   → https://gitpilot-backend-xxx.onrender.com"
+	@echo ""
+	@echo "3. Configure Vercel frontend:"
+	@echo "   → Vercel Dashboard → Settings → Environment Variables"
+	@echo "   → Add: VITE_BACKEND_URL=https://gitpilot-backend-xxx.onrender.com"
+	@echo ""
+	@echo "4. Redeploy Vercel to use new backend URL"
+	@echo ""
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
