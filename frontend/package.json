@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
+    "vercel-build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {

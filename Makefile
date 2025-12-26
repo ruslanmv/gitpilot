@@ -8,7 +8,8 @@ PYTHON  ?= python3.11
 PORT    ?= 8000
 
 .PHONY: help install uv-install frontend-install frontend-build \
-        dev run test lint fmt build publish-test publish clean stop
+        dev run test lint fmt build publish-test publish clean stop \
+        vercel vercel-build vercel-deploy
 
 ## Show available targets
 help:
@@ -29,6 +30,9 @@ help:
 	@echo "  make publish-test     Upload distribution to TestPyPI with twine via uv"
 	@echo "  make publish          Upload distribution to PyPI with twine via uv"
 	@echo "  make clean            Remove build artifacts and cache directories"
+	@echo "  make vercel           Run Vercel dev server locally (test deployment)"
+	@echo "  make vercel-build     Test Vercel build locally without deploying"
+	@echo "  make vercel-deploy    Deploy to Vercel (requires authentication)"
 	@echo ""
 
 ## High-level install: backend + frontend
@@ -61,9 +65,23 @@ dev: install
 ## Run GitPilot from the uv-managed environment (backend + frontend)
 run:
 	@echo "🚀 Starting GitPilot backend on http://127.0.0.1:$(PORT)..."
-	@echo "🎨 Starting frontend dev server on http://localhost:5173..."
 	@trap 'kill 0' EXIT; \
 	$(UV) run gitpilot serve --host 127.0.0.1 --port $(PORT) & \
+	BACKEND_PID=$$!; \
+	echo "⏳ Waiting for backend to be ready..."; \
+	for i in 1 2 3 4 5 6 7 8 9 10; do \
+		if curl -s http://127.0.0.1:$(PORT)/api/health > /dev/null 2>&1 || \
+		   nc -z 127.0.0.1 $(PORT) > /dev/null 2>&1 || \
+		   lsof -i:$(PORT) -sTCP:LISTEN > /dev/null 2>&1; then \
+			echo "✅ Backend is ready!"; \
+			break; \
+		fi; \
+		if [ $$i -eq 10 ]; then \
+			echo "⚠️  Backend took longer than expected, starting frontend anyway..."; \
+		fi; \
+		sleep 1; \
+	done; \
+	echo "🎨 Starting frontend dev server on http://localhost:5173..."; \
 	cd frontend && npm run dev
 
 ## Stop all running processes (ports 8000 and 5173)
@@ -132,3 +150,22 @@ paths = ['build', 'dist', '.pytest_cache', '.ruff_cache']; \
 [shutil.rmtree(p, ignore_errors=True) for p in paths]; \
 [shutil.rmtree(p, ignore_errors=True) for p in pathlib.Path('.').glob('*.egg-info')]"
 	@echo "✅ Clean complete"
+
+## Run Vercel dev server locally (simulates Vercel deployment environment)
+vercel: frontend-install
+	@echo "🚀 Starting Vercel dev server locally..."
+	@echo "📝 This simulates the Vercel deployment environment"
+	@echo "🌐 Frontend will be available at http://localhost:3000"
+	@vercel dev
+
+## Test Vercel build locally without deploying
+vercel-build: frontend-install
+	@echo "🔨 Testing Vercel build locally..."
+	@vercel build
+	@echo "✅ Vercel build test complete"
+
+## Deploy to Vercel (requires vercel login)
+vercel-deploy:
+	@echo "🚀 Deploying to Vercel..."
+	@vercel --prod
+	@echo "✅ Deployment complete"
