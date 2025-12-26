@@ -10,6 +10,22 @@
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
 
 /**
+ * Check if backend URL is configured
+ * @returns {boolean} True if backend URL is set
+ */
+export function isBackendConfigured() {
+  return BACKEND_URL !== '' && BACKEND_URL !== undefined;
+}
+
+/**
+ * Get the configured backend URL
+ * @returns {string} Backend URL or empty string
+ */
+export function getBackendUrl() {
+  return BACKEND_URL;
+}
+
+/**
  * Construct full API URL
  * @param {string} path - API endpoint path (e.g., '/api/chat/plan')
  * @returns {string} Full URL to API endpoint
@@ -18,6 +34,56 @@ export function apiUrl(path) {
   // Ensure path starts with /
   const cleanPath = path.startsWith('/') ? path : `/${path}`;
   return `${BACKEND_URL}${cleanPath}`;
+}
+
+/**
+ * Enhanced fetch with better error handling for JSON parsing
+ * @param {string} url - URL to fetch
+ * @param {Object} options - Fetch options
+ * @returns {Promise<any>} Parsed JSON response
+ */
+export async function safeFetchJSON(url, options = {}) {
+  try {
+    const response = await fetch(url, options);
+    const contentType = response.headers.get('content-type');
+
+    // Check if response is actually JSON
+    if (!contentType || !contentType.includes('application/json')) {
+      // If not JSON, it might be an HTML error page
+      const text = await response.text();
+
+      // Check if it looks like HTML (starts with <!doctype or <html)
+      if (text.trim().toLowerCase().startsWith('<!doctype') ||
+          text.trim().toLowerCase().startsWith('<html')) {
+        throw new Error(
+          `Backend not reachable. Received HTML instead of JSON. ` +
+          `${!isBackendConfigured() ? 'VITE_BACKEND_URL environment variable is not configured. ' : ''}` +
+          `Please check your backend configuration.`
+        );
+      }
+
+      // Try to return the text as-is if not HTML
+      throw new Error(`Unexpected response type: ${contentType || 'unknown'}. Response: ${text.substring(0, 100)}`);
+    }
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.detail || data.error || data.message || `Request failed with status ${response.status}`);
+    }
+
+    return data;
+  } catch (error) {
+    // Re-throw with better error message
+    if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+      throw new Error(
+        `Cannot connect to backend server. ` +
+        `${!isBackendConfigured() ? 'VITE_BACKEND_URL environment variable is not configured. ' : ''}` +
+        `Please check that the backend is running and accessible.`
+      );
+    }
+    throw error;
+  }
 }
 
 /**
