@@ -7,6 +7,7 @@ import ChatPanel from "./components/ChatPanel.jsx";
 import LlmSettings from "./components/LlmSettings.jsx";
 import FlowViewer from "./components/FlowViewer.jsx";
 import Footer from "./components/Footer.jsx";
+import { apiUrl, safeFetchJSON } from "./utils/api.js";
 
 function makeRepoKey(repo) {
   if (!repo) return null;
@@ -290,12 +291,11 @@ export default function App() {
     const user = localStorage.getItem("github_user");
     if (token && user) {
       try {
-        const response = await fetch("/api/auth/validate", {
+        const data = await safeFetchJSON(apiUrl("/api/auth/validate"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ access_token: token }),
         });
-        const data = await response.json();
         if (data.authenticated) {
           setIsAuthenticated(true);
           setUserInfo(JSON.parse(user));
