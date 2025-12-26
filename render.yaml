@@ -1,0 +1,40 @@
+# Render Blueprint for GitPilot Backend
+# This file defines how to deploy the Python backend on Render
+
+services:
+  # Python Backend API
+  - type: web
+    name: gitpilot-backend
+    env: python
+    plan: free  # Change to 'starter' or 'standard' for production
+    buildCommand: pip install uv && uv sync --all-extras
+    startCommand: uv run gitpilot serve --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      # Required: GitHub OAuth App credentials
+      - key: GITHUB_CLIENT_ID
+        sync: false  # Set in Render dashboard
+      - key: GITHUB_CLIENT_SECRET
+        sync: false  # Set in Render dashboard
+
+      # Required: LLM Provider (choose one)
+      - key: OPENAI_API_KEY
+        sync: false
+      # - key: ANTHROPIC_API_KEY
+      #   sync: false
+
+      # Optional: Default LLM settings
+      - key: DEFAULT_LLM_PROVIDER
+        value: openai
+      - key: DEFAULT_LLM_MODEL
+        value: gpt-4
+
+      # Backend-specific settings
+      - key: GITPILOT_BACKEND_URL
+        value: https://gitpilot-backend.onrender.com  # Update with your actual URL
+      - key: CORS_ORIGINS
+        value: https://your-vercel-app.vercel.app,http://localhost:5173
+
+      # Python runtime
+      - key: PYTHON_VERSION
+        value: 3.12.0

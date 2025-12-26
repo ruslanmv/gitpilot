@@ -1,0 +1,420 @@
+name: 🐳 Build & Push Docker Images
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag (e.g., v1.2.3 or 1.2.3)"
+        required: true
+        default: "latest"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dockerhub-publish-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-backend:
+    name: 🔧 Build & Push Backend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📝 Derive version tags
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            RAW="${GITHUB_REF#refs/tags/}"
+          else
+            RAW="${{ github.event.inputs.version }}"
+          fi
+
+          if [ -z "$RAW" ] || [ "$RAW" = "latest" ]; then
+            RELEASE_TAG="latest"
+            SEMVER="latest"
+          elif [[ "$RAW" =~ ^v ]]; then
+            RELEASE_TAG="$RAW"
+            SEMVER="${RAW#v}"
+          else
+            RELEASE_TAG="v$RAW"
+            SEMVER="$RAW"
+          fi
+
+          echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
+          echo "SEMVER=$SEMVER" >> $GITHUB_ENV
+          echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+          echo "BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_ENV
+
+          echo "✅ Version: $RELEASE_TAG (semver: $SEMVER, sha: ${GITHUB_SHA::7})"
+
+      - name: 🔧 Compute backend image name
+        shell: bash
+        run: |
+          USER_LC="${{ secrets.DOCKERHUB_USERNAME }}"
+          USER_LC="${USER_LC,,}"
+          IMAGE="docker.io/${USER_LC}/gitpilot-backend"
+          echo "BACKEND_IMAGE=$IMAGE" >> $GITHUB_ENV
+          echo "📦 Backend image: $IMAGE"
+
+      - name: 🏗️ Set up QEMU (multi-arch)
+        uses: docker/setup-qemu-action@v3
+
+      - name: 🏗️ Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🔐 Docker Hub login
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 🏷️ Docker metadata (backend)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.BACKEND_IMAGE }}
+          flavor: |
+            latest=auto
+          tags: |
+            type=raw,value=${{ env.SEMVER }},enable=${{ env.SEMVER != 'latest' }}
+            type=raw,value=latest,enable=${{ github.event_name == 'release' || env.SEMVER == 'latest' }}
+            type=raw,value=sha-${{ env.SHORT_SHA }}
+            type=semver,pattern={{version}},value=${{ env.SEMVER }},enable=${{ env.SEMVER != 'latest' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.SEMVER }},enable=${{ env.SEMVER != 'latest' }}
+          labels: |
+            org.opencontainers.image.title=gitpilot-backend
+            org.opencontainers.image.description=GitPilot Backend - Python FastAPI server
+            org.opencontainers.image.url=https://github.com/${{ github.repository }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ env.SEMVER }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ env.BUILD_DATE }}
+
+      - name: 🔨 Build & push backend
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.backend
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+          build-args: |
+            BUILD_VERSION=${{ env.SEMVER }}
+            BUILD_COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ env.BUILD_DATE }}
+
+      - name: ✅ Verify backend health endpoint
+        shell: bash
+        run: |
+          REF="$(echo "${{ steps.meta.outputs.tags }}" | head -n1)"
+          echo "🔍 Testing backend container: $REF"
+
+          # Run container in background with basic health check
+          docker run -d --name test-backend \
+            -e GITHUB_CLIENT_ID=test \
+            -e GITHUB_CLIENT_SECRET=test \
+            -e OPENAI_API_KEY=test \
+            -p 8000:8000 \
+            "$REF"
+
+          # Wait for container to start (max 30 seconds)
+          for i in {1..30}; do
+            if docker exec test-backend curl -f http://localhost:8000/api/health 2>/dev/null; then
+              echo "✅ Backend health check passed!"
+              docker stop test-backend
+              docker rm test-backend
+              exit 0
+            fi
+            echo "⏳ Waiting for backend to start... ($i/30)"
+            sleep 1
+          done
+
+          echo "❌ Backend health check failed"
+          docker logs test-backend
+          docker stop test-backend
+          docker rm test-backend
+          exit 1
+
+      - name: 📋 Inspect multi-arch manifest
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ env.SEMVER }}" != "latest" ]; then
+            echo "🔍 Inspecting ${{ env.SEMVER }}..."
+            docker buildx imagetools inspect "${{ env.BACKEND_IMAGE }}:${{ env.SEMVER }}" || true
+          fi
+
+          if [ "${{ github.event_name }}" = "release" ] || [ "${{ env.SEMVER }}" = "latest" ]; then
+            echo "🔍 Inspecting latest..."
+            docker buildx imagetools inspect "${{ env.BACKEND_IMAGE }}:latest" || true
+          fi
+
+  build-frontend:
+    name: 🎨 Build & Push Frontend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📝 Derive version tags
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            RAW="${GITHUB_REF#refs/tags/}"
+          else
+            RAW="${{ github.event.inputs.version }}"
+          fi
+
+          if [ -z "$RAW" ] || [ "$RAW" = "latest" ]; then
+            RELEASE_TAG="latest"
+            SEMVER="latest"
+          elif [[ "$RAW" =~ ^v ]]; then
+            RELEASE_TAG="$RAW"
+            SEMVER="${RAW#v}"
+          else
+            RELEASE_TAG="v$RAW"
+            SEMVER="$RAW"
+          fi
+
+          echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
+          echo "SEMVER=$SEMVER" >> $GITHUB_ENV
+          echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+          echo "BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_ENV
+
+          echo "✅ Version: $RELEASE_TAG (semver: $SEMVER, sha: ${GITHUB_SHA::7})"
+
+      - name: 🎨 Compute frontend image name
+        shell: bash
+        run: |
+          USER_LC="${{ secrets.DOCKERHUB_USERNAME }}"
+          USER_LC="${USER_LC,,}"
+          IMAGE="docker.io/${USER_LC}/gitpilot-frontend"
+          echo "FRONTEND_IMAGE=$IMAGE" >> $GITHUB_ENV
+          echo "📦 Frontend image: $IMAGE"
+
+      - name: 🏗️ Set up QEMU (multi-arch)
+        uses: docker/setup-qemu-action@v3
+
+      - name: 🏗️ Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🔐 Docker Hub login
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 🏷️ Docker metadata (frontend)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.FRONTEND_IMAGE }}
+          flavor: |
+            latest=auto
+          tags: |
+            type=raw,value=${{ env.SEMVER }},enable=${{ env.SEMVER != 'latest' }}
+            type=raw,value=latest,enable=${{ github.event_name == 'release' || env.SEMVER == 'latest' }}
+            type=raw,value=sha-${{ env.SHORT_SHA }}
+            type=semver,pattern={{version}},value=${{ env.SEMVER }},enable=${{ env.SEMVER != 'latest' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.SEMVER }},enable=${{ env.SEMVER != 'latest' }}
+          labels: |
+            org.opencontainers.image.title=gitpilot-frontend
+            org.opencontainers.image.description=GitPilot Frontend - React/Vite with nginx
+            org.opencontainers.image.url=https://github.com/${{ github.repository }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ env.SEMVER }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ env.BUILD_DATE }}
+
+      - name: 🔨 Build & push frontend
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.frontend
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+          build-args: |
+            BUILD_VERSION=${{ env.SEMVER }}
+            BUILD_COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ env.BUILD_DATE }}
+
+      - name: ✅ Verify frontend serves correctly
+        shell: bash
+        run: |
+          REF="$(echo "${{ steps.meta.outputs.tags }}" | head -n1)"
+          echo "🔍 Testing frontend container: $REF"
+
+          # Run container in background
+          docker run -d --name test-frontend -p 8080:80 "$REF"
+
+          # Wait for nginx to start (max 10 seconds)
+          for i in {1..10}; do
+            if curl -f http://localhost:8080/ 2>/dev/null | grep -q "<!doctype html>"; then
+              echo "✅ Frontend serves HTML correctly!"
+              docker stop test-frontend
+              docker rm test-frontend
+              exit 0
+            fi
+            echo "⏳ Waiting for frontend to start... ($i/10)"
+            sleep 1
+          done
+
+          echo "❌ Frontend verification failed"
+          docker logs test-frontend
+          docker stop test-frontend
+          docker rm test-frontend
+          exit 1
+
+      - name: 📋 Inspect multi-arch manifest
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ env.SEMVER }}" != "latest" ]; then
+            echo "🔍 Inspecting ${{ env.SEMVER }}..."
+            docker buildx imagetools inspect "${{ env.FRONTEND_IMAGE }}:${{ env.SEMVER }}" || true
+          fi
+
+          if [ "${{ github.event_name }}" = "release" ] || [ "${{ env.SEMVER }}" = "latest" ]; then
+            echo "🔍 Inspecting latest..."
+            docker buildx imagetools inspect "${{ env.FRONTEND_IMAGE }}:latest" || true
+          fi
+
+  test-integration:
+    name: 🧪 Integration Test
+    needs: [build-backend, build-frontend]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔐 Docker Hub login
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 🧪 Test both containers together
+        shell: bash
+        run: |
+          USER_LC="${{ secrets.DOCKERHUB_USERNAME }}"
+          USER_LC="${USER_LC,,}"
+
+          echo "🚀 Starting integration test..."
+
+          # Create a test docker-compose file
+          cat > docker-compose.test.yml <<EOF
+          version: '3.8'
+          services:
+            backend:
+              image: docker.io/${USER_LC}/gitpilot-backend:latest
+              environment:
+                - GITHUB_CLIENT_ID=test
+                - GITHUB_CLIENT_SECRET=test
+                - OPENAI_API_KEY=test
+                - CORS_ORIGINS=http://localhost
+              ports:
+                - "8000:8000"
+              healthcheck:
+                test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+                interval: 5s
+                timeout: 3s
+                retries: 5
+
+            frontend:
+              image: docker.io/${USER_LC}/gitpilot-frontend:latest
+              ports:
+                - "3000:80"
+              depends_on:
+                backend:
+                  condition: service_healthy
+          EOF
+
+          # Start services
+          docker-compose -f docker-compose.test.yml up -d
+
+          # Wait for frontend
+          echo "⏳ Waiting for services to be ready..."
+          sleep 10
+
+          # Test backend
+          if curl -f http://localhost:8000/api/health; then
+            echo "✅ Backend health check passed"
+          else
+            echo "❌ Backend health check failed"
+            docker-compose -f docker-compose.test.yml logs
+            docker-compose -f docker-compose.test.yml down
+            exit 1
+          fi
+
+          # Test frontend
+          if curl -f http://localhost:3000/ | grep -q "<!doctype html>"; then
+            echo "✅ Frontend serves correctly"
+          else
+            echo "❌ Frontend check failed"
+            docker-compose -f docker-compose.test.yml logs
+            docker-compose -f docker-compose.test.yml down
+            exit 1
+          fi
+
+          echo "✅ Integration test passed!"
+          docker-compose -f docker-compose.test.yml down
+
+  summary:
+    name: 📊 Deployment Summary
+    needs: [build-backend, build-frontend, test-integration]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: 📊 Print summary
+        shell: bash
+        run: |
+          USER_LC="${{ secrets.DOCKERHUB_USERNAME }}"
+          USER_LC="${USER_LC,,}"
+
+          echo "## 🐳 Docker Images Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Backend" >> $GITHUB_STEP_SUMMARY
+          echo "- 📦 \`docker.io/${USER_LC}/gitpilot-backend:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "- 📦 \`docker.io/${USER_LC}/gitpilot-backend:sha-${GITHUB_SHA::7}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Frontend" >> $GITHUB_STEP_SUMMARY
+          echo "- 📦 \`docker.io/${USER_LC}/gitpilot-frontend:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "- 📦 \`docker.io/${USER_LC}/gitpilot-frontend:sha-${GITHUB_SHA::7}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Pull Commands" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${USER_LC}/gitpilot-backend:latest" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${USER_LC}/gitpilot-frontend:latest" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Docker Compose" >> $GITHUB_STEP_SUMMARY
+          echo '```yaml' >> $GITHUB_STEP_SUMMARY
+          echo "services:" >> $GITHUB_STEP_SUMMARY
+          echo "  backend:" >> $GITHUB_STEP_SUMMARY
+          echo "    image: ${USER_LC}/gitpilot-backend:latest" >> $GITHUB_STEP_SUMMARY
+          echo "  frontend:" >> $GITHUB_STEP_SUMMARY
+          echo "    image: ${USER_LC}/gitpilot-frontend:latest" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

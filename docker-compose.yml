@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  # Backend service - Python FastAPI
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: gitpilot-backend
+    ports:
+      - "8000:8000"
+    environment:
+      # GitHub OAuth (required)
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
+
+      # LLM Provider (required - choose one)
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+
+      # Optional settings
+      - DEFAULT_LLM_PROVIDER=${DEFAULT_LLM_PROVIDER:-openai}
+      - DEFAULT_LLM_MODEL=${DEFAULT_LLM_MODEL:-gpt-4}
+      - PORT=8000
+
+      # CORS settings for frontend
+      - CORS_ORIGINS=http://localhost:3000,http://localhost:80
+    volumes:
+      # Mount .env file if it exists (for local development)
+      - ./.env:/app/.env:ro
+    networks:
+      - gitpilot-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Frontend service - React/Vite with nginx
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: gitpilot-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - gitpilot-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+networks:
+  gitpilot-network:
+    driver: bridge
+
+# Optional: Add volumes for persistent data
+# volumes:
+#   gitpilot-data:
