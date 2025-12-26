@@ -7,6 +7,7 @@ from typing import List, Optional
 from fastapi import FastAPI, Query, Path as FPath, Header, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .version import __version__
@@ -42,6 +43,23 @@ app = FastAPI(
     title="GitPilot API",
     version=__version__,
     description="Agentic AI assistant for GitHub repositories.",
+)
+
+# ============================================================================
+# CORS Configuration
+# ============================================================================
+# Enable CORS to allow frontend (local dev or Vercel) to connect to backend
+allowed_origins_str = os.getenv("CORS_ORIGINS", "http://localhost:5173")
+allowed_origins = [origin.strip() for origin in allowed_origins_str.split(",")]
+
+logger.info(f"CORS enabled for origins: {allowed_origins}")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -665,6 +683,12 @@ if STATIC_DIR.exists():
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint for monitoring and diagnostics."""
+    return {"status": "healthy", "service": "gitpilot-backend"}
+
+
+@app.get("/healthz")
+async def healthz():
+    """Health check endpoint (Render/Kubernetes standard)."""
     return {"status": "healthy", "service": "gitpilot-backend"}
 
 
