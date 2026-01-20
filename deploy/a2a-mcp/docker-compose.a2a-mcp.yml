@@ -1,0 +1,95 @@
+name: gitpilot-a2a-mcp
+
+services:
+  # ----------------------
+  # GitPilot Backend (A2A-enabled)
+  # ----------------------
+  gitpilot-backend:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.backend
+    env_file:
+      - ./.env.stack
+    environment:
+      # ensure A2A enabled even if other env files exist
+      - GITPILOT_ENABLE_A2A=true
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  # Optional: GitPilot Frontend (if you want the UI too)
+  gitpilot-frontend:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.frontend
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8000
+    ports:
+      - "5173:80"
+    depends_on:
+      - gitpilot-backend
+    restart: unless-stopped
+
+  # ----------------------
+  # MCP ContextForge (Gateway) - minimal subset
+  # Requires you to place the ContextForge source at:
+  #   deploy/a2a-mcp/mcp-context-forge
+  # (unzip/clone it there)
+  # ----------------------
+  cf-postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: mcpgateway
+      POSTGRES_PASSWORD: mcpgateway
+      POSTGRES_DB: mcpgateway
+    volumes:
+      - cf_postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  cf-redis:
+    image: redis:7
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - cf_redis_data:/data
+    restart: unless-stopped
+
+  cf-gateway:
+    build:
+      context: ./mcp-context-forge
+      dockerfile: Containerfile.lite
+    env_file:
+      - ./mcp-context-forge/.env.example
+    environment:
+      # Point to the services in THIS stack
+      - POSTGRES_HOST=cf-postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=mcpgateway
+      - POSTGRES_PASSWORD=mcpgateway
+      - POSTGRES_DB=mcpgateway
+      - REDIS_HOST=cf-redis
+      - REDIS_PORT=6379
+      # JWT secret for API auth (set in .env.stack)
+      - JWT_SECRET=${MCPGATEWAY_JWT_SECRET}
+      # Expose gateway on 4444 (internally)
+      - PORT=4444
+      # Ensure A2A is enabled
+      - MCPGATEWAY_A2A_ENABLED=true
+    depends_on:
+      - cf-postgres
+      - cf-redis
+    restart: unless-stopped
+
+  # Nginx reverse proxy to expose gateway (matches ContextForge defaults)
+  cf-nginx:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./mcp-context-forge/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - cf-gateway
+    restart: unless-stopped
+
+volumes:
+  cf_postgres_data:
+  cf_redis_data:
