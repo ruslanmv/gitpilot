@@ -219,6 +219,14 @@ Seamlessly switch between:
 - 🔄 **Agent Flow** – Visual workflow diagram
 - ⚙️ **Admin / Settings** – LLM provider management
 
+### 8. **MCP / A2A Agent Integration (ContextForge Compatible)** 🆕
+GitPilot can optionally run as an **A2A agent server** that can be **imported by URL** into **MCP ContextForge (MCP Gateway)** and exposed as MCP tools. This makes GitPilot usable not only from the web UI, but also from:
+- MCP-enabled IDEs and CLIs
+- automation pipelines (CI/CD)
+- other AI agents orchestrated by an MCP gateway
+
+A2A mode is **feature-flagged** and does **not** affect the existing UI/API unless enabled.
+
 ---
 
 ## 🚀 Installation
@@ -329,6 +337,140 @@ gitpilot-api
 # Using make (for development)
 make run
 ```
+
+---
+
+## 🔌 MCP / A2A Integration 🆕
+
+GitPilot can run as a **self-contained MCP server** with A2A endpoints. You can use it standalone or optionally integrate with **MCP ContextForge gateway** for advanced multi-agent workflows.
+
+### Two deployment modes
+1. **Simple MCP Server** (recommended for most users)
+   - Just GitPilot with A2A endpoints enabled
+   - Direct MCP client connections
+   - Use `make mcp` to deploy
+
+2. **Full MCP Gateway** (optional - with ContextForge)
+   - Complete MCP ContextForge infrastructure
+   - Advanced gateway features and orchestration
+   - Use `make gateway` to deploy
+
+### Why this matters
+- **Direct MCP access**: Use GitPilot from MCP-enabled IDEs/CLIs without additional infrastructure
+- **No UI required**: Call GitPilot programmatically from automation pipelines
+- **Composable**: GitPilot can act as the "repo editor agent" inside larger multi-agent workflows
+- **Gateway optional**: Full ContextForge gateway only needed for advanced orchestration scenarios
+
+### Enable A2A mode (does not change existing behavior)
+A2A endpoints are disabled by default. Enable them using environment variables:
+
+```bash
+export GITPILOT_ENABLE_A2A=true
+
+# Recommended: protect the A2A endpoint (gateway will inject this header)
+export GITPILOT_A2A_REQUIRE_AUTH=true
+export GITPILOT_A2A_SHARED_SECRET="REPLACE_WITH_LONG_RANDOM_SECRET"
+```
+
+Then start GitPilot as usual:
+
+```bash
+gitpilot serve --host 0.0.0.0 --port 8000
+```
+
+### A2A endpoints
+
+When enabled, GitPilot exposes:
+
+* `POST /a2a/invoke` – A2A invoke endpoint (JSON-RPC + envelope fallback)
+* `POST /a2a/v1/invoke` – Versioned alias (recommended for gateways)
+* `GET /a2a/health` – Health check
+* `GET /a2a/manifest` – Capability discovery (methods + auth hints)
+
+### Auth model (gateway-friendly)
+
+GitPilot supports a gateway-friendly model:
+
+* **Gateway → GitPilot authentication**:
+  * `X-A2A-Secret: <shared_secret>` *(recommended)*
+    or
+  * `Authorization: Bearer <shared_secret>`
+
+* **GitHub auth (optional)**:
+  * `X-Github-Token: <token>`
+    *(recommended when not using a GitHub App internally)*
+
+> Tip: Avoid sending GitHub tokens in request bodies. Prefer headers to reduce accidental logging exposure.
+
+### Register GitPilot in MCP ContextForge (Optional - Gateway Only)
+
+**Note:** This section is only needed if you're using the **full MCP ContextForge gateway** (`make gateway`). If you're using the simple MCP server (`make mcp`), you can connect MCP clients directly to GitPilot's A2A endpoints.
+
+Once the full gateway stack is deployed, register GitPilot as an A2A agent in ContextForge by providing the endpoint URL (note trailing `/` is recommended for JSON-RPC mode):
+
+* Endpoint URL:
+  * `https://YOUR_GITPILOT_DOMAIN/a2a/v1/invoke/`
+* Agent type:
+  * `jsonrpc`
+* Inject auth header:
+  * `X-A2A-Secret: <shared_secret>`
+
+After registration, MCP clients connected to the gateway will see GitPilot as an MCP tool (name depends on the gateway configuration).
+
+### Supported A2A methods (stable contract)
+
+GitPilot exposes a small, composable set of methods:
+
+* `repo.connect` – validate access and return repo metadata
+* `repo.tree` – list repository tree / files
+* `repo.read` – read a file
+* `repo.write` – create/update a file (commit)
+* `plan.generate` – generate an action plan for a goal
+* `plan.execute` – execute an approved plan
+* `repo.search` *(optional)* – search repositories
+
+These methods are designed to remain stable even if internal implementation changes.
+
+### Quick Start Deployment
+
+#### Option 1: Simple MCP Server (Recommended)
+```bash
+# Configure MCP server
+cp .env.a2a.example .env.a2a
+# Edit .env.a2a and set GITPILOT_A2A_SHARED_SECRET
+
+# Start GitPilot MCP server
+make mcp
+```
+
+This starts GitPilot with A2A endpoints only - perfect for most use cases.
+
+#### Option 2: Full MCP Gateway (Optional - with ContextForge)
+Only needed if you want the complete MCP ContextForge gateway infrastructure:
+
+```bash
+# 1. Download ContextForge and place at: deploy/a2a-mcp/mcp-context-forge
+# 2. Configure environment
+cd deploy/a2a-mcp
+cp .env.stack.example .env.stack
+# Edit .env.stack and set secrets
+
+# 3. Start full gateway stack
+cd ../..
+make gateway
+
+# 4. Register GitPilot agent in ContextForge
+export CF_ADMIN_BEARER="<jwt-token>"
+export GITPILOT_A2A_SECRET="<same-as-env-stack>"
+make gateway-register
+```
+
+**Note:** Most users only need `make mcp`. The full gateway is optional for advanced setups.
+
+See `deploy/a2a-mcp/README.md` for detailed deployment instructions.
+
+### Cloud deployment note
+Because the A2A adapter is stateless, GitPilot can be deployed with multiple replicas behind a load balancer. For long-running executions, consider adding async job execution (Redis/Postgres) in a future release.
 
 ---
 
@@ -514,6 +656,14 @@ gitpilot/
 #### Workflow Visualization
 - `GET /api/flow/current` – Get agent workflow graph
 
+#### A2A / MCP Integration (Optional)
+Enabled only when `GITPILOT_ENABLE_A2A=true`:
+
+- `POST /a2a/invoke` – A2A invoke endpoint (JSON-RPC + envelope)
+- `POST /a2a/v1/invoke` – Versioned A2A endpoint (recommended)
+- `GET /a2a/health` – A2A health check
+- `GET /a2a/manifest` – A2A capability discovery (methods + schemas)
+
 ---
 
 ## 🛠️ Development
@@ -547,6 +697,17 @@ make build
 
 # Clean build artifacts
 make clean
+
+# MCP Server Deployment (Simple - Recommended)
+make mcp              # Start GitPilot MCP server (A2A endpoints)
+make mcp-down         # Stop GitPilot MCP server
+make mcp-logs         # View MCP server logs
+
+# MCP Gateway Deployment (Optional - Full ContextForge Stack)
+make gateway          # Start GitPilot + MCP ContextForge gateway
+make gateway-down     # Stop MCP ContextForge gateway
+make gateway-logs     # View gateway logs
+make gateway-register # Register agent in ContextForge
 ```
 
 ### Frontend Development

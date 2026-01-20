@@ -13,7 +13,8 @@ DOCKER_COMPOSE := $(shell if command -v docker > /dev/null && docker compose ver
 .PHONY: help install uv-install frontend-install frontend-build \
         dev run test lint fmt build publish-test publish clean stop \
         vercel vercel-build vercel-deploy \
-        build-container run-container stop-container logs-container clean-container publish-container
+        build-container run-container stop-container logs-container clean-container publish-container \
+        mcp mcp-down mcp-logs gateway gateway-down gateway-logs gateway-register
 
 ## Show available targets
 help:
@@ -45,6 +46,17 @@ help:
 	@echo "  make logs-container   View logs from all containers"
 	@echo "  make clean-container  Remove containers, images, and volumes"
 	@echo "  make publish-container Publish Docker images to Docker Hub"
+	@echo ""
+	@echo "MCP Deployment Commands:"
+	@echo "  make mcp              Start GitPilot MCP server (A2A endpoints only)"
+	@echo "  make mcp-down         Stop GitPilot MCP server"
+	@echo "  make mcp-logs         View GitPilot MCP server logs"
+	@echo ""
+	@echo "MCP Gateway (Optional - Full ContextForge Stack):"
+	@echo "  make gateway          Start GitPilot + MCP ContextForge gateway"
+	@echo "  make gateway-down     Stop MCP ContextForge gateway stack"
+	@echo "  make gateway-logs     View MCP ContextForge gateway logs"
+	@echo "  make gateway-register Register GitPilot agent in ContextForge"
 	@echo ""
 
 ## High-level install: backend + frontend
@@ -78,7 +90,7 @@ dev: install
 run:
 	@echo "🚀 Starting GitPilot backend on http://127.0.0.1:$(PORT)..."
 	@trap 'kill 0' EXIT; \
-	$(UV) run gitpilot serve --host 127.0.0.1 --port $(PORT) & \
+	$(UV) run python -m gitpilot serve --host 127.0.0.1 --port $(PORT) & \
 	BACKEND_PID=$$!; \
 	echo "⏳ Waiting for backend to be ready..."; \
 	for i in 1 2 3 4 5 6 7 8 9 10; do \
@@ -310,3 +322,85 @@ publish-container:
 	@echo "4. Redeploy Vercel to use new backend URL"
 	@echo ""
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# =============================================================================
+# MCP Server Deployment (GitPilot with A2A endpoints - Simple MCP Server)
+# =============================================================================
+
+mcp:
+	@echo "Starting GitPilot MCP server (A2A endpoints)..."
+	@if [ ! -f .env.a2a ]; then \
+		echo "Creating .env.a2a from .env.a2a.example..."; \
+		cp .env.a2a.example .env.a2a; \
+		echo "IMPORTANT: Edit .env.a2a and set GITPILOT_A2A_SHARED_SECRET"; \
+	fi
+	@$(DOCKER_COMPOSE) -f docker-compose.yml --env-file .env.a2a up -d --build
+	@echo ""
+	@echo "✅ GitPilot MCP server started successfully!"
+	@echo ""
+	@echo "MCP endpoints available at:"
+	@echo "  http://localhost:8000/a2a/invoke        - JSON-RPC + envelope"
+	@echo "  http://localhost:8000/a2a/v1/invoke     - Versioned endpoint"
+	@echo "  http://localhost:8000/a2a/health        - Health check"
+	@echo "  http://localhost:8000/a2a/manifest      - Capability discovery"
+	@echo ""
+	@echo "This is a simple MCP server. For full MCP ContextForge gateway, use:"
+	@echo "  make gateway"
+
+mcp-down:
+	@echo "Stopping GitPilot MCP server..."
+	@$(DOCKER_COMPOSE) -f docker-compose.yml down
+	@echo "✅ GitPilot MCP server stopped"
+
+mcp-logs:
+	@echo "📋 Viewing GitPilot MCP server logs (Ctrl+C to exit)..."
+	@$(DOCKER_COMPOSE) -f docker-compose.yml logs -f
+
+# =============================================================================
+# MCP Gateway Deployment (GitPilot + MCP ContextForge - OPTIONAL Full Stack)
+# =============================================================================
+
+gateway:
+	@echo "Starting GitPilot + MCP ContextForge gateway stack..."
+	@echo ""
+	@if [ ! -d deploy/a2a-mcp/mcp-context-forge ]; then \
+		echo "❌ ERROR: MCP ContextForge source not found."; \
+		echo ""; \
+		echo "To use the full MCP gateway, you need to:"; \
+		echo "1. Clone/download MCP ContextForge"; \
+		echo "2. Place it at: deploy/a2a-mcp/mcp-context-forge"; \
+		echo ""; \
+		echo "If you just need a simple MCP server (A2A endpoints), use:"; \
+		echo "  make mcp"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@cd deploy/a2a-mcp && chmod +x setup.sh && ./setup.sh
+
+gateway-down:
+	@echo "Stopping MCP ContextForge gateway stack..."
+	@cd deploy/a2a-mcp && $(DOCKER_COMPOSE) -f docker-compose.a2a-mcp.yml down
+	@echo "✅ MCP ContextForge gateway stopped"
+
+gateway-logs:
+	@echo "📋 Viewing MCP ContextForge gateway logs (Ctrl+C to exit)..."
+	@cd deploy/a2a-mcp && $(DOCKER_COMPOSE) -f docker-compose.a2a-mcp.yml logs -f
+
+gateway-register:
+	@echo "Registering GitPilot agent in ContextForge gateway..."
+	@if [ -z "$$CF_ADMIN_BEARER" ]; then \
+		echo "❌ ERROR: CF_ADMIN_BEARER environment variable required"; \
+		echo ""; \
+		echo "Usage:"; \
+		echo "  CF_ADMIN_BEARER=<jwt> GITPILOT_A2A_SECRET=<secret> make gateway-register"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@if [ -z "$$GITPILOT_A2A_SECRET" ]; then \
+		echo "❌ ERROR: GITPILOT_A2A_SECRET environment variable required"; \
+		echo ""; \
+		echo "Usage:"; \
+		echo "  CF_ADMIN_BEARER=<jwt> GITPILOT_A2A_SECRET=<secret> make gateway-register"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@cd deploy/a2a-mcp && chmod +x register_agent.sh && ./register_agent.sh
