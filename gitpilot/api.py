@@ -37,6 +37,9 @@ import os
 import logging
 from .model_catalog import list_models_for_provider
 
+# Optional A2A adapter (MCP ContextForge)
+from .a2a_adapter import router as a2a_router
+
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
@@ -44,6 +47,24 @@ app = FastAPI(
     version=__version__,
     description="Agentic AI assistant for GitHub repositories.",
 )
+
+# ==========================================================================
+# Optional A2A Adapter (MCP ContextForge)
+# ==========================================================================
+# This is feature-flagged and does not affect the existing UI/REST API unless
+# explicitly enabled.
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+if _env_bool("GITPILOT_ENABLE_A2A", False):
+    logger.info("A2A adapter enabled (mounting /a2a/* endpoints)")
+    app.include_router(a2a_router)
+else:
+    logger.info("A2A adapter disabled (set GITPILOT_ENABLE_A2A=true to enable)")
 
 # ============================================================================
 # CORS Configuration
