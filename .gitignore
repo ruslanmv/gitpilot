@@ -23,7 +23,9 @@ ENV/
 
 # Distribution / packaging
 build/
+!installer/build/
 dist/
+dist_artifacts/
 *.egg-info/
 *.egg
 .eggs/

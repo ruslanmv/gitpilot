@@ -404,3 +404,71 @@ gateway-register:
 		exit 1; \
 	fi
 	@cd deploy/a2a-mcp && chmod +x register_agent.sh && ./register_agent.sh
+
+# =============================================================================
+# Desktop Installer Build (All-in-One Local Web Service)
+# =============================================================================
+# Builds: frontend -> embedded into gitpilot/web -> PyInstaller binary -> portable archives
+#
+# Usage:
+#   make installer-build        Build everything (frontend + embed + binary)
+#   make installer-verify       Verify binary and embedded UI
+#   make installer-package      Make portable archives for current OS
+#   make installer-windows      Build Windows Inno Setup installer (Windows only)
+
+APP_NAME            ?= gitpilot
+SPEC_FILE           ?= installer/pyinstaller/gitpilot.spec
+DIST_DIR            ?= dist/$(APP_NAME)
+
+GIT_DESCRIBE := $(shell git describe --tags --always --dirty 2>/dev/null || true)
+GIT_SHA      := $(shell git rev-parse --short HEAD 2>/dev/null || true)
+DATE_UTC     := $(shell date -u +%Y%m%d)
+INSTALLER_VERSION ?= $(if $(strip $(GIT_DESCRIBE)),$(GIT_DESCRIBE),$(DATE_UTC)-$(GIT_SHA))
+
+.PHONY: installer-deps installer-embed installer-binary installer-build installer-verify installer-package installer-windows installer-clean
+
+## Install PyInstaller for building standalone binaries
+installer-deps: uv-install
+	@echo "📦 Installing PyInstaller..."
+	@$(UV) pip install pyinstaller
+	@echo "✅ PyInstaller ready."
+
+## Embed frontend into backend (copy frontend/dist -> gitpilot/web)
+installer-embed: frontend-build
+	@echo "📂 Embedding frontend into gitpilot/web..."
+	@$(UV) run $(PYTHON) installer/build/embed_frontend.py
+	@echo "✅ Frontend embedded."
+
+## Build PyInstaller binary
+installer-binary: installer-deps installer-embed
+	@echo "🔧 Building standalone binary with PyInstaller..."
+	@$(UV) run $(PYTHON) -m PyInstaller "$(SPEC_FILE)"
+	@echo "✅ Binary built: $(DIST_DIR)"
+
+## Build everything for installer (frontend + embed + binary)
+installer-build: installer-binary
+	@echo "✅ Installer build complete."
+
+## Verify bundle (binary exists + embedded UI present)
+installer-verify: installer-build
+	@echo "🔍 Verifying bundle..."
+	@$(UV) run $(PYTHON) installer/build/verify_bundle.py
+	@echo "✅ Bundle verified."
+
+## Create portable archives for current OS
+installer-package: installer-verify
+	@echo "📦 Creating portable package..."
+	@$(UV) run $(PYTHON) installer/build/package_portable.py --version "$(INSTALLER_VERSION)"
+	@echo "✅ Artifacts created under dist_artifacts/"
+
+## Build Windows Inno Setup installer (Windows only)
+installer-windows: installer-verify
+	@echo "🪟 Building Windows installer..."
+	@$(UV) run $(PYTHON) installer/windows/build_installer.py --version "$(INSTALLER_VERSION)"
+	@echo "✅ Windows installer built."
+
+## Clean installer artifacts
+installer-clean:
+	@echo "🧹 Cleaning installer artifacts..."
+	@rm -rf dist dist_artifacts build
+	@echo "✅ Installer artifacts cleaned."
