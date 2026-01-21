@@ -33,6 +33,7 @@ from .github_oauth import (
     AuthSession,
     GitHubUser,
 )
+from .auth_store import save_session, load_session, clear_session
 import os
 import logging
 from .model_catalog import list_models_for_provider
@@ -553,6 +554,13 @@ async def api_auth_callback(request: AuthCallbackRequest):
     """
     try:
         session = await exchange_code_for_token(request.code, request.state)
+
+        # Persist session for local deployments (best-effort)
+        try:
+            save_session(session.model_dump() if hasattr(session, "model_dump") else session.dict())
+        except Exception as e:
+            logger.warning(f"Failed to persist auth session: {e}")
+
         return session
     except ValueError as e:
         return JSONResponse(
@@ -600,11 +608,51 @@ async def api_device_poll(payload: dict):
     try:
         session = await poll_device_token(device_code)
         if session:
+            # Persist session for local deployments (best-effort)
+            try:
+                save_session(session.model_dump() if hasattr(session, "model_dump") else session.dict())
+            except Exception as e:
+                logger.warning(f"Failed to persist auth session: {e}")
+
             return session
 
         return JSONResponse({"status": "pending"}, status_code=202)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
+
+
+@app.get("/api/auth/session", response_model=AuthSession)
+async def api_auth_session():
+    """Return persisted GitHub session if available (local deployments).
+
+    This enables "login once" behavior for the UI.
+
+    - If a cached token exists and is still valid, returns an AuthSession.
+    - If missing/invalid/revoked, returns 404 (and clears the cache).
+    """
+    cached = load_session()
+    if not cached or not cached.get("access_token"):
+        raise HTTPException(status_code=404, detail="No cached session")
+
+    user = await validate_token(str(cached["access_token"]))
+    if not user:
+        clear_session()
+        raise HTTPException(status_code=404, detail="Cached session is invalid")
+
+    # Keep the same shape as AuthSession returned by login flows.
+    return AuthSession(
+        access_token=str(cached["access_token"]),
+        token_type=str(cached.get("token_type") or "bearer"),
+        scope=str(cached.get("scope") or ""),
+        user=user,
+    )
+
+
+@app.post("/api/auth/logout")
+async def api_auth_logout():
+    """Clear persisted GitHub session (local deployments)."""
+    clear_session()
+    return {"ok": True}
 
 
 @app.get("/api/auth/status")

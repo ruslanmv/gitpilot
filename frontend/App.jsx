@@ -308,6 +308,26 @@ export default function App() {
       localStorage.removeItem("github_token");
       localStorage.removeItem("github_user");
     }
+
+    // Fallback: if localStorage is empty (or token invalid), try server-side cached session
+    try {
+      const session = await safeFetchJSON(apiUrl("/api/auth/session"));
+      if (session?.access_token && session?.user) {
+        try {
+          localStorage.setItem("github_token", session.access_token);
+          localStorage.setItem("github_user", JSON.stringify(session.user));
+        } catch (e) {
+          console.warn("LocalStorage access denied:", e);
+        }
+        setIsAuthenticated(true);
+        setUserInfo(session.user);
+        setIsLoading(false);
+        return;
+      }
+    } catch (err) {
+      // No cached session on server (404) or server not upgraded - ignore
+    }
+
     setIsAuthenticated(false);
     setIsLoading(false);
   };
@@ -317,7 +337,14 @@ export default function App() {
     setUserInfo(session.user);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    // Best-effort server-side logout (clears cached session if enabled)
+    try {
+      await fetch(apiUrl("/api/auth/logout"), { method: "POST" });
+    } catch (e) {
+      // ignore
+    }
+
     localStorage.removeItem("github_token");
     localStorage.removeItem("github_user");
     setIsAuthenticated(false);
@@ -400,8 +427,9 @@ export default function App() {
         <main className="workspace">
           {activePage === "admin" && <LlmSettings />}
           {activePage === "flow" && <FlowViewer />}
-          {activePage === "workspace" &&
-            (repo ? (
+          {/* Keep workspace mounted but hidden to preserve ChatPanel state (e.g., "thinking" status) */}
+          <div style={{ display: activePage === "workspace" ? "contents" : "none" }}>
+            {repo ? (
               <div className="workspace-grid">
                 <aside className="gp-context-column">
                   <ProjectContextPanel
@@ -436,7 +464,8 @@ export default function App() {
                 <h1>Select a repository</h1>
                 <p>Select a repo to begin agentic workflow.</p>
               </div>
-            ))}
+            )}
+          </div>
         </main>
       </div>
 
