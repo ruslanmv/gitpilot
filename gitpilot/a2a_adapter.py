@@ -34,8 +34,11 @@ from typing import Any, Dict, Optional, Tuple
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from .agentic import PlanResult, execute_plan, generate_plan
+from .agentic import PlanResult, execute_plan, generate_plan, dispatch_request
 from .github_api import get_file, get_repo_tree, github_request, put_file
+from . import github_issues
+from . import github_pulls
+from . import github_search
 
 router = APIRouter(tags=["a2a"])
 
@@ -217,6 +220,140 @@ async def _dispatch(method: str, params: Dict[str, Any], github_token: Optional[
             ]
         }
 
+    # --- v2 methods: issues, pulls, search, chat --------------------------
+
+    if method == "issue.list":
+        repo_full_name = params.get("repo_full_name")
+        owner, repo = _split_full_name(str(repo_full_name))
+        issues = await github_issues.list_issues(
+            owner, repo, state=params.get("state", "open"),
+            labels=params.get("labels"), per_page=params.get("per_page", 30),
+            token=github_token,
+        )
+        return {"issues": issues}
+
+    if method == "issue.get":
+        repo_full_name = params.get("repo_full_name")
+        issue_number = params.get("issue_number")
+        if not issue_number:
+            raise HTTPException(status_code=400, detail="Missing required param: issue_number")
+        owner, repo = _split_full_name(str(repo_full_name))
+        return await github_issues.get_issue(owner, repo, int(issue_number), token=github_token)
+
+    if method == "issue.create":
+        repo_full_name = params.get("repo_full_name")
+        title = params.get("title")
+        if not title:
+            raise HTTPException(status_code=400, detail="Missing required param: title")
+        owner, repo = _split_full_name(str(repo_full_name))
+        return await github_issues.create_issue(
+            owner, repo, str(title),
+            body=params.get("body"), labels=params.get("labels"),
+            assignees=params.get("assignees"), token=github_token,
+        )
+
+    if method == "issue.update":
+        repo_full_name = params.get("repo_full_name")
+        issue_number = params.get("issue_number")
+        if not issue_number:
+            raise HTTPException(status_code=400, detail="Missing required param: issue_number")
+        owner, repo = _split_full_name(str(repo_full_name))
+        return await github_issues.update_issue(
+            owner, repo, int(issue_number),
+            title=params.get("title"), body=params.get("body"),
+            state=params.get("state"), labels=params.get("labels"),
+            assignees=params.get("assignees"), token=github_token,
+        )
+
+    if method == "issue.comment":
+        repo_full_name = params.get("repo_full_name")
+        issue_number = params.get("issue_number")
+        body = params.get("body")
+        if not issue_number:
+            raise HTTPException(status_code=400, detail="Missing required param: issue_number")
+        if not body:
+            raise HTTPException(status_code=400, detail="Missing required param: body")
+        owner, repo = _split_full_name(str(repo_full_name))
+        return await github_issues.add_issue_comment(
+            owner, repo, int(issue_number), str(body), token=github_token,
+        )
+
+    if method == "pr.list":
+        repo_full_name = params.get("repo_full_name")
+        owner, repo = _split_full_name(str(repo_full_name))
+        return await github_pulls.list_pull_requests(
+            owner, repo, state=params.get("state", "open"),
+            per_page=params.get("per_page", 30), token=github_token,
+        )
+
+    if method == "pr.create":
+        repo_full_name = params.get("repo_full_name")
+        title = params.get("title")
+        head = params.get("head")
+        base = params.get("base")
+        if not title or not head or not base:
+            raise HTTPException(status_code=400, detail="Missing required params: title, head, base")
+        owner, repo = _split_full_name(str(repo_full_name))
+        return await github_pulls.create_pull_request(
+            owner, repo, title=str(title), head=str(head), base=str(base),
+            body=params.get("body"), token=github_token,
+        )
+
+    if method == "pr.merge":
+        repo_full_name = params.get("repo_full_name")
+        pull_number = params.get("pull_number")
+        if not pull_number:
+            raise HTTPException(status_code=400, detail="Missing required param: pull_number")
+        owner, repo = _split_full_name(str(repo_full_name))
+        return await github_pulls.merge_pull_request(
+            owner, repo, int(pull_number),
+            merge_method=params.get("merge_method", "merge"),
+            token=github_token,
+        )
+
+    if method == "search.code":
+        query = params.get("query")
+        if not query:
+            raise HTTPException(status_code=400, detail="Missing required param: query")
+        return await github_search.search_code(
+            str(query), owner=params.get("owner"), repo=params.get("repo"),
+            language=params.get("language"), per_page=params.get("per_page", 20),
+            token=github_token,
+        )
+
+    if method == "search.issues":
+        query = params.get("query")
+        if not query:
+            raise HTTPException(status_code=400, detail="Missing required param: query")
+        return await github_search.search_issues(
+            str(query), owner=params.get("owner"), repo=params.get("repo"),
+            state=params.get("state"), label=params.get("label"),
+            per_page=params.get("per_page", 20), token=github_token,
+        )
+
+    if method == "search.users":
+        query = params.get("query")
+        if not query:
+            raise HTTPException(status_code=400, detail="Missing required param: query")
+        return await github_search.search_users(
+            str(query), type_filter=params.get("type"),
+            location=params.get("location"), language=params.get("language"),
+            per_page=params.get("per_page", 20), token=github_token,
+        )
+
+    if method == "chat.message":
+        repo_full_name = params.get("repo_full_name")
+        message = params.get("message")
+        if not message:
+            raise HTTPException(status_code=400, detail="Missing required param: message")
+        if not repo_full_name:
+            raise HTTPException(status_code=400, detail="Missing required param: repo_full_name")
+        return await dispatch_request(
+            str(message), str(repo_full_name),
+            token=github_token,
+            branch_name=params.get("branch") or params.get("branch_name"),
+        )
+
     raise HTTPException(status_code=404, detail=f"Unknown method: {method}")
 
 
@@ -268,6 +405,55 @@ async def a2a_manifest() -> Dict[str, Any]:
             "repo.search": {
                 "params": {"query": "string"},
                 "result": {"repos": "array"},
+            },
+            # v2 methods
+            "issue.list": {
+                "params": {"repo_full_name": "string", "state": "string?", "labels": "string?"},
+                "result": {"issues": "array"},
+            },
+            "issue.get": {
+                "params": {"repo_full_name": "string", "issue_number": "integer"},
+                "result": "object",
+            },
+            "issue.create": {
+                "params": {"repo_full_name": "string", "title": "string", "body": "string?", "labels": "array?", "assignees": "array?"},
+                "result": "object",
+            },
+            "issue.update": {
+                "params": {"repo_full_name": "string", "issue_number": "integer", "title": "string?", "body": "string?", "state": "string?"},
+                "result": "object",
+            },
+            "issue.comment": {
+                "params": {"repo_full_name": "string", "issue_number": "integer", "body": "string"},
+                "result": "object",
+            },
+            "pr.list": {
+                "params": {"repo_full_name": "string", "state": "string?"},
+                "result": "array",
+            },
+            "pr.create": {
+                "params": {"repo_full_name": "string", "title": "string", "head": "string", "base": "string", "body": "string?"},
+                "result": "object",
+            },
+            "pr.merge": {
+                "params": {"repo_full_name": "string", "pull_number": "integer", "merge_method": "string?"},
+                "result": "object",
+            },
+            "search.code": {
+                "params": {"query": "string", "owner": "string?", "repo": "string?", "language": "string?"},
+                "result": {"total_count": "integer", "items": "array"},
+            },
+            "search.issues": {
+                "params": {"query": "string", "owner": "string?", "repo": "string?", "state": "string?"},
+                "result": {"total_count": "integer", "items": "array"},
+            },
+            "search.users": {
+                "params": {"query": "string", "type": "string?", "location": "string?"},
+                "result": {"total_count": "integer", "items": "array"},
+            },
+            "chat.message": {
+                "params": {"repo_full_name": "string", "message": "string", "branch": "string?"},
+                "result": "object",
             },
         },
     }

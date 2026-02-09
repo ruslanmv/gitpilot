@@ -2,11 +2,9 @@
 Agent Tools for GitPilot Multi-Agent System
 Provides CrewAI-compatible tools for agents to explore and analyze repositories.
 """
-from __future__ import annotations
-
 import asyncio
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from crewai.tools import tool
 
@@ -36,7 +34,7 @@ def set_repo_context(
         }
 
 
-def get_repo_context() -> tuple[str, str, Optional[str], str]:
+def get_repo_context() -> Tuple[str, str, Optional[str], str]:
     """Get the current repository context including token and branch."""
     with _context_lock:
         owner = _current_repo_context.get("owner", "")
