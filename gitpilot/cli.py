@@ -273,6 +273,71 @@ def serve_only():
     except KeyboardInterrupt:
         console.print("\n[yellow]Shutting down...[/yellow]")
         sys.exit(0)
+@cli.command()
+def run(
+    repo: str = typer.Option(..., "--repo", "-r", help="Repository as owner/repo"),
+    message: str = typer.Option("", "--message", "-m", help="User request message"),
+    branch: str = typer.Option(None, "--branch", "-b", help="Target branch"),
+    auto_pr: bool = typer.Option(False, "--auto-pr", help="Create PR after execution"),
+    from_pr: int = typer.Option(None, "--from-pr", help="Fetch context from PR number"),
+    headless: bool = typer.Option(False, "--headless", help="Non-interactive JSON output"),
+):
+    """Run GitPilot non-interactively (headless mode for CI/CD)."""
+    import asyncio
+    import sys
+
+    if not message and not sys.stdin.isatty():
+        message = sys.stdin.read().strip()
+
+    if not message:
+        console.print("[red]Error:[/red] --message is required (or pipe via stdin)")
+        raise typer.Exit(code=1)
+
+    token = os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
+    if not token:
+        console.print("[red]Error:[/red] GITPILOT_GITHUB_TOKEN or GITHUB_TOKEN must be set")
+        raise typer.Exit(code=1)
+
+    from .headless import run_headless
+
+    result = asyncio.run(run_headless(
+        repo_full_name=repo,
+        message=message,
+        token=token,
+        branch=branch,
+        auto_pr=auto_pr,
+        from_pr=from_pr,
+    ))
+
+    if headless:
+        # Pure JSON for CI/CD consumption
+        console.print(result.to_json())
+    else:
+        if result.success:
+            console.print(f"[green]Success:[/green] {result.output[:500]}")
+        else:
+            console.print(f"[red]Failed:[/red] {result.error}")
+        if result.pr_url:
+            console.print(f"[cyan]PR:[/cyan] {result.pr_url}")
+
+    raise typer.Exit(code=0 if result.success else 1)
+
+
+@cli.command("init")
+def init_project(
+    path: str = typer.Argument(".", help="Project directory to initialise"),
+):
+    """Initialize .gitpilot/ directory with template GITPILOT.md."""
+    from pathlib import Path as StdPath
+    from .memory import MemoryManager
+
+    workspace = StdPath(path).resolve()
+    mgr = MemoryManager(workspace)
+    md_path = mgr.init_project()
+    console.print(f"[green]Initialized:[/green] {md_path}")
+    console.print("[dim]Edit .gitpilot/GITPILOT.md to add your project conventions.[/dim]")
+
+
 @cli.command("list-models")
 def list_models_cmd(
     provider: str = typer.Option(
