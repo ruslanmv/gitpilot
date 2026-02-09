@@ -4,13 +4,18 @@ import asyncio
 import contextvars
 import logging
 from textwrap import dedent
-from typing import List, Literal
+from typing import Any, Dict, List, Literal, Optional
 
 from crewai import Agent, Crew, Process, Task
 from pydantic import BaseModel, Field
 
 from .llm_provider import build_llm
 from .agent_tools import REPOSITORY_TOOLS, set_repo_context, get_repository_context_summary
+from .issue_tools import ISSUE_TOOLS
+from .pr_tools import PR_TOOLS
+from .search_tools import SEARCH_TOOLS
+from .local_tools import LOCAL_TOOLS, LOCAL_FILE_TOOLS, LOCAL_GIT_TOOLS, LOCAL_SHELL_TOOLS
+from .agent_router import AgentType, RequestCategory, WorkflowPlan, route as route_request
 from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
@@ -510,10 +515,437 @@ async def execute_plan(
     }
 
 
+# ============================================================================
+# New Agent Builders (v2 upgrade)
+# ============================================================================
+
+def _build_issue_agent(llm) -> Agent:
+    return Agent(
+        role="GitHub Issue Management Specialist",
+        goal="Create, modify, and manage GitHub issues with proper metadata and relationships",
+        backstory=(
+            "You are an expert in GitHub issue management. You can create new issues "
+            "with detailed descriptions, modify existing issues and their metadata, "
+            "manage labels, milestones, and assignees, and add comments. "
+            "You ensure issues are well-organised and provide clear status updates. "
+            "When creating issues you always include a concise title and a structured body."
+        ),
+        llm=llm,
+        tools=ISSUE_TOOLS,
+        verbose=True,
+        allow_delegation=False,
+    )
+
+
+def _build_pr_agent(llm) -> Agent:
+    return Agent(
+        role="Pull Request Management Specialist",
+        goal="Create, list, review, and merge pull requests",
+        backstory=(
+            "You are skilled in pull request workflows. You can create PRs from "
+            "feature branches, list open PRs, inspect changed files, add reviews, "
+            "and merge PRs using the appropriate strategy (merge, squash, rebase). "
+            "You always verify the source and target branches before acting."
+        ),
+        llm=llm,
+        tools=PR_TOOLS,
+        verbose=True,
+        allow_delegation=False,
+    )
+
+
+def _build_search_agent(llm) -> Agent:
+    return Agent(
+        role="Search & Discovery Specialist",
+        goal="Find code, repositories, issues, and users across GitHub",
+        backstory=(
+            "You are an expert at finding resources on GitHub. You can search for "
+            "code by keywords, symbols, or patterns within a repository or globally. "
+            "You can find users and organisations, discover repositories by topic, "
+            "and locate issues or PRs matching specific criteria. "
+            "You present results in a clear, structured format."
+        ),
+        llm=llm,
+        tools=SEARCH_TOOLS + REPOSITORY_TOOLS,
+        verbose=True,
+        allow_delegation=False,
+    )
+
+
+def _build_code_review_agent(llm) -> Agent:
+    return Agent(
+        role="Code Review & Analysis Specialist",
+        goal="Review code quality, identify patterns, and suggest improvements",
+        backstory=(
+            "You are an experienced code reviewer who analyses code for quality, "
+            "security issues, and performance problems. You inspect files in the "
+            "repository, read their contents, and provide constructive feedback. "
+            "For pull requests you examine the changed files and produce a detailed "
+            "review with actionable suggestions."
+        ),
+        llm=llm,
+        tools=REPOSITORY_TOOLS + PR_TOOLS + SEARCH_TOOLS,
+        verbose=True,
+        allow_delegation=False,
+    )
+
+
+def _build_learning_agent(llm) -> Agent:
+    return Agent(
+        role="GitHub Learning & Guidance Specialist",
+        goal="Provide expert guidance on GitHub features, best practices, and workflows",
+        backstory=(
+            "You are a GitHub expert who helps users understand GitHub Actions, "
+            "CI/CD workflows, authentication, pull request best practices, "
+            "repository maintenance, GitHub Pages, Packages, Discussions, "
+            "and security best practices. You provide clear, actionable guidance "
+            "with examples. You can also read the repository to give contextualised advice."
+        ),
+        llm=llm,
+        tools=REPOSITORY_TOOLS + SEARCH_TOOLS,
+        verbose=True,
+        allow_delegation=False,
+    )
+
+
+def _build_local_editor_agent(llm) -> Agent:
+    """Phase 1: Agent for direct local file editing with verification."""
+    return Agent(
+        role="Local File Editor",
+        goal="Read, write, and modify files in the local workspace with verification",
+        backstory=(
+            "You are an expert code editor that operates directly on the local "
+            "filesystem. You read files, make precise edits, write new files, "
+            "and verify changes using git diff. You always check file contents "
+            "before editing and confirm results after. You follow project "
+            "conventions and never introduce breaking changes."
+        ),
+        llm=llm,
+        tools=LOCAL_FILE_TOOLS + LOCAL_GIT_TOOLS,
+        verbose=True,
+        allow_delegation=False,
+    )
+
+
+def _build_terminal_agent(llm) -> Agent:
+    """Phase 1: Agent for sandboxed shell command execution."""
+    return Agent(
+        role="Terminal & Shell Executor",
+        goal="Execute shell commands safely in the workspace and report results",
+        backstory=(
+            "You are a terminal expert that runs shell commands in a sandboxed "
+            "environment. You can run tests, linters, build tools, and other "
+            "development commands. You always report exit codes and output. "
+            "You refuse to run destructive commands like rm -rf / or format disks. "
+            "You explain command output clearly to the user."
+        ),
+        llm=llm,
+        tools=LOCAL_SHELL_TOOLS + LOCAL_GIT_TOOLS,
+        verbose=True,
+        allow_delegation=False,
+    )
+
+
+# ============================================================================
+# Unified Dispatcher (v2 upgrade)
+# ============================================================================
+
+async def dispatch_request(
+    user_request: str,
+    repo_full_name: str,
+    token: Optional[str] = None,
+    branch_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Route a free-form user request to the appropriate agent(s) and return the result.
+
+    This is the single entry-point for the new conversational mode.  For backwards
+    compatibility the original ``generate_plan`` / ``execute_plan`` pair is still
+    available and untouched.
+    """
+    workflow = route_request(user_request)
+    logger.info(
+        "[GitPilot] Router: category=%s agents=%s desc=%s",
+        workflow.category.value,
+        [a.value for a in workflow.agents],
+        workflow.description,
+    )
+
+    # Phase 2: Smart model routing
+    try:
+        from .smart_model_router import ModelRouter
+        _router = ModelRouter()
+        selection = _router.select(user_request, category=workflow.category.value)
+        logger.info(
+            "[GitPilot] ModelRouter: model=%s tier=%s complexity=%s reason=%s",
+            selection.model, selection.tier.value, selection.complexity.value, selection.reason,
+        )
+    except Exception:
+        pass  # Model routing is optional; fall through to default LLM
+
+    # Set repo context if needed
+    if workflow.requires_repo_context and repo_full_name:
+        owner, repo = repo_full_name.split("/")
+        active_ref = branch_name or "HEAD"
+        set_repo_context(owner, repo, token=token, branch=active_ref)
+
+    llm = build_llm()
+
+    # If it's the existing plan+execute workflow, delegate there
+    if workflow.category == RequestCategory.PLAN_EXECUTE:
+        plan = await generate_plan(user_request, repo_full_name, token=token, branch_name=branch_name)
+        return {
+            "category": workflow.category.value,
+            "workflow": "plan_execute",
+            "plan": plan.model_dump() if hasattr(plan, "model_dump") else plan,
+            "message": "Plan generated. Review and approve to execute.",
+        }
+
+    # Build the task description
+    task_description = _build_task_description(workflow, user_request, repo_full_name, branch_name)
+
+    # Build agent(s) for this workflow
+    agents = []
+    for agent_type in workflow.agents:
+        agents.append(_get_agent(agent_type, llm))
+
+    # Use the first agent as the primary executor
+    primary_agent = agents[0]
+    task = Task(
+        description=task_description,
+        expected_output="A clear, structured response addressing the user request",
+        agent=primary_agent,
+    )
+
+    crew = Crew(
+        agents=agents,
+        tasks=[task],
+        process=Process.sequential,
+        verbose=True,
+    )
+
+    def _run():
+        result = crew.kickoff()
+        if hasattr(result, "raw"):
+            return result.raw
+        return str(result)
+
+    ctx = contextvars.copy_context()
+    result_text = await asyncio.to_thread(ctx.run, _run)
+
+    return {
+        "category": workflow.category.value,
+        "agents_used": [a.value for a in workflow.agents],
+        "result": result_text,
+        "entity_number": workflow.entity_number,
+    }
+
+
+def _get_agent(agent_type: AgentType, llm) -> Agent:
+    """Instantiate an agent by type."""
+    builders = {
+        AgentType.EXPLORER: lambda: Agent(
+            role="Repository Explorer",
+            goal="Thoroughly explore and document the current state of the repository",
+            backstory="You are a meticulous code archaeologist who explores repositories.",
+            llm=llm,
+            tools=REPOSITORY_TOOLS,
+            verbose=True,
+            allow_delegation=False,
+        ),
+        AgentType.PLANNER: lambda: Agent(
+            role="Repository Refactor Planner",
+            goal="Design safe, step-by-step refactor plans",
+            backstory="You are an experienced staff engineer who creates plans based on facts.",
+            llm=llm,
+            tools=REPOSITORY_TOOLS,
+            verbose=True,
+            allow_delegation=False,
+        ),
+        AgentType.CODE_WRITER: lambda: Agent(
+            role="Expert Code Writer",
+            goal="Generate high-quality, production-ready code",
+            backstory="You are a senior software engineer with multi-language expertise.",
+            llm=llm,
+            tools=REPOSITORY_TOOLS,
+            verbose=True,
+            allow_delegation=False,
+        ),
+        AgentType.CODE_REVIEWER: lambda: _build_code_review_agent(llm),
+        AgentType.ISSUE_MANAGER: lambda: _build_issue_agent(llm),
+        AgentType.PR_MANAGER: lambda: _build_pr_agent(llm),
+        AgentType.SEARCH: lambda: _build_search_agent(llm),
+        AgentType.LEARNING: lambda: _build_learning_agent(llm),
+        AgentType.LOCAL_EDITOR: lambda: _build_local_editor_agent(llm),
+        AgentType.TERMINAL: lambda: _build_terminal_agent(llm),
+    }
+    builder = builders.get(agent_type)
+    if not builder:
+        raise ValueError(f"Unknown agent type: {agent_type}")
+    return builder()
+
+
+def _build_task_description(
+    workflow: WorkflowPlan,
+    user_request: str,
+    repo_full_name: str,
+    branch_name: Optional[str],
+) -> str:
+    """Build a detailed task description for the agent based on the workflow."""
+    parts = [
+        f"User request: {user_request}",
+        f"Repository: {repo_full_name}",
+    ]
+    if branch_name:
+        parts.append(f"Branch: {branch_name}")
+    if workflow.entity_number:
+        parts.append(f"Entity number: #{workflow.entity_number}")
+
+    # Category-specific instructions
+    if workflow.category == RequestCategory.ISSUE_MANAGEMENT:
+        action = workflow.metadata.get("action", "")
+        parts.append(
+            "\nYou are handling an ISSUE MANAGEMENT request. "
+            f"Action hint: {action}. "
+            "Use your issue tools to fulfill the request. "
+            "If creating an issue, extract title and body from the user request. "
+            "If listing issues, present results in a clear table. "
+            "If updating, identify the issue number and fields to change. "
+            "Always confirm what you did with the issue URL."
+        )
+
+    elif workflow.category == RequestCategory.PR_MANAGEMENT:
+        action = workflow.metadata.get("action", "")
+        parts.append(
+            "\nYou are handling a PULL REQUEST request. "
+            f"Action hint: {action}. "
+            "Use your PR tools to fulfill the request. "
+            "If creating a PR, determine the head and base branches. "
+            "If merging, confirm the PR number and merge method. "
+            "Always confirm with the PR URL."
+        )
+
+    elif workflow.category == RequestCategory.CODE_SEARCH:
+        search_type = workflow.metadata.get("search_type", "code")
+        parts.append(
+            f"\nYou are handling a SEARCH request (type: {search_type}). "
+            "Use your search tools to find what the user is looking for. "
+            "Present results clearly with paths, URLs, and context snippets."
+        )
+
+    elif workflow.category == RequestCategory.CODE_REVIEW:
+        parts.append(
+            "\nYou are handling a CODE REVIEW request. "
+            "First explore the repository to understand the codebase, "
+            "then analyse code quality, identify potential issues "
+            "(security, performance, maintainability), and provide "
+            "constructive suggestions with specific file references."
+        )
+
+    elif workflow.category == RequestCategory.LEARNING:
+        parts.append(
+            "\nYou are handling a LEARNING / GUIDANCE request. "
+            "Provide clear, actionable guidance about GitHub features. "
+            "Include examples and best practices. "
+            "If relevant, reference the current repository for context."
+        )
+
+    elif workflow.category == RequestCategory.LOCAL_EDIT:
+        parts.append(
+            "\nYou are handling a LOCAL FILE EDITING request. "
+            "Use your local file tools to read, write, and modify files. "
+            "Always read the file before editing to understand current content. "
+            "After editing, use git_diff or git_status to verify your changes. "
+            "Report exactly what was changed."
+        )
+
+    elif workflow.category == RequestCategory.TERMINAL:
+        parts.append(
+            "\nYou are handling a TERMINAL / SHELL COMMAND request. "
+            "Use the run_command tool to execute the requested command. "
+            "Report the exit code and output. If tests fail, summarise "
+            "which tests failed and why. Never run destructive commands."
+        )
+
+    elif workflow.category == RequestCategory.CONVERSATIONAL:
+        parts.append(
+            "\nYou are handling a general question about the repository. "
+            "Use repository tools to explore and answer the question. "
+            "Be concise and helpful."
+        )
+
+    return "\n".join(parts)
+
+
+# ============================================================================
+# Auto PR Creation (v2 upgrade)
+# ============================================================================
+
+async def create_pr_after_execution(
+    repo_full_name: str,
+    branch_name: str,
+    goal: str,
+    execution_log: Dict[str, Any],
+    token: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Automatically create a PR after plan execution completes.
+
+    Returns the PR data dict or None if creation fails.
+    """
+    from .github_pulls import create_pull_request
+    from .github_api import get_repo
+
+    owner, repo = repo_full_name.split("/")
+
+    try:
+        repo_info = await get_repo(owner, repo, token=token)
+        default_branch = repo_info.get("default_branch", "main")
+    except Exception:
+        default_branch = "main"
+
+    # Build PR body from execution log
+    steps = execution_log.get("steps", [])
+    body_lines = [f"## GitPilot Auto-PR\n\n**Goal:** {goal}\n"]
+    for step in steps:
+        body_lines.append(f"- {step.get('summary', '')}")
+    body_lines.append(f"\n---\n*Created by GitPilot*")
+    body = "\n".join(body_lines)
+
+    # Truncate title to stay within GitHub limits
+    title = f"GitPilot: {goal}"
+    if len(title) > 256:
+        title = title[:253] + "..."
+
+    try:
+        pr = await create_pull_request(
+            owner,
+            repo,
+            title=title,
+            head=branch_name,
+            base=default_branch,
+            body=body,
+            token=token,
+        )
+        logger.info("[GitPilot] Auto-PR created: %s", pr.get("html_url", ""))
+        return pr
+    except Exception as e:
+        logger.warning("[GitPilot] Failed to create auto-PR: %s", e)
+        return None
+
+
+# ============================================================================
+# Flow Definition (v2 -- expanded graph)
+# ============================================================================
+
 async def get_flow_definition() -> dict:
     """Return the current CrewAI agent workflow as a visual graph."""
     return {
         "nodes": [
+            {
+                "id": "router",
+                "label": "Request Router",
+                "type": "router",
+                "description": "Analyses user intent and delegates to the right agent(s)",
+            },
             {
                 "id": "repo_explorer",
                 "label": "Repository Explorer",
@@ -536,16 +968,94 @@ async def get_flow_definition() -> dict:
                 "id": "reviewer",
                 "label": "Code Reviewer",
                 "type": "agent",
-                "description": "Reviews changes for quality and safety",
+                "description": "Reviews code quality, security, and performance",
+            },
+            {
+                "id": "issue_manager",
+                "label": "Issue Manager",
+                "type": "agent",
+                "description": "Creates, updates, and manages GitHub issues",
+            },
+            {
+                "id": "pr_manager",
+                "label": "PR Manager",
+                "type": "agent",
+                "description": "Creates, reviews, and merges pull requests",
+            },
+            {
+                "id": "search_agent",
+                "label": "Search & Discovery",
+                "type": "agent",
+                "description": "Searches code, repos, issues, and users",
+            },
+            {
+                "id": "learning_agent",
+                "label": "Learning & Guidance",
+                "type": "agent",
+                "description": "Provides GitHub feature guidance and best practices",
+            },
+            {
+                "id": "local_editor",
+                "label": "Local Editor",
+                "type": "agent",
+                "description": "Reads and writes files directly in the local workspace",
+            },
+            {
+                "id": "terminal_agent",
+                "label": "Terminal",
+                "type": "agent",
+                "description": "Executes shell commands in a sandboxed environment",
             },
             {
                 "id": "github_tools",
                 "label": "GitHub API",
                 "type": "tool",
-                "description": "Read/write/delete files, create commits & PRs",
+                "description": "Read/write/delete files, issues, PRs, search",
+            },
+            {
+                "id": "local_tools",
+                "label": "Local Tools",
+                "type": "tool",
+                "description": "File I/O, git operations, shell commands on local workspace",
             },
         ],
         "edges": [
+            {
+                "id": "e0",
+                "source": "router",
+                "target": "repo_explorer",
+                "label": "Plan & Execute workflow",
+            },
+            {
+                "id": "e0b",
+                "source": "router",
+                "target": "issue_manager",
+                "label": "Issue management requests",
+            },
+            {
+                "id": "e0c",
+                "source": "router",
+                "target": "pr_manager",
+                "label": "PR management requests",
+            },
+            {
+                "id": "e0d",
+                "source": "router",
+                "target": "search_agent",
+                "label": "Search requests",
+            },
+            {
+                "id": "e0e",
+                "source": "router",
+                "target": "reviewer",
+                "label": "Code review requests",
+            },
+            {
+                "id": "e0f",
+                "source": "router",
+                "target": "learning_agent",
+                "label": "Learning & guidance requests",
+            },
             {
                 "id": "e1",
                 "source": "repo_explorer",
@@ -561,20 +1071,56 @@ async def get_flow_definition() -> dict:
             {
                 "id": "e3",
                 "source": "code_writer",
-                "target": "reviewer",
-                "label": "Modified files",
+                "target": "pr_manager",
+                "label": "Auto-create PR after execution",
             },
             {
                 "id": "e4",
                 "source": "reviewer",
-                "target": "github_tools",
-                "label": "Approved changes",
+                "target": "pr_manager",
+                "label": "Review results",
             },
             {
                 "id": "e5",
-                "source": "github_tools",
-                "target": "repo_explorer",
-                "label": "Updated repository state",
+                "source": "issue_manager",
+                "target": "github_tools",
+                "label": "Issue operations",
+            },
+            {
+                "id": "e6",
+                "source": "pr_manager",
+                "target": "github_tools",
+                "label": "PR operations",
+            },
+            {
+                "id": "e7",
+                "source": "search_agent",
+                "target": "github_tools",
+                "label": "Search queries",
+            },
+            {
+                "id": "e8",
+                "source": "router",
+                "target": "local_editor",
+                "label": "Local file editing requests",
+            },
+            {
+                "id": "e9",
+                "source": "router",
+                "target": "terminal_agent",
+                "label": "Shell command requests",
+            },
+            {
+                "id": "e10",
+                "source": "local_editor",
+                "target": "local_tools",
+                "label": "File and git operations",
+            },
+            {
+                "id": "e11",
+                "source": "terminal_agent",
+                "target": "local_tools",
+                "label": "Command execution",
             },
         ],
     }
