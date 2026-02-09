@@ -33,13 +33,16 @@ Your support helps us:
 
 GitPilot is a **production-ready agentic AI assistant** that acts as your intelligent coding companion for GitHub repositories. Unlike copy-paste coding assistants, GitPilot:
 
-* **🧠 Understands your entire codebase** – Analyzes project structure and file relationships
+* **🧠 Understands your entire codebase** – Analyzes project structure, file relationships, and cross-repository dependencies
 * **📋 Shows clear plans before executing** – Always presents an "Answer + Action Plan" with structured file operations (CREATE/MODIFY/DELETE/READ)
-* **🔄 Manages multiple LLM providers** – Seamlessly switch between OpenAI, Claude, Watsonx, and Ollama (all fully working!)
+* **🔄 Manages multiple LLM providers** – Seamlessly switch between OpenAI, Claude, Watsonx, and Ollama with smart model routing
 * **👁️ Visualizes agent workflows** – See exactly how the multi-agent system thinks and operates
-* **🔗 Integrates directly with GitHub** – Repository access, file editing, commits, and more
+* **🔗 Works locally and with GitHub** – Full local file editing, terminal execution, and GitHub integration
+* **🔌 Extensible ecosystem** – MCP server connections, plugin marketplace, /command skills, and IDE extensions
+* **🛡️ Built-in security scanning** – AI-powered vulnerability detection beyond traditional SAST tools
+* **🤖 Self-improving agents** – Learns from outcomes and adapts strategies per project over time
 
-**Built with CrewAI, FastAPI, and React** — GitPilot combines the power of multi-agent AI with a beautiful, modern web interface.
+**Built with CrewAI, FastAPI, and React** — GitPilot combines the power of multi-agent AI with a beautiful, modern web interface and the extensibility of a platform.
 
 ![](assets/2025-11-15-01-18-56.png)
 
@@ -160,7 +163,7 @@ Action Plan:
 
 ## 🎯 Key Features
 
-### 1. **Answer + Action Plan UX** 🆕
+### 1. **Answer + Action Plan UX**
 Every AI response is structured into two clear sections:
 - **Answer**: Natural language explanation of what will be done and why
 - **Action Plan**: Structured list of steps with explicit file operations:
@@ -171,32 +174,121 @@ Every AI response is structured into two clear sections:
 
 See exactly what will happen before approving execution!
 
-### 2. **Full Multi-LLM Support** ✨
+### 2. **Full Multi-LLM Support with Smart Routing** ✨
 All four LLM providers are fully operational and tested:
 - ✅ **OpenAI** – GPT-4o, GPT-4o-mini, GPT-4-turbo
 - ✅ **Claude (Anthropic)** – Claude 4.5 Sonnet, Claude 3 Opus
 - ✅ **IBM Watsonx.ai** – Llama 3.3, Granite 3.x models
 - ✅ **Ollama** – Local models (Llama3, Mistral, CodeLlama, Phi3)
 
-Switch between providers seamlessly through the Admin UI without restart!
+Switch between providers seamlessly through the Admin UI without restart. The **smart model router** automatically selects the optimal model (fast/balanced/powerful) for each task based on complexity analysis, keeping costs low while maintaining quality where it matters.
 
-### 3. **Project Context Panel** 🆕
-Visual display of your repository state:
-- Repository name and branch
-- Total file count with refresh capability
-- Last analysis timestamp
-- Interactive file tree browser with refresh button
-- Write access status (shows if GitHub App is installed)
+### 3. **Local Workspace & Terminal Execution** 🆕
+GitPilot now works directly on your local filesystem — just like Claude Code:
+- **Local file editing** – Read, write, search, and delete files in a sandboxed workspace
+- **Terminal execution** – Run shell commands (`npm test`, `make build`, `python -m pytest`) with timeout and output capping
+- **Git operations** – Commit, push, diff, stash, merge — all from the workspace
+- **Path traversal protection** – All file operations are sandboxed to prevent escaping the workspace directory
 
-### 4. **Real Execution Engine** 🆕
-GitPilot now performs actual GitHub operations:
-- Creates new files with LLM-generated content
-- Modifies existing files intelligently using AI
-- Deletes files safely with confirmation
-- Returns detailed execution logs with success/failure status
-- **READ operations** for analysis without modifications
+### 4. **Session Management & Checkpoints** 🆕
+Persistent sessions that survive restarts and support time-travel:
+- **Resume any session** – Pick up exactly where you left off
+- **Fork sessions** – Branch a conversation to try different approaches
+- **Checkpoint & rewind** – Snapshot workspace state at key moments and roll back if something goes wrong
+- **CI/CD headless mode** – Run GitPilot non-interactively via `gitpilot run --headless` for automation pipelines
 
-### 5. **Admin / Settings Console**
+### 5. **Hook System & Permissions** 🆕
+Fine-grained control over what agents can do:
+- **Lifecycle hooks** – Register shell commands that fire on events like `pre_commit`, `post_edit`, or `pre_push` — blocking hooks can veto risky actions
+- **Three permission modes** – `normal` (ask before risky ops), `plan` (read-only), `auto` (approve everything)
+- **Path-based blocking** – Prevent agents from touching `.env`, `*.pem`, or any sensitive file pattern
+
+### 6. **Project Context Memory (GITPILOT.md)** 🆕
+The equivalent of Claude Code's `CLAUDE.md` — teach your agents project-specific conventions:
+- Create `.gitpilot/GITPILOT.md` with your code style, testing, and commit message rules
+- Add modular rules in `.gitpilot/rules/*.md`
+- Agents automatically learn patterns from session outcomes and store them in `.gitpilot/memory.json`
+
+### 7. **MCP Server Connections** 🆕
+Connect GitPilot to any MCP (Model Context Protocol) server — databases, Slack, Figma, Sentry, and more:
+- **stdio, HTTP, and SSE transports** – Connect to local subprocess servers or remote endpoints
+- **JSON-RPC 2.0** – Full protocol compliance with tool discovery and invocation
+- **Auto-wrap as CrewAI tools** – MCP tools are automatically available to all agents
+- Configure servers in `.gitpilot/mcp.json` with environment variable expansion
+
+### 8. **Plugin Marketplace & /Command Skills** 🆕
+Extend GitPilot with community plugins and project-specific skills:
+- **Install plugins** from git URLs or local paths — each plugin can provide skills, hooks, and MCP configs
+- **Define skills** as markdown files in `.gitpilot/skills/*.md` with YAML front-matter and template variables
+- **Invoke skills** via `/command` syntax in chat or the CLI: `gitpilot skill review`
+- **Auto-trigger skills** based on context patterns (e.g., auto-run lint after edits)
+
+### 9. **Vision & Image Analysis** 🆕
+Multimodal capabilities powered by OpenAI, Anthropic, and Ollama vision models:
+- **Analyse screenshots** – Describe UI bugs, extract text via OCR, review design mockups
+- **Compare before/after** – Detect visual regressions between two screenshots
+- **Base64 encoding** with format validation (PNG, JPG, GIF, WebP, BMP, SVG) and 20 MB size limit
+
+### 10. **AI-Powered Security Scanner** 🆕
+Go beyond traditional SAST tools with pattern-based and context-aware vulnerability detection:
+- **Secret detection** – AWS keys, GitHub tokens, JWTs, Slack tokens, private keys, passwords in code
+- **Code vulnerability patterns** – SQL injection, command injection, XSS, SSRF, path traversal, weak crypto, insecure CORS, disabled SSL verification
+- **Diff scanning** – Scan only added lines in a git diff for CI/CD integration
+- **CWE mapping** – Every finding links to its CWE identifier with actionable recommendations
+- **CLI command** – `gitpilot scan /path/to/repo` with confidence thresholds and severity summaries
+
+### 11. **Predictive Workflow Engine** 🆕
+Proactive suggestions based on what you just did:
+- After merging a PR → suggest updating the changelog
+- After test failure → suggest debugging approach
+- After dependency update → suggest running full test suite
+- After editing security-sensitive code → suggest security review
+- 8 built-in trigger rules with configurable cooldowns and relevance scoring
+- Add custom prediction rules for your own workflows
+
+### 12. **Parallel Multi-Agent Teams** 🆕
+Split large tasks across multiple agents working simultaneously:
+- **Task decomposition** – Automatically split complex tasks into independent subtasks
+- **Parallel execution** – Agents work concurrently via `asyncio.gather`, each on its own git worktree
+- **Conflict detection** – Merging detects file-level conflicts when multiple agents touch the same files
+- **Custom or auto-generated plans** — provide your own subtask descriptions or let the engine split evenly
+
+### 13. **Self-Improving Agents** 🆕
+GitPilot learns from every interaction and becomes specialised to each project over time:
+- **Outcome evaluation** – Checks signals like tests_passed, pr_approved, error_fixed
+- **Pattern extraction** – Generates natural-language insights from successes and failures
+- **Per-repo persistence** – Learned strategies are stored in JSON and loaded in future sessions
+- **Preferred style tracking** – Record project-specific code style preferences that agents follow
+
+### 14. **Cross-Repository Intelligence** 🆕
+Understand dependencies and impact across your entire codebase:
+- **Dependency graph construction** – Parses `package.json`, `requirements.txt`, `pyproject.toml`, and `go.mod`
+- **Impact analysis** – BFS traversal to find all affected repos when updating a dependency, with risk assessment (low/medium/high/critical)
+- **Shared convention detection** – Find common config patterns across multiple repos
+- **Migration planning** – Generate step-by-step migration plans when replacing one package with another
+
+### 15. **Natural Language Database Queries** 🆕
+Query your project's databases using plain English through MCP connections:
+- **NL-to-SQL translation** – Rule-based translation with schema-aware table and column matching
+- **Safety validation** – Read-only mode blocks INSERT/UPDATE/DELETE; read-write mode blocks DROP/TRUNCATE
+- **Query explanation** – Translate SQL back to human-readable descriptions
+- **Tabular output** – Results formatted as plain-text tables for CLI or API consumption
+
+### 16. **IDE Extensions** 🆕
+Use GitPilot from your favourite editor:
+- **VS Code extension** – Sidebar chat panel, inline actions, keybindings (Ctrl+Shift+G), skill invocation, and server configuration
+- Connects to the GitPilot API server — all the same agents and tools available from within your editor
+
+### 17. **Agent Flow Viewer**
+Interactive visual representation of the CrewAI multi-agent system using ReactFlow:
+- **Repository Explorer** – Thoroughly explores codebase structure
+- **Refactor Planner** – Creates safe, step-by-step plans with verified file operations
+- **Code Writer** – Implements approved changes with AI-generated content
+- **Code Reviewer** – Reviews for quality and safety
+- **Local Editor & Terminal** – Direct file editing and shell execution agents
+- **GitHub API Tools** – Manages file operations and commits
+
+### 18. **Admin / Settings Console**
 Full-featured LLM provider configuration with:
 - **OpenAI** – API key, model selection, optional base URL
 - **Claude** – API key, model selection (Claude 4.5 Sonnet recommended)
@@ -205,21 +297,7 @@ Full-featured LLM provider configuration with:
 
 Settings are persisted to `~/.gitpilot/settings.json` and survive restarts.
 
-### 6. **Agent Flow Viewer**
-Interactive visual representation of the CrewAI multi-agent system using ReactFlow:
-- **Repository Explorer** – Thoroughly explores codebase structure
-- **Refactor Planner** – Creates safe, step-by-step plans with verified file operations
-- **Code Writer** – Implements approved changes with AI-generated content
-- **Code Reviewer** – Reviews for quality and safety
-- **GitHub API Tools** – Manages file operations and commits
-
-### 7. **Three-Tab Navigation**
-Seamlessly switch between:
-- 📁 **Workspace** – Repository browsing and AI chat
-- 🔄 **Agent Flow** – Visual workflow diagram
-- ⚙️ **Admin / Settings** – LLM provider management
-
-### 8. **MCP / A2A Agent Integration (ContextForge Compatible)** 🆕
+### 19. **MCP / A2A Agent Integration (ContextForge Compatible)**
 GitPilot can optionally run as an **A2A agent server** that can be **imported by URL** into **MCP ContextForge (MCP Gateway)** and exposed as MCP tools. This makes GitPilot usable not only from the web UI, but also from:
 - MCP-enabled IDEs and CLIs
 - automation pipelines (CI/CD)
@@ -333,6 +411,29 @@ gitpilot serve --host 0.0.0.0 --port 8000
 
 # API only (no browser auto-open)
 gitpilot-api
+
+# Headless mode for CI/CD
+gitpilot run --repo owner/repo --message "fix the login bug" --headless
+
+# Initialize project conventions
+gitpilot init
+
+# Security scan
+gitpilot scan /path/to/repo
+
+# Get proactive suggestions
+gitpilot predict "Tests failed in auth module"
+
+# Manage plugins
+gitpilot plugin install https://github.com/example/my-plugin.git
+gitpilot plugin list
+
+# List and invoke skills
+gitpilot skill list
+gitpilot skill review
+
+# List available models
+gitpilot list-models --provider openai
 
 # Using make (for development)
 make run
@@ -619,39 +720,106 @@ frontend/
 ```
 gitpilot/
 ├── __init__.py
-├── api.py                          # FastAPI routes and endpoints
-├── agentic.py                      # CrewAI agents with READ support
-├── agent_tools.py                  # Repository exploration tools
-├── cli.py                          # Command-line interface
+├── api.py                          # FastAPI routes (80+ endpoints)
+├── agentic.py                      # CrewAI multi-agent orchestration
+├── agent_router.py                 # NLP-based request routing
+├── agent_tools.py                  # GitHub API exploration tools
+├── cli.py                          # CLI (serve, run, scan, predict, plugin, skill)
 ├── github_api.py                   # GitHub REST API client
 ├── github_app.py                   # GitHub App installation management
-├── llm_provider.py                 # Multi-provider LLM factory (all providers fixed!)
+├── github_issues.py                # Issue CRUD operations
+├── github_pulls.py                 # Pull request operations
+├── github_search.py                # Code, issue, repo, user search
+├── github_oauth.py                 # OAuth web + device flow
+├── llm_provider.py                 # Multi-provider LLM factory
 ├── settings.py                     # Configuration management
+│
+│   # --- Phase 1: Feature Parity ---
+├── workspace.py                    # Local git clone & file operations
+├── local_tools.py                  # CrewAI tools for local editing
+├── terminal.py                     # Sandboxed shell command execution
+├── session.py                      # Session persistence & checkpoints
+├── hooks.py                        # Lifecycle event hooks
+├── memory.py                       # GITPILOT.md context memory
+├── permissions.py                  # Fine-grained permission policies
+├── headless.py                     # CI/CD headless execution mode
+│
+│   # --- Phase 2: Ecosystem Superiority ---
+├── mcp_client.py                   # MCP server connector (stdio/HTTP/SSE)
+├── plugins.py                      # Plugin marketplace & management
+├── skills.py                       # /command skill system
+├── vision.py                       # Multimodal image analysis
+├── smart_model_router.py           # Auto-route tasks to optimal model
+│
+│   # --- Phase 3: Intelligence Superiority ---
+├── agent_teams.py                  # Parallel multi-agent on git worktrees
+├── learning.py                     # Self-improving agents (per-repo)
+├── cross_repo.py                   # Dependency graphs & impact analysis
+├── predictions.py                  # Predictive workflow suggestions
+├── security.py                     # AI-powered security scanner
+├── nl_database.py                  # Natural language SQL via MCP
+│
+├── a2a_adapter.py                  # Optional A2A/MCP gateway adapter
 └── web/                            # Production frontend build
     ├── index.html
     └── assets/
-        ├── index-*.css
-        └── index-*.js
 ```
 
-### API Endpoints
+### API Endpoints (80+)
 
 #### Repository Management
-- `GET /api/repos` – List user repositories
+- `GET /api/repos` – List user repositories (paginated + search)
 - `GET /api/repos/{owner}/{repo}/tree` – Get repository file tree
 - `GET /api/repos/{owner}/{repo}/file` – Get file contents
 - `POST /api/repos/{owner}/{repo}/file` – Update/commit file
-- `DELETE /api/repos/{owner}/{repo}/file` – Delete file
-- `GET /api/auth/repo-access` – Check repository write access status
 
-#### Settings & Configuration
-- `GET /api/settings` – Get current LLM settings
-- `POST /api/settings/provider` – Change active provider
-- `PUT /api/settings/llm` – Update provider-specific settings
+#### Issues & Pull Requests
+- `GET/POST/PATCH /api/repos/{owner}/{repo}/issues` – Full issue CRUD
+- `GET/POST /api/repos/{owner}/{repo}/pulls` – Pull request management
+- `PUT /api/repos/{owner}/{repo}/pulls/{n}/merge` – Merge pull request
+
+#### Search
+- `GET /api/search/code` – Search code across GitHub
+- `GET /api/search/issues` – Search issues and pull requests
+- `GET /api/search/repositories` – Search repositories
+- `GET /api/search/users` – Search users and organisations
 
 #### Chat & Planning
-- `POST /api/chat/plan` – Generate execution plan (with READ/CREATE/MODIFY/DELETE)
-- `POST /api/chat/execute` – Execute approved plan (returns execution log)
+- `POST /api/chat/message` – Conversational dispatcher (auto-routes to agents)
+- `POST /api/chat/plan` – Generate execution plan
+- `POST /api/chat/execute` – Execute approved plan
+- `POST /api/chat/execute-with-pr` – Execute and auto-create pull request
+- `POST /api/chat/route` – Preview routing without execution
+
+#### Sessions & Hooks (Phase 1)
+- `GET/POST/DELETE /api/sessions` – Session CRUD
+- `POST /api/sessions/{id}/checkpoint` – Create checkpoint
+- `GET/POST/DELETE /api/hooks` – Hook registration
+- `GET/PUT /api/permissions` – Permission mode management
+- `GET/POST /api/repos/{owner}/{repo}/context` – Project memory
+
+#### MCP, Plugins & Skills (Phase 2)
+- `GET /api/mcp/servers` – List configured MCP servers
+- `POST /api/mcp/connect/{name}` – Connect to MCP server
+- `POST /api/mcp/call` – Call a tool on a connected server
+- `GET/POST/DELETE /api/plugins` – Plugin management
+- `GET/POST /api/skills` – Skill listing and invocation
+- `POST /api/vision/analyze` – Analyse an image with a text prompt
+- `POST /api/model-router/select` – Preview model selection for a task
+
+#### Intelligence (Phase 3)
+- `POST /api/agent-teams/plan` – Split task into parallel subtasks
+- `POST /api/agent-teams/execute` – Execute subtasks in parallel
+- `POST /api/learning/evaluate` – Evaluate action outcome for learning
+- `GET /api/learning/insights/{owner}/{repo}` – Get learned insights
+- `POST /api/cross-repo/dependencies` – Build dependency graph
+- `POST /api/cross-repo/impact` – Impact analysis for package update
+- `POST /api/predictions/suggest` – Get proactive suggestions
+- `POST /api/security/scan-file` – Scan file for vulnerabilities
+- `POST /api/security/scan-directory` – Recursive directory scan
+- `POST /api/security/scan-diff` – Scan git diff for issues
+- `POST /api/nl-database/translate` – Natural language to SQL
+- `POST /api/nl-database/explain` – Explain SQL in plain English
 
 #### Workflow Visualization
 - `GET /api/flow/current` – Get agent workflow graph
@@ -683,7 +851,7 @@ make frontend-build
 # Run development server
 make run
 
-# Run tests
+# Run tests (636 tests across 27 test files)
 make test
 
 # Lint code
@@ -708,6 +876,24 @@ make gateway          # Start GitPilot + MCP ContextForge gateway
 make gateway-down     # Stop MCP ContextForge gateway
 make gateway-logs     # View gateway logs
 make gateway-register # Register agent in ContextForge
+```
+
+### CLI Commands
+
+```bash
+gitpilot                          # Start server with web UI (default)
+gitpilot serve --host 0.0.0.0    # Custom host/port
+gitpilot config                   # Show current configuration
+gitpilot version                  # Show version
+gitpilot run -r owner/repo -m "task"  # Headless execution for CI/CD
+gitpilot init                     # Initialize .gitpilot/ with template
+gitpilot scan /path              # Security scan a directory or file
+gitpilot predict "context text"   # Get proactive suggestions
+gitpilot plugin install <source>  # Install a plugin
+gitpilot plugin list              # List installed plugins
+gitpilot skill list               # List available skills
+gitpilot skill <name>             # Invoke a skill
+gitpilot list-models              # List LLM models for active provider
 ```
 
 ### Frontend Development
@@ -831,6 +1017,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **React** – UI library
 - **ReactFlow** – Interactive node-based diagrams
 - **Vite** – Fast build tool
+- **MCP (Model Context Protocol)** – By Anthropic, for tool interoperability
+- **OWASP Top 10** – Security vulnerability categorisation
+- **BIRD benchmark** and **DIN-SQL** research – Text-to-SQL approaches
+- **Horvitz (1999)** – Proactive assistance in HCI research
 - **All our contributors and stargazers!** ⭐
 
 ---
@@ -845,44 +1035,52 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🗺️ Roadmap
 
-### Recently Released (v0.1.2) 🆕
-- ✅ **Full Multi-LLM Support** – All 4 providers (OpenAI, Claude, Watsonx, Ollama) fully tested and working
-- ✅ **READ File Actions** – Agents can now analyze files without modifications
-- ✅ **Claude Integration Fix** – Automatic environment variable configuration
-- ✅ **Watsonx Integration Fix** – Proper project_id parameter handling
-- ✅ **Refresh Functionality** – Update permissions and file trees on demand
-- ✅ **GitHub App Status** – Clear indication of write access status
+### Recently Released (v0.2.0) 🆕
 
-### Current Features (v0.1.2)
-- ✅ **Answer + Action Plan UX** – Clear separation of explanation and action items
-- ✅ **Structured File Actions** – Explicit CREATE/MODIFY/DELETE/READ operations
-- ✅ **Project Context Panel** – Repository metadata display
-- ✅ **Real Execution Engine** – Actual GitHub file operations
-- ✅ **Execution Logs** – Detailed success/failure tracking
-- ✅ **Enhanced Plan View** – Color-coded pills and totals
-- ✅ **Footer with GitHub CTA** – Community engagement
+**Phase 1 — Feature Parity with Claude Code:**
+- ✅ **Local Workspace Manager** – Clone repos, read/write/search files locally
+- ✅ **Terminal Execution** – Sandboxed shell commands with timeout and output capping
+- ✅ **Session Persistence** – Resume, fork, checkpoint, and rewind sessions
+- ✅ **Hook System** – Lifecycle events (pre_commit, post_edit) with blocking support
+- ✅ **Permission Policies** – Three modes (normal/plan/auto) with path-based blocking
+- ✅ **Context Memory (GITPILOT.md)** – Project conventions injected into agent prompts
+- ✅ **Headless CI/CD Mode** – `gitpilot run --headless` for automation pipelines
 
-### Previous Features (v0.1.1)
-- ✅ GitHub repository browsing
-- ✅ Multi-LLM provider support (OpenAI, Claude, Watsonx, Ollama)
-- ✅ Admin/Settings console
-- ✅ Agent Flow Viewer
-- ✅ AI-powered plan generation
-- ✅ Production-ready web UI
+**Phase 2 — Ecosystem Superiority:**
+- ✅ **MCP Client** – Connect to any MCP server (databases, Slack, Figma, Sentry)
+- ✅ **Plugin Marketplace** – Install/uninstall plugins from git or local paths
+- ✅ **Skill System** – /command skills defined as markdown with template variables
+- ✅ **Vision Analysis** – Multimodal image analysis via OpenAI, Anthropic, or Ollama
+- ✅ **Smart Model Router** – Auto-route tasks to optimal model by complexity
+- ✅ **VS Code Extension** – Sidebar chat, inline actions, and keybindings
 
-### Planned Features (v0.1.3)
-- 🔄 Enhanced code modification with better LLM-powered diffs
-- 🔄 Pull request creation and management
-- 🔄 Multi-file refactoring workflows
-- 🔄 Automated test generation
-- 🔄 Code review automation
-- 🔄 Branch management
-- 🔄 Team collaboration features
-- 🔄 Integration with CI/CD pipelines
-- 🔄 Custom agent templates
-- 🔄 Slack/Discord notifications
-- 🔄 Multi-repository operations
-- 🔄 Advanced GitHub App permissions management
+**Phase 3 — Intelligence Superiority (no competitor has this):**
+- ✅ **Agent Teams** – Parallel multi-agent execution on git worktrees
+- ✅ **Self-Improving Agents** – Learn from outcomes and adapt per-project
+- ✅ **Cross-Repo Intelligence** – Dependency graphs and impact analysis across repos
+- ✅ **Predictive Workflows** – Proactive suggestions based on context patterns
+- ✅ **AI Security Scanner** – Secret detection, injection analysis, CWE mapping
+- ✅ **NL Database Queries** – Natural language to SQL translation via MCP
+
+### Previous Features (v0.1.2)
+- ✅ Full Multi-LLM Support – All 4 providers fully tested
+- ✅ Answer + Action Plan UX with structured file operations
+- ✅ Real Execution Engine with GitHub operations
+- ✅ Agent Flow Viewer with ReactFlow
+- ✅ MCP / A2A Integration (ContextForge compatible)
+- ✅ Issue and Pull Request management APIs
+- ✅ Code, issue, repository, and user search
+- ✅ OAuth web + device flow authentication
+
+### Planned Features (v0.2.1+)
+- 🔄 Frontend components for terminal, sessions, checkpoints, and security dashboard
+- 🔄 JetBrains IDE plugin
+- 🔄 Real-time collaboration (shared sessions, audit log)
+- 🔄 Automated test generation from code changes
+- 🔄 Slack/Discord notification hooks
+- 🔄 LLM-powered semantic diff review
+- 🔄 OSV dependency vulnerability scanning
+- 🔄 Custom agent templates and agent marketplace
 
 ---
 
@@ -896,6 +1094,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 4. **Limit GitHub token scopes** to only what's needed
 5. **Review all plans** before approving execution
 6. **Verify GitHub App installations** before granting write access
+7. **Run `gitpilot scan`** before releases to catch secrets, injection risks, and insecure configurations
+8. **Use permission modes** – run agents in `plan` mode (read-only) when exploring unfamiliar codebases
 
 ### LLM Provider Configuration
 
@@ -939,20 +1139,31 @@ READ operations allow agents to gather context and information without modifying
 
 ### Understanding the Agent System
 
-GitPilot uses a multi-agent architecture with two phases:
+GitPilot uses a multi-agent architecture where each request is routed to the right set of agents by the **agent router**, which analyses your message using NLP patterns and dispatches to one of 12+ specialised agent types:
 
-**Phase 1: Repository Exploration**
-- **Repository Explorer** – Thoroughly scans and documents repository state
-- Uses tools to gather actual file listings and structure
-- Creates detailed exploration report
+**Core Agents:**
+- **Repository Explorer** – Scans codebase structure and gathers context
+- **Refactor Planner** – Creates structured step-by-step plans with file operations
+- **Code Writer** – Generates AI-powered content for new and modified files
+- **Code Reviewer** – Reviews changes for quality, safety, and adherence to conventions
 
-**Phase 2: Plan Creation & Execution**
-1. **Planner** – Creates structured plans based on exploration report
-2. **Code Writer** – Generates AI-powered content for files
-3. **Reviewer** – Checks for quality, safety, and best practices
-4. **GitHub Tools** – Interfaces with GitHub API for actual operations
+**Local Agents (Phase 1):**
+- **Local Editor** – Reads, writes, and searches files directly on disk
+- **Terminal Agent** – Executes shell commands (`npm test`, `make build`, `pytest`)
 
-Each agent specializes in a specific task, working together like a development team.
+**Specialised Agents (v2):**
+- **Issue Agent** – Creates, updates, labels, and comments on GitHub issues
+- **PR Agent** – Creates pull requests, lists files, manages merges
+- **Search Agent** – Searches code, issues, repos, and users across GitHub
+- **Learning Agent** – Evaluates outcomes and improves strategies over time
+
+**Intelligence Layer (Phase 3):**
+- **Agent Teams** – Multiple agents work in parallel on subtasks with conflict detection
+- **Predictive Engine** – Suggests next actions before you ask
+- **Security Scanner** – Detects secrets, injection risks, and insecure configurations
+- **Cross-Repo Analyser** – Maps dependencies and assesses impact across repositories
+
+The **smart model router** selects the optimal LLM for each task — simple queries go to fast/cheap models while complex reasoning gets the most powerful model available.
 
 ### Choosing the Right LLM Provider
 

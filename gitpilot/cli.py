@@ -273,6 +273,222 @@ def serve_only():
     except KeyboardInterrupt:
         console.print("\n[yellow]Shutting down...[/yellow]")
         sys.exit(0)
+@cli.command()
+def run(
+    repo: str = typer.Option(..., "--repo", "-r", help="Repository as owner/repo"),
+    message: str = typer.Option("", "--message", "-m", help="User request message"),
+    branch: str = typer.Option(None, "--branch", "-b", help="Target branch"),
+    auto_pr: bool = typer.Option(False, "--auto-pr", help="Create PR after execution"),
+    from_pr: int = typer.Option(None, "--from-pr", help="Fetch context from PR number"),
+    headless: bool = typer.Option(False, "--headless", help="Non-interactive JSON output"),
+):
+    """Run GitPilot non-interactively (headless mode for CI/CD)."""
+    import asyncio
+    import sys
+
+    if not message and not sys.stdin.isatty():
+        message = sys.stdin.read().strip()
+
+    if not message:
+        console.print("[red]Error:[/red] --message is required (or pipe via stdin)")
+        raise typer.Exit(code=1)
+
+    token = os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
+    if not token:
+        console.print("[red]Error:[/red] GITPILOT_GITHUB_TOKEN or GITHUB_TOKEN must be set")
+        raise typer.Exit(code=1)
+
+    from .headless import run_headless
+
+    result = asyncio.run(run_headless(
+        repo_full_name=repo,
+        message=message,
+        token=token,
+        branch=branch,
+        auto_pr=auto_pr,
+        from_pr=from_pr,
+    ))
+
+    if headless:
+        # Pure JSON for CI/CD consumption
+        console.print(result.to_json())
+    else:
+        if result.success:
+            console.print(f"[green]Success:[/green] {result.output[:500]}")
+        else:
+            console.print(f"[red]Failed:[/red] {result.error}")
+        if result.pr_url:
+            console.print(f"[cyan]PR:[/cyan] {result.pr_url}")
+
+    raise typer.Exit(code=0 if result.success else 1)
+
+
+@cli.command("init")
+def init_project(
+    path: str = typer.Argument(".", help="Project directory to initialise"),
+):
+    """Initialize .gitpilot/ directory with template GITPILOT.md."""
+    from pathlib import Path as StdPath
+    from .memory import MemoryManager
+
+    workspace = StdPath(path).resolve()
+    mgr = MemoryManager(workspace)
+    md_path = mgr.init_project()
+    console.print(f"[green]Initialized:[/green] {md_path}")
+    console.print("[dim]Edit .gitpilot/GITPILOT.md to add your project conventions.[/dim]")
+
+
+@cli.command("plugin")
+def plugin_cmd(
+    action: str = typer.Argument(..., help="install | uninstall | list"),
+    source: str = typer.Argument(None, help="Git URL, local path, or plugin name"),
+):
+    """Manage GitPilot plugins."""
+    from .plugins import PluginManager
+
+    mgr = PluginManager()
+
+    if action == "list":
+        plugins = mgr.list_installed()
+        if not plugins:
+            console.print("[dim]No plugins installed.[/dim]")
+            return
+        table = Table(show_header=True, header_style="bold cyan")
+        table.add_column("Name")
+        table.add_column("Version")
+        table.add_column("Description")
+        for p in plugins:
+            table.add_row(p.name, p.version, p.description)
+        console.print(table)
+
+    elif action == "install":
+        if not source:
+            console.print("[red]Error:[/red] source is required for install")
+            raise typer.Exit(code=1)
+        try:
+            info = mgr.install(source)
+            console.print(f"[green]Installed:[/green] {info.name} v{info.version}")
+        except Exception as e:
+            console.print(f"[red]Error:[/red] {e}")
+            raise typer.Exit(code=1)
+
+    elif action == "uninstall":
+        if not source:
+            console.print("[red]Error:[/red] plugin name is required")
+            raise typer.Exit(code=1)
+        if mgr.uninstall(source):
+            console.print(f"[green]Uninstalled:[/green] {source}")
+        else:
+            console.print(f"[yellow]Not found:[/yellow] {source}")
+
+    else:
+        console.print(f"[red]Unknown action:[/red] {action}. Use: install, uninstall, list")
+        raise typer.Exit(code=1)
+
+
+@cli.command("skill")
+def skill_cmd(
+    name: str = typer.Argument(None, help="Skill name to invoke (or 'list')"),
+):
+    """List or invoke skills."""
+    from .skills import SkillManager
+
+    mgr = SkillManager(workspace_path=Path.cwd())
+    mgr.load_all()
+
+    if not name or name == "list":
+        skills = mgr.list_skills()
+        if not skills:
+            console.print("[dim]No skills found.[/dim]")
+            console.print("[dim]Create .gitpilot/skills/*.md to add skills.[/dim]")
+            return
+        table = Table(show_header=True, header_style="bold cyan")
+        table.add_column("Name")
+        table.add_column("Description")
+        table.add_column("Auto")
+        for s in skills:
+            table.add_row(s["name"], s["description"], str(s.get("auto_trigger", False)))
+        console.print(table)
+    else:
+        prompt = mgr.invoke(name)
+        if prompt is None:
+            console.print(f"[red]Skill not found:[/red] {name}")
+            raise typer.Exit(code=1)
+        console.print(f"[cyan]/{name}[/cyan]")
+        console.print(prompt)
+
+
+@cli.command("scan")
+def scan_cmd(
+    path: str = typer.Argument(".", help="Directory or file to scan"),
+    min_confidence: float = typer.Option(0.5, "--min-confidence", help="Minimum confidence threshold"),
+):
+    """Run AI-powered security scan on a directory or file."""
+    from .security import SecurityScanner
+
+    scanner = SecurityScanner(min_confidence=min_confidence)
+    target = Path(path).resolve()
+
+    if target.is_file():
+        findings = scanner.scan_file(str(target))
+        if not findings:
+            console.print("[green]No security issues found.[/green]")
+            return
+        table = Table(show_header=True, header_style="bold red")
+        table.add_column("Severity")
+        table.add_column("Rule")
+        table.add_column("Title")
+        table.add_column("Line")
+        table.add_column("File")
+        for f in findings:
+            table.add_row(f.severity.value, f.rule_id, f.title, str(f.line_number), f.file_path)
+        console.print(table)
+    else:
+        result = scanner.scan_directory(str(target))
+        console.print(f"[cyan]Scanned:[/cyan] {result.files_scanned} files in {result.scan_duration_ms:.0f}ms")
+        if not result.findings:
+            console.print("[green]No security issues found.[/green]")
+            return
+        console.print(f"[yellow]Found {len(result.findings)} issues:[/yellow]")
+        for sev, count in sorted(result.summary.items()):
+            color = "red" if sev in ("critical", "high") else "yellow" if sev == "medium" else "dim"
+            console.print(f"  [{color}]{sev}: {count}[/{color}]")
+        console.print()
+        table = Table(show_header=True, header_style="bold red")
+        table.add_column("Severity")
+        table.add_column("Rule")
+        table.add_column("Title")
+        table.add_column("Line")
+        table.add_column("File")
+        for f in result.findings[:50]:
+            table.add_row(f.severity.value, f.rule_id, f.title, str(f.line_number), f.file_path)
+        console.print(table)
+        if len(result.findings) > 50:
+            console.print(f"[dim]... and {len(result.findings) - 50} more[/dim]")
+
+
+@cli.command("predict")
+def predict_cmd(
+    context: str = typer.Argument(..., help="Context string to get predictions for"),
+):
+    """Get proactive suggestions based on context."""
+    from .predictions import PredictiveEngine
+
+    engine = PredictiveEngine()
+    suggestions = engine.predict(context)
+
+    if not suggestions:
+        console.print("[dim]No suggestions for this context.[/dim]")
+        return
+
+    for s in suggestions:
+        score_color = "green" if s.relevance_score >= 0.8 else "yellow" if s.relevance_score >= 0.6 else "dim"
+        console.print(f"  [{score_color}][{s.relevance_score:.0%}][/{score_color}] [bold]{s.title}[/bold]")
+        console.print(f"        {s.description}")
+        console.print(f"        [cyan]Prompt:[/cyan] {s.prompt}")
+        console.print()
+
+
 @cli.command("list-models")
 def list_models_cmd(
     provider: str = typer.Option(
