@@ -1,0 +1,152 @@
+{
+  "name": "gitpilot-vscode",
+  "displayName": "GitPilot",
+  "description": "Agentic AI assistant for GitHub repositories — local editing, terminal, multi-model, MCP support",
+  "version": "0.1.0",
+  "publisher": "ruslanmv",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ruslanmv/gitpilot"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Machine Learning",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "github",
+    "copilot",
+    "agent",
+    "crewai",
+    "mcp"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "gitpilot",
+          "title": "GitPilot",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "gitpilot": [
+        {
+          "type": "webview",
+          "id": "gitpilot.chatView",
+          "name": "Chat"
+        },
+        {
+          "id": "gitpilot.sessionsView",
+          "name": "Sessions"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "gitpilot.openChat",
+        "title": "GitPilot: Open Chat",
+        "category": "GitPilot"
+      },
+      {
+        "command": "gitpilot.sendMessage",
+        "title": "GitPilot: Send Message",
+        "category": "GitPilot"
+      },
+      {
+        "command": "gitpilot.reviewFile",
+        "title": "GitPilot: Review Current File",
+        "category": "GitPilot"
+      },
+      {
+        "command": "gitpilot.explainSelection",
+        "title": "GitPilot: Explain Selection",
+        "category": "GitPilot"
+      },
+      {
+        "command": "gitpilot.runCommand",
+        "title": "GitPilot: Run Terminal Command",
+        "category": "GitPilot"
+      },
+      {
+        "command": "gitpilot.setServer",
+        "title": "GitPilot: Set Server URL",
+        "category": "GitPilot"
+      },
+      {
+        "command": "gitpilot.invokeSkill",
+        "title": "GitPilot: Invoke Skill",
+        "category": "GitPilot"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "gitpilot.openChat",
+        "key": "ctrl+shift+g",
+        "mac": "cmd+shift+g"
+      },
+      {
+        "command": "gitpilot.sendMessage",
+        "key": "ctrl+enter",
+        "mac": "cmd+enter",
+        "when": "gitpilot.chatFocused"
+      }
+    ],
+    "configuration": {
+      "title": "GitPilot",
+      "properties": {
+        "gitpilot.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8000",
+          "description": "URL of the GitPilot API server"
+        },
+        "gitpilot.autoConnect": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically connect to server on startup"
+        },
+        "gitpilot.showInlineHints": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show inline code action hints"
+        }
+      }
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "gitpilot.explainSelection",
+          "when": "editorHasSelection",
+          "group": "gitpilot"
+        },
+        {
+          "command": "gitpilot.reviewFile",
+          "group": "gitpilot"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0",
+    "@vscode/vsce": "^2.22.0"
+  }
+}

@@ -23,7 +23,26 @@ from .github_api import (
 )
 from .github_app import check_repo_write_access
 from .settings import AppSettings, get_settings, set_provider, update_settings, LLMProvider
-from .agentic import generate_plan, execute_plan, PlanResult, get_flow_definition
+from .agentic import (
+    generate_plan,
+    execute_plan,
+    PlanResult,
+    get_flow_definition,
+    dispatch_request,
+    create_pr_after_execution,
+)
+from .agent_router import route as route_request
+from . import github_issues
+from . import github_pulls
+from . import github_search
+from .session import SessionManager, Session
+from .hooks import HookManager, HookEvent
+from .permissions import PermissionManager, PermissionMode
+from .memory import MemoryManager
+from .mcp_client import MCPClient
+from .plugins import PluginManager
+from .skills import SkillManager
+from .smart_model_router import ModelRouter, ModelRouterConfig
 from .github_oauth import (
     generate_authorization_url,
     exchange_code_for_token,
@@ -41,6 +60,17 @@ from .model_catalog import list_models_for_provider
 from .a2a_adapter import router as a2a_router
 
 logger = logging.getLogger(__name__)
+
+# --- Phase 1 singletons ---
+_session_mgr = SessionManager()
+_hook_mgr = HookManager()
+_perm_mgr = PermissionManager()
+
+# --- Phase 2 singletons ---
+_mcp_client = MCPClient()
+_plugin_mgr = PluginManager()
+_skill_mgr = SkillManager()
+_model_router = ModelRouter()
 
 app = FastAPI(
     title="GitPilot API",
@@ -209,6 +239,58 @@ class RepoAccessResponse(BaseModel):
     can_write: bool
     app_installed: bool
     auth_type: str
+
+
+# --- v2 Request/Response models ---
+
+class ChatRequest(BaseModel):
+    """Unified chat request for the conversational dispatcher."""
+    repo_owner: str
+    repo_name: str
+    message: str
+    branch_name: Optional[str] = None
+    auto_pr: bool = False
+
+
+class IssueCreateRequest(BaseModel):
+    title: str
+    body: Optional[str] = None
+    labels: Optional[List[str]] = None
+    assignees: Optional[List[str]] = None
+    milestone: Optional[int] = None
+
+
+class IssueUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    body: Optional[str] = None
+    state: Optional[str] = None
+    labels: Optional[List[str]] = None
+    assignees: Optional[List[str]] = None
+    milestone: Optional[int] = None
+
+
+class IssueCommentRequest(BaseModel):
+    body: str
+
+
+class PRCreateRequest(BaseModel):
+    title: str
+    head: str
+    base: str
+    body: Optional[str] = None
+    draft: bool = False
+
+
+class PRMergeRequest(BaseModel):
+    merge_method: str = "merge"
+    commit_title: Optional[str] = None
+    commit_message: Optional[str] = None
+
+
+class SearchRequest(BaseModel):
+    query: str
+    per_page: int = 30
+    page: int = 1
 
 
 # ============================================================================
@@ -532,6 +614,364 @@ async def api_get_flow():
 
 
 # ============================================================================
+# Conversational Chat Endpoint (v2 upgrade)
+# ============================================================================
+
+@app.post("/api/chat/message")
+async def api_chat_message(req: ChatRequest, authorization: Optional[str] = Header(None)):
+    """
+    Unified conversational endpoint.  The router analyses the message and
+    dispatches to the appropriate agent (issue, PR, search, review, learning,
+    or the existing plan+execute pipeline).
+    """
+    token = get_github_token(authorization)
+
+    logger.info(
+        "CHAT MESSAGE: %s/%s | message=%r | branch=%r",
+        req.repo_owner,
+        req.repo_name,
+        req.message[:80],
+        req.branch_name,
+    )
+
+    with execution_context(token, ref=req.branch_name):
+        full_name = f"{req.repo_owner}/{req.repo_name}"
+        result = await dispatch_request(
+            req.message, full_name, token=token, branch_name=req.branch_name,
+        )
+
+        # If auto_pr is requested and execution completed, create PR
+        if (
+            req.auto_pr
+            and isinstance(result, dict)
+            and result.get("category") == "plan_execute"
+            and result.get("plan")
+        ):
+            result["auto_pr_hint"] = (
+                "Plan generated. Execute it first, then auto-PR will be created."
+            )
+
+        return result
+
+
+@app.post("/api/chat/execute-with-pr")
+async def api_chat_execute_with_pr(
+    req: ExecutePlanRequest,
+    authorization: Optional[str] = Header(None),
+):
+    """Execute a plan AND automatically create a pull request afterwards."""
+    token = get_github_token(authorization)
+
+    with execution_context(token, ref=req.branch_name):
+        full_name = f"{req.repo_owner}/{req.repo_name}"
+        result = await execute_plan(
+            req.plan, full_name, token=token, branch_name=req.branch_name,
+        )
+
+        if isinstance(result, dict) and result.get("status") == "completed":
+            branch = result.get("branch", req.branch_name)
+            if branch:
+                pr = await create_pr_after_execution(
+                    full_name,
+                    branch,
+                    req.plan.goal,
+                    result.get("executionLog", {}),
+                    token=token,
+                )
+                if pr:
+                    result["pull_request"] = {
+                        "number": pr.get("number"),
+                        "url": pr.get("html_url"),
+                        "title": pr.get("title"),
+                    }
+
+            result.setdefault(
+                "mode",
+                "sticky" if req.branch_name else "hard-switch",
+            )
+
+        return result
+
+
+# ============================================================================
+# Issue Endpoints (v2 upgrade)
+# ============================================================================
+
+@app.get("/api/repos/{owner}/{repo}/issues")
+async def api_list_issues(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    state: str = Query("open"),
+    labels: Optional[str] = Query(None),
+    per_page: int = Query(30, ge=1, le=100),
+    page: int = Query(1, ge=1),
+    authorization: Optional[str] = Header(None),
+):
+    """List issues for a repository."""
+    token = get_github_token(authorization)
+    issues = await github_issues.list_issues(
+        owner, repo, state=state, labels=labels,
+        per_page=per_page, page=page, token=token,
+    )
+    return {"issues": issues, "page": page, "per_page": per_page}
+
+
+@app.get("/api/repos/{owner}/{repo}/issues/{issue_number}")
+async def api_get_issue(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    issue_number: int = FPath(...),
+    authorization: Optional[str] = Header(None),
+):
+    """Get a single issue."""
+    token = get_github_token(authorization)
+    return await github_issues.get_issue(owner, repo, issue_number, token=token)
+
+
+@app.post("/api/repos/{owner}/{repo}/issues")
+async def api_create_issue(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    payload: IssueCreateRequest = ...,
+    authorization: Optional[str] = Header(None),
+):
+    """Create a new issue."""
+    token = get_github_token(authorization)
+    return await github_issues.create_issue(
+        owner, repo, payload.title,
+        body=payload.body, labels=payload.labels,
+        assignees=payload.assignees, milestone=payload.milestone,
+        token=token,
+    )
+
+
+@app.patch("/api/repos/{owner}/{repo}/issues/{issue_number}")
+async def api_update_issue(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    issue_number: int = FPath(...),
+    payload: IssueUpdateRequest = ...,
+    authorization: Optional[str] = Header(None),
+):
+    """Update an existing issue."""
+    token = get_github_token(authorization)
+    return await github_issues.update_issue(
+        owner, repo, issue_number,
+        title=payload.title, body=payload.body, state=payload.state,
+        labels=payload.labels, assignees=payload.assignees,
+        milestone=payload.milestone, token=token,
+    )
+
+
+@app.get("/api/repos/{owner}/{repo}/issues/{issue_number}/comments")
+async def api_list_issue_comments(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    issue_number: int = FPath(...),
+    authorization: Optional[str] = Header(None),
+):
+    """List comments on an issue."""
+    token = get_github_token(authorization)
+    return await github_issues.list_issue_comments(owner, repo, issue_number, token=token)
+
+
+@app.post("/api/repos/{owner}/{repo}/issues/{issue_number}/comments")
+async def api_add_issue_comment(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    issue_number: int = FPath(...),
+    payload: IssueCommentRequest = ...,
+    authorization: Optional[str] = Header(None),
+):
+    """Add a comment to an issue."""
+    token = get_github_token(authorization)
+    return await github_issues.add_issue_comment(
+        owner, repo, issue_number, payload.body, token=token,
+    )
+
+
+# ============================================================================
+# Pull Request Endpoints (v2 upgrade)
+# ============================================================================
+
+@app.get("/api/repos/{owner}/{repo}/pulls")
+async def api_list_pulls(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    state: str = Query("open"),
+    per_page: int = Query(30, ge=1, le=100),
+    page: int = Query(1, ge=1),
+    authorization: Optional[str] = Header(None),
+):
+    """List pull requests."""
+    token = get_github_token(authorization)
+    prs = await github_pulls.list_pull_requests(
+        owner, repo, state=state, per_page=per_page, page=page, token=token,
+    )
+    return {"pull_requests": prs, "page": page, "per_page": per_page}
+
+
+@app.get("/api/repos/{owner}/{repo}/pulls/{pull_number}")
+async def api_get_pull(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    pull_number: int = FPath(...),
+    authorization: Optional[str] = Header(None),
+):
+    """Get a single pull request."""
+    token = get_github_token(authorization)
+    return await github_pulls.get_pull_request(owner, repo, pull_number, token=token)
+
+
+@app.post("/api/repos/{owner}/{repo}/pulls")
+async def api_create_pull(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    payload: PRCreateRequest = ...,
+    authorization: Optional[str] = Header(None),
+):
+    """Create a new pull request."""
+    token = get_github_token(authorization)
+    return await github_pulls.create_pull_request(
+        owner, repo, title=payload.title, head=payload.head,
+        base=payload.base, body=payload.body, draft=payload.draft,
+        token=token,
+    )
+
+
+@app.put("/api/repos/{owner}/{repo}/pulls/{pull_number}/merge")
+async def api_merge_pull(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    pull_number: int = FPath(...),
+    payload: PRMergeRequest = ...,
+    authorization: Optional[str] = Header(None),
+):
+    """Merge a pull request."""
+    token = get_github_token(authorization)
+    return await github_pulls.merge_pull_request(
+        owner, repo, pull_number,
+        merge_method=payload.merge_method,
+        commit_title=payload.commit_title,
+        commit_message=payload.commit_message,
+        token=token,
+    )
+
+
+@app.get("/api/repos/{owner}/{repo}/pulls/{pull_number}/files")
+async def api_list_pr_files(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    pull_number: int = FPath(...),
+    authorization: Optional[str] = Header(None),
+):
+    """List files changed in a pull request."""
+    token = get_github_token(authorization)
+    return await github_pulls.list_pr_files(owner, repo, pull_number, token=token)
+
+
+# ============================================================================
+# Search Endpoints (v2 upgrade)
+# ============================================================================
+
+@app.get("/api/search/code")
+async def api_search_code(
+    q: str = Query(..., description="Search query"),
+    owner: Optional[str] = Query(None),
+    repo: Optional[str] = Query(None),
+    language: Optional[str] = Query(None),
+    per_page: int = Query(30, ge=1, le=100),
+    page: int = Query(1, ge=1),
+    authorization: Optional[str] = Header(None),
+):
+    """Search for code across GitHub."""
+    token = get_github_token(authorization)
+    return await github_search.search_code(
+        q, owner=owner, repo=repo, language=language,
+        per_page=per_page, page=page, token=token,
+    )
+
+
+@app.get("/api/search/issues")
+async def api_search_issues(
+    q: str = Query(..., description="Search query"),
+    owner: Optional[str] = Query(None),
+    repo: Optional[str] = Query(None),
+    state: Optional[str] = Query(None),
+    label: Optional[str] = Query(None),
+    per_page: int = Query(30, ge=1, le=100),
+    page: int = Query(1, ge=1),
+    authorization: Optional[str] = Header(None),
+):
+    """Search issues and pull requests."""
+    token = get_github_token(authorization)
+    return await github_search.search_issues(
+        q, owner=owner, repo=repo, state=state, label=label,
+        per_page=per_page, page=page, token=token,
+    )
+
+
+@app.get("/api/search/repositories")
+async def api_search_repositories(
+    q: str = Query(..., description="Search query"),
+    language: Optional[str] = Query(None),
+    sort: Optional[str] = Query(None),
+    per_page: int = Query(30, ge=1, le=100),
+    page: int = Query(1, ge=1),
+    authorization: Optional[str] = Header(None),
+):
+    """Search for repositories."""
+    token = get_github_token(authorization)
+    return await github_search.search_repositories(
+        q, language=language, sort=sort,
+        per_page=per_page, page=page, token=token,
+    )
+
+
+@app.get("/api/search/users")
+async def api_search_users(
+    q: str = Query(..., description="Search query"),
+    type_filter: Optional[str] = Query(None, alias="type"),
+    location: Optional[str] = Query(None),
+    language: Optional[str] = Query(None),
+    per_page: int = Query(30, ge=1, le=100),
+    page: int = Query(1, ge=1),
+    authorization: Optional[str] = Header(None),
+):
+    """Search for GitHub users and organizations."""
+    token = get_github_token(authorization)
+    return await github_search.search_users(
+        q, type_filter=type_filter, location=location, language=language,
+        per_page=per_page, page=page, token=token,
+    )
+
+
+# ============================================================================
+# Route Analysis Endpoint (v2 upgrade)
+# ============================================================================
+
+@app.post("/api/chat/route")
+async def api_chat_route(payload: dict):
+    """Preview how a message would be routed without executing it.
+
+    Useful for the frontend to display which agent(s) will handle the request.
+    """
+    message = payload.get("message", "")
+    if not message:
+        return JSONResponse({"error": "message is required"}, status_code=400)
+
+    workflow = route_request(message)
+    return {
+        "category": workflow.category.value,
+        "agents": [a.value for a in workflow.agents],
+        "description": workflow.description,
+        "requires_repo_context": workflow.requires_repo_context,
+        "entity_number": workflow.entity_number,
+        "metadata": workflow.metadata,
+    }
+
+
+# ============================================================================
 # Authentication Endpoints (Web Flow + Device Flow)
 # ============================================================================
 
@@ -685,6 +1125,338 @@ async def api_check_repo_access(
         app_installed=access_info["app_installed"],
         auth_type=access_info["auth_type"],
     )
+
+
+# ============================================================================
+# Session Endpoints (Phase 1)
+# ============================================================================
+
+@app.get("/api/sessions")
+async def api_list_sessions():
+    """List all saved sessions."""
+    return {"sessions": _session_mgr.list_sessions()}
+
+
+@app.post("/api/sessions")
+async def api_create_session(payload: dict):
+    """Create a new session."""
+    repo = payload.get("repo_full_name", "")
+    branch = payload.get("branch")
+    session = _session_mgr.create(repo_full_name=repo, branch=branch)
+    _session_mgr.save(session)
+    return {"session_id": session.id, "status": session.status}
+
+
+@app.get("/api/sessions/{session_id}")
+async def api_get_session(session_id: str):
+    """Get session details."""
+    session = _session_mgr.load(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {
+        "id": session.id,
+        "status": session.status,
+        "repo_full_name": session.repo_full_name,
+        "branch": session.branch,
+        "created_at": session.created_at,
+        "message_count": len(session.messages),
+        "checkpoint_count": len(session.checkpoints),
+    }
+
+
+@app.delete("/api/sessions/{session_id}")
+async def api_delete_session(session_id: str):
+    """Delete a session."""
+    deleted = _session_mgr.delete(session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"deleted": True}
+
+
+@app.post("/api/sessions/{session_id}/checkpoint")
+async def api_create_checkpoint(session_id: str, payload: dict):
+    """Create a checkpoint for a session."""
+    session = _session_mgr.load(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    label = payload.get("label", "checkpoint")
+    cp = _session_mgr.create_checkpoint(session, label=label)
+    return {"checkpoint_id": cp.id, "label": cp.label, "created_at": cp.created_at}
+
+
+# ============================================================================
+# Hooks Endpoints (Phase 1)
+# ============================================================================
+
+@app.get("/api/hooks")
+async def api_list_hooks():
+    """List registered hooks."""
+    return {"hooks": _hook_mgr.list_hooks()}
+
+
+@app.post("/api/hooks")
+async def api_register_hook(payload: dict):
+    """Register a new hook."""
+    from .hooks import HookDefinition
+    try:
+        hook = HookDefinition(
+            event=HookEvent(payload["event"]),
+            name=payload["name"],
+            command=payload.get("command"),
+            blocking=payload.get("blocking", False),
+            timeout=payload.get("timeout", 30),
+        )
+        _hook_mgr.register(hook)
+        return {"registered": True, "name": hook.name, "event": hook.event.value}
+    except (KeyError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/hooks/{event}/{name}")
+async def api_unregister_hook(event: str, name: str):
+    """Unregister a hook by event and name."""
+    try:
+        _hook_mgr.unregister(HookEvent(event), name)
+        return {"unregistered": True}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ============================================================================
+# Permissions Endpoints (Phase 1)
+# ============================================================================
+
+@app.get("/api/permissions")
+async def api_get_permissions():
+    """Get current permission policy."""
+    return _perm_mgr.to_dict()
+
+
+@app.put("/api/permissions/mode")
+async def api_set_permission_mode(payload: dict):
+    """Set the permission mode (normal, plan, auto)."""
+    mode_str = payload.get("mode", "normal")
+    try:
+        _perm_mgr.policy.mode = PermissionMode(mode_str)
+        return {"mode": _perm_mgr.policy.mode.value}
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid mode: {mode_str}")
+
+
+# ============================================================================
+# Project Context / Memory Endpoints (Phase 1)
+# ============================================================================
+
+@app.get("/api/repos/{owner}/{repo}/context")
+async def api_get_project_context(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+):
+    """Get project conventions and memory for a repository workspace."""
+    from pathlib import Path as StdPath
+    workspace_path = StdPath.home() / ".gitpilot" / "workspaces" / owner / repo
+    if not workspace_path.exists():
+        return {"conventions": "", "rules": [], "auto_memory": {}, "system_prompt": ""}
+    mgr = MemoryManager(workspace_path)
+    ctx = mgr.load_context()
+    return {
+        "conventions": ctx.conventions,
+        "rules": ctx.rules,
+        "auto_memory": ctx.auto_memory,
+        "system_prompt": ctx.to_system_prompt(),
+    }
+
+
+@app.post("/api/repos/{owner}/{repo}/context/init")
+async def api_init_project_context(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+):
+    """Initialize .gitpilot/ directory with template GITPILOT.md."""
+    from pathlib import Path as StdPath
+    workspace_path = StdPath.home() / ".gitpilot" / "workspaces" / owner / repo
+    workspace_path.mkdir(parents=True, exist_ok=True)
+    mgr = MemoryManager(workspace_path)
+    md_path = mgr.init_project()
+    return {"initialized": True, "path": str(md_path)}
+
+
+@app.post("/api/repos/{owner}/{repo}/context/pattern")
+async def api_add_learned_pattern(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    payload: dict = ...,
+):
+    """Add a learned pattern to auto-memory."""
+    from pathlib import Path as StdPath
+    pattern = payload.get("pattern", "")
+    if not pattern:
+        raise HTTPException(status_code=400, detail="pattern is required")
+    workspace_path = StdPath.home() / ".gitpilot" / "workspaces" / owner / repo
+    workspace_path.mkdir(parents=True, exist_ok=True)
+    mgr = MemoryManager(workspace_path)
+    mgr.add_learned_pattern(pattern)
+    return {"added": True, "pattern": pattern}
+
+
+# ============================================================================
+# MCP Endpoints (Phase 2)
+# ============================================================================
+
+@app.get("/api/mcp/servers")
+async def api_mcp_list_servers():
+    """List configured MCP servers and their connection status."""
+    return _mcp_client.to_dict()
+
+
+@app.post("/api/mcp/connect/{server_name}")
+async def api_mcp_connect(server_name: str):
+    """Connect to a named MCP server."""
+    try:
+        conn = await _mcp_client.connect(server_name)
+        return {
+            "connected": True,
+            "server": server_name,
+            "tools": [{"name": t.name, "description": t.description} for t in conn.tools],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/mcp/disconnect/{server_name}")
+async def api_mcp_disconnect(server_name: str):
+    """Disconnect from a named MCP server."""
+    await _mcp_client.disconnect(server_name)
+    return {"disconnected": True, "server": server_name}
+
+
+@app.post("/api/mcp/call")
+async def api_mcp_call_tool(payload: dict):
+    """Call a tool on a connected MCP server."""
+    server = payload.get("server", "")
+    tool_name = payload.get("tool", "")
+    params = payload.get("params", {})
+    if not server or not tool_name:
+        raise HTTPException(status_code=400, detail="server and tool are required")
+    conn = _mcp_client._connections.get(server)
+    if not conn:
+        raise HTTPException(status_code=404, detail=f"Not connected to server: {server}")
+    try:
+        result = await _mcp_client.call_tool(conn, tool_name, params)
+        return {"result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Plugin Endpoints (Phase 2)
+# ============================================================================
+
+@app.get("/api/plugins")
+async def api_list_plugins():
+    """List installed plugins."""
+    plugins = _plugin_mgr.list_installed()
+    return {"plugins": [p.to_dict() for p in plugins]}
+
+
+@app.post("/api/plugins/install")
+async def api_install_plugin(payload: dict):
+    """Install a plugin from a git URL or local path."""
+    source = payload.get("source", "")
+    if not source:
+        raise HTTPException(status_code=400, detail="source is required")
+    try:
+        info = _plugin_mgr.install(source)
+        return {"installed": True, "plugin": info.to_dict()}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/plugins/{name}")
+async def api_uninstall_plugin(name: str):
+    """Uninstall a plugin by name."""
+    removed = _plugin_mgr.uninstall(name)
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"Plugin not found: {name}")
+    return {"uninstalled": True, "name": name}
+
+
+# ============================================================================
+# Skills Endpoints (Phase 2)
+# ============================================================================
+
+@app.get("/api/skills")
+async def api_list_skills():
+    """List all available skills."""
+    return {"skills": _skill_mgr.list_skills()}
+
+
+@app.post("/api/skills/invoke")
+async def api_invoke_skill(payload: dict):
+    """Invoke a skill by name."""
+    name = payload.get("name", "")
+    context = payload.get("context", {})
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    prompt = _skill_mgr.invoke(name, context)
+    if prompt is None:
+        raise HTTPException(status_code=404, detail=f"Skill not found: {name}")
+    return {"skill": name, "rendered_prompt": prompt}
+
+
+@app.post("/api/skills/reload")
+async def api_reload_skills():
+    """Reload skills from all sources."""
+    count = _skill_mgr.load_all()
+    return {"reloaded": True, "count": count}
+
+
+# ============================================================================
+# Vision Endpoints (Phase 2)
+# ============================================================================
+
+@app.post("/api/vision/analyze")
+async def api_vision_analyze(payload: dict):
+    """Analyze an image with a text prompt."""
+    from .vision import VisionAnalyzer
+    image_path = payload.get("image_path", "")
+    prompt = payload.get("prompt", "Describe this image.")
+    provider = payload.get("provider", "openai")
+    if not image_path:
+        raise HTTPException(status_code=400, detail="image_path is required")
+    try:
+        analyzer = VisionAnalyzer(provider=provider)
+        result = await analyzer.analyze_image(Path(image_path), prompt)
+        return result.to_dict()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ============================================================================
+# Model Router Endpoints (Phase 2)
+# ============================================================================
+
+@app.post("/api/model-router/select")
+async def api_model_select(payload: dict):
+    """Preview which model would be selected for a request."""
+    request = payload.get("request", "")
+    category = payload.get("category")
+    if not request:
+        raise HTTPException(status_code=400, detail="request is required")
+    selection = _model_router.select(request, category)
+    return {
+        "model": selection.model,
+        "tier": selection.tier.value,
+        "complexity": selection.complexity.value,
+        "provider": selection.provider,
+        "reason": selection.reason,
+    }
+
+
+@app.get("/api/model-router/usage")
+async def api_model_usage():
+    """Get model usage summary and budget status."""
+    return _model_router.get_usage_summary()
 
 
 # ============================================================================

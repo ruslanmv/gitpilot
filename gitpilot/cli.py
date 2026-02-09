@@ -273,6 +273,151 @@ def serve_only():
     except KeyboardInterrupt:
         console.print("\n[yellow]Shutting down...[/yellow]")
         sys.exit(0)
+@cli.command()
+def run(
+    repo: str = typer.Option(..., "--repo", "-r", help="Repository as owner/repo"),
+    message: str = typer.Option("", "--message", "-m", help="User request message"),
+    branch: str = typer.Option(None, "--branch", "-b", help="Target branch"),
+    auto_pr: bool = typer.Option(False, "--auto-pr", help="Create PR after execution"),
+    from_pr: int = typer.Option(None, "--from-pr", help="Fetch context from PR number"),
+    headless: bool = typer.Option(False, "--headless", help="Non-interactive JSON output"),
+):
+    """Run GitPilot non-interactively (headless mode for CI/CD)."""
+    import asyncio
+    import sys
+
+    if not message and not sys.stdin.isatty():
+        message = sys.stdin.read().strip()
+
+    if not message:
+        console.print("[red]Error:[/red] --message is required (or pipe via stdin)")
+        raise typer.Exit(code=1)
+
+    token = os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
+    if not token:
+        console.print("[red]Error:[/red] GITPILOT_GITHUB_TOKEN or GITHUB_TOKEN must be set")
+        raise typer.Exit(code=1)
+
+    from .headless import run_headless
+
+    result = asyncio.run(run_headless(
+        repo_full_name=repo,
+        message=message,
+        token=token,
+        branch=branch,
+        auto_pr=auto_pr,
+        from_pr=from_pr,
+    ))
+
+    if headless:
+        # Pure JSON for CI/CD consumption
+        console.print(result.to_json())
+    else:
+        if result.success:
+            console.print(f"[green]Success:[/green] {result.output[:500]}")
+        else:
+            console.print(f"[red]Failed:[/red] {result.error}")
+        if result.pr_url:
+            console.print(f"[cyan]PR:[/cyan] {result.pr_url}")
+
+    raise typer.Exit(code=0 if result.success else 1)
+
+
+@cli.command("init")
+def init_project(
+    path: str = typer.Argument(".", help="Project directory to initialise"),
+):
+    """Initialize .gitpilot/ directory with template GITPILOT.md."""
+    from pathlib import Path as StdPath
+    from .memory import MemoryManager
+
+    workspace = StdPath(path).resolve()
+    mgr = MemoryManager(workspace)
+    md_path = mgr.init_project()
+    console.print(f"[green]Initialized:[/green] {md_path}")
+    console.print("[dim]Edit .gitpilot/GITPILOT.md to add your project conventions.[/dim]")
+
+
+@cli.command("plugin")
+def plugin_cmd(
+    action: str = typer.Argument(..., help="install | uninstall | list"),
+    source: str = typer.Argument(None, help="Git URL, local path, or plugin name"),
+):
+    """Manage GitPilot plugins."""
+    from .plugins import PluginManager
+
+    mgr = PluginManager()
+
+    if action == "list":
+        plugins = mgr.list_installed()
+        if not plugins:
+            console.print("[dim]No plugins installed.[/dim]")
+            return
+        table = Table(show_header=True, header_style="bold cyan")
+        table.add_column("Name")
+        table.add_column("Version")
+        table.add_column("Description")
+        for p in plugins:
+            table.add_row(p.name, p.version, p.description)
+        console.print(table)
+
+    elif action == "install":
+        if not source:
+            console.print("[red]Error:[/red] source is required for install")
+            raise typer.Exit(code=1)
+        try:
+            info = mgr.install(source)
+            console.print(f"[green]Installed:[/green] {info.name} v{info.version}")
+        except Exception as e:
+            console.print(f"[red]Error:[/red] {e}")
+            raise typer.Exit(code=1)
+
+    elif action == "uninstall":
+        if not source:
+            console.print("[red]Error:[/red] plugin name is required")
+            raise typer.Exit(code=1)
+        if mgr.uninstall(source):
+            console.print(f"[green]Uninstalled:[/green] {source}")
+        else:
+            console.print(f"[yellow]Not found:[/yellow] {source}")
+
+    else:
+        console.print(f"[red]Unknown action:[/red] {action}. Use: install, uninstall, list")
+        raise typer.Exit(code=1)
+
+
+@cli.command("skill")
+def skill_cmd(
+    name: str = typer.Argument(None, help="Skill name to invoke (or 'list')"),
+):
+    """List or invoke skills."""
+    from .skills import SkillManager
+
+    mgr = SkillManager(workspace_path=Path.cwd())
+    mgr.load_all()
+
+    if not name or name == "list":
+        skills = mgr.list_skills()
+        if not skills:
+            console.print("[dim]No skills found.[/dim]")
+            console.print("[dim]Create .gitpilot/skills/*.md to add skills.[/dim]")
+            return
+        table = Table(show_header=True, header_style="bold cyan")
+        table.add_column("Name")
+        table.add_column("Description")
+        table.add_column("Auto")
+        for s in skills:
+            table.add_row(s["name"], s["description"], str(s.get("auto_trigger", False)))
+        console.print(table)
+    else:
+        prompt = mgr.invoke(name)
+        if prompt is None:
+            console.print(f"[red]Skill not found:[/red] {name}")
+            raise typer.Exit(code=1)
+        console.print(f"[cyan]/{name}[/cyan]")
+        console.print(prompt)
+
+
 @cli.command("list-models")
 def list_models_cmd(
     provider: str = typer.Option(
