@@ -289,8 +289,27 @@ export default function App() {
         delete next[deletedId];
         return next;
       });
+      // Also clear the branch-keyed chat (the persistence effect may have
+      // written the first user message there before the session was created)
+      if (repoKey) {
+        setRepoStateByKey((prev) => {
+          const cur = prev[repoKey];
+          if (!cur) return prev;
+          const branchKey = cur.currentBranch || cur.defaultBranch || defaultBranch;
+          return {
+            ...prev,
+            [repoKey]: {
+              ...cur,
+              chatByBranch: {
+                ...(cur.chatByBranch || {}),
+                [branchKey]: { messages: [], plan: null },
+              },
+            },
+          };
+        });
+      }
     }
-  }, [activeSessionId]);
+  }, [activeSessionId, repoKey, defaultBranch]);
 
   // ---------------------------------------------------------------------------
   // Chat persistence helpers
