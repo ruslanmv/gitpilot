@@ -277,6 +277,21 @@ export default function App() {
     }
   };
 
+  // When a session is deleted: if it was the active session, clear the
+  // chat so the user returns to a fresh "new conversation" state.
+  // Non-active session deletions only affect the sidebar (handled there).
+  const handleDeleteSession = useCallback((deletedId) => {
+    if (deletedId === activeSessionId) {
+      setActiveSessionId(null);
+      // Clean up the in-memory chat state for the deleted session
+      setChatBySession((prev) => {
+        const next = { ...prev };
+        delete next[deletedId];
+        return next;
+      });
+    }
+  }, [activeSessionId]);
+
   // ---------------------------------------------------------------------------
   // Chat persistence helpers
   // ---------------------------------------------------------------------------
@@ -600,6 +615,7 @@ export default function App() {
               activeSessionId={activeSessionId}
               onSelectSession={handleSelectSession}
               onNewSession={handleNewSession}
+              onDeleteSession={handleDeleteSession}
               refreshNonce={sessionRefreshNonce}
             />
           )}
