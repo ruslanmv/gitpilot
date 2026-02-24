@@ -1223,10 +1223,25 @@ async def api_list_sessions():
 
 @app.post("/api/sessions")
 async def api_create_session(payload: dict):
-    """Create a new session."""
+    """Create a new session.
+
+    Accepts either legacy single-repo or multi-repo format:
+      Legacy: {"repo_full_name": "owner/repo", "branch": "main"}
+      Multi:  {"repos": [{full_name, branch, mode}], "active_repo": "owner/repo"}
+    """
     repo = payload.get("repo_full_name", "")
     branch = payload.get("branch")
-    session = _session_mgr.create(repo_full_name=repo, branch=branch)
+    name = payload.get("name")  # optional — derived from first user prompt
+    session = _session_mgr.create(repo_full_name=repo, branch=branch, name=name)
+
+    # Multi-repo context support
+    if payload.get("repos"):
+        session.repos = payload["repos"]
+        session.active_repo = payload.get("active_repo", repo)
+    elif repo:
+        session.repos = [{"full_name": repo, "branch": branch or "main", "mode": "write"}]
+        session.active_repo = repo
+
     _session_mgr.save(session)
     return {"session_id": session.id, "status": session.status}
 
@@ -1245,6 +1260,8 @@ async def api_get_session(session_id: str):
         "created_at": session.created_at,
         "message_count": len(session.messages),
         "checkpoint_count": len(session.checkpoints),
+        "repos": session.repos,
+        "active_repo": session.active_repo,
     }
 
 
@@ -1255,6 +1272,56 @@ async def api_delete_session(session_id: str):
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"deleted": True}
+
+
+@app.patch("/api/sessions/{session_id}/context")
+async def api_update_session_context(session_id: str, payload: dict):
+    """Add, remove, or activate repos in a session's multi-repo context.
+
+    Actions:
+      {"action": "add", "repo_full_name": "owner/repo", "branch": "main"}
+      {"action": "remove", "repo_full_name": "owner/repo"}
+      {"action": "set_active", "repo_full_name": "owner/repo"}
+    """
+    session = _session_mgr.load(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    action = payload.get("action")
+    repo_name = payload.get("repo_full_name")
+    if not action or not repo_name:
+        raise HTTPException(status_code=400, detail="action and repo_full_name required")
+
+    if action == "add":
+        branch = payload.get("branch", "main")
+        if not any(r.get("full_name") == repo_name for r in session.repos):
+            session.repos.append({
+                "full_name": repo_name,
+                "branch": branch,
+                "mode": "read",
+            })
+        if not session.active_repo:
+            session.active_repo = repo_name
+    elif action == "remove":
+        session.repos = [r for r in session.repos if r.get("full_name") != repo_name]
+        if session.active_repo == repo_name:
+            session.active_repo = session.repos[0]["full_name"] if session.repos else None
+    elif action == "set_active":
+        if any(r.get("full_name") == repo_name for r in session.repos):
+            # Update mode flags
+            for r in session.repos:
+                r["mode"] = "write" if r.get("full_name") == repo_name else "read"
+            session.active_repo = repo_name
+        else:
+            raise HTTPException(status_code=400, detail="Repo not in session context")
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
+
+    _session_mgr.save(session)
+    return {
+        "repos": session.repos,
+        "active_repo": session.active_repo,
+    }
 
 
 @app.post("/api/sessions/{session_id}/checkpoint")
@@ -2195,16 +2262,22 @@ async def session_websocket(websocket: WebSocket, session_id: str):
                     repo_full = session.repo_full_name or ""
                     parts = repo_full.split("/", 1)
                     if len(parts) == 2 and content.strip():
-                        # Use existing dispatch for initial response
+                        # Use canonical dispatcher signature
                         result = await dispatch_request(
-                            repo_owner=parts[0],
-                            repo_name=parts[1],
-                            message=content,
+                            user_request=content,
+                            repo_full_name=f"{parts[0]}/{parts[1]}",
                             branch_name=session.branch,
                         )
                         answer = ""
                         if isinstance(result, dict):
-                            answer = result.get("answer", result.get("summary", str(result)))
+                            answer = (
+                                result.get("result")
+                                or result.get("answer")
+                                or result.get("message")
+                                or result.get("summary")
+                                or (result.get("plan", {}) or {}).get("summary")
+                                or str(result)
+                            )
                         else:
                             answer = str(result)
 
