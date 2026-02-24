@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, Query, Path as FPath, Header, HTTPException
+from fastapi import FastAPI, Query, Path as FPath, Header, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,6 +39,8 @@ from .session import SessionManager, Session
 from .hooks import HookManager, HookEvent
 from .permissions import PermissionManager, PermissionMode
 from .memory import MemoryManager
+from .context_vault import ContextVault
+from .use_case import UseCaseManager
 from .mcp_client import MCPClient
 from .plugins import PluginManager
 from .skills import SkillManager
@@ -1311,6 +1313,146 @@ async def api_add_learned_pattern(
     mgr = MemoryManager(workspace_path)
     mgr.add_learned_pattern(pattern)
     return {"added": True, "pattern": pattern}
+
+
+# ============================================================================
+# Context Vault Endpoints (additive — Context + Use Case system)
+# ============================================================================
+
+def _workspace_path(owner: str, repo: str) -> Path:
+    """Resolve the local workspace path for a repo."""
+    return Path.home() / ".gitpilot" / "workspaces" / owner / repo
+
+
+@app.get("/api/repos/{owner}/{repo}/context/assets")
+async def api_list_context_assets(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+):
+    """List all uploaded context assets for a repository."""
+    vault = ContextVault(_workspace_path(owner, repo))
+    assets = vault.list_assets()
+    return {"assets": [a.to_dict() for a in assets]}
+
+
+@app.post("/api/repos/{owner}/{repo}/context/assets/upload")
+async def api_upload_context_asset(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    file: UploadFile = File(...),
+):
+    """Upload a file to the project context vault."""
+    vault = ContextVault(_workspace_path(owner, repo))
+    content = await file.read()
+    mime = file.content_type or ""
+    filename = file.filename or "upload"
+
+    try:
+        meta = vault.upload_asset(filename, content, mime=mime)
+        return {"asset": meta.to_dict()}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/repos/{owner}/{repo}/context/assets/{asset_id}")
+async def api_delete_context_asset(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    asset_id: str = FPath(...),
+):
+    """Delete a context asset."""
+    vault = ContextVault(_workspace_path(owner, repo))
+    vault.delete_asset(asset_id)
+    return {"deleted": True, "asset_id": asset_id}
+
+
+@app.get("/api/repos/{owner}/{repo}/context/assets/{asset_id}/download")
+async def api_download_context_asset(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    asset_id: str = FPath(...),
+):
+    """Download a raw context asset file."""
+    vault = ContextVault(_workspace_path(owner, repo))
+    asset_path = vault.get_asset_path(asset_id)
+    if not asset_path:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    filename = vault.get_asset_filename(asset_id)
+    return FileResponse(asset_path, filename=filename)
+
+
+# ============================================================================
+# Use Case Endpoints (additive — guided requirement clarification)
+# ============================================================================
+
+@app.get("/api/repos/{owner}/{repo}/use-cases")
+async def api_list_use_cases(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+):
+    """List all use cases for a repository."""
+    mgr = UseCaseManager(_workspace_path(owner, repo))
+    return {"use_cases": mgr.list_use_cases()}
+
+
+@app.post("/api/repos/{owner}/{repo}/use-cases")
+async def api_create_use_case(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    payload: dict = ...,
+):
+    """Create a new use case."""
+    title = payload.get("title", "New Use Case")
+    initial_notes = payload.get("initial_notes", "")
+    mgr = UseCaseManager(_workspace_path(owner, repo))
+    uc = mgr.create_use_case(title=title, initial_notes=initial_notes)
+    return {"use_case": uc.to_dict()}
+
+
+@app.get("/api/repos/{owner}/{repo}/use-cases/{use_case_id}")
+async def api_get_use_case(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    use_case_id: str = FPath(...),
+):
+    """Get a single use case with messages and spec."""
+    mgr = UseCaseManager(_workspace_path(owner, repo))
+    uc = mgr.get_use_case(use_case_id)
+    if not uc:
+        raise HTTPException(status_code=404, detail="Use case not found")
+    return {"use_case": uc.to_dict()}
+
+
+@app.post("/api/repos/{owner}/{repo}/use-cases/{use_case_id}/chat")
+async def api_use_case_chat(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    use_case_id: str = FPath(...),
+    payload: dict = ...,
+):
+    """Send a guided chat message and get assistant response + updated spec."""
+    message = payload.get("message", "")
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+    mgr = UseCaseManager(_workspace_path(owner, repo))
+    uc = mgr.chat(use_case_id, message)
+    if not uc:
+        raise HTTPException(status_code=404, detail="Use case not found")
+    return {"use_case": uc.to_dict()}
+
+
+@app.post("/api/repos/{owner}/{repo}/use-cases/{use_case_id}/finalize")
+async def api_finalize_use_case(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    use_case_id: str = FPath(...),
+):
+    """Finalize a use case: mark active, export markdown spec."""
+    mgr = UseCaseManager(_workspace_path(owner, repo))
+    uc = mgr.finalize(use_case_id)
+    if not uc:
+        raise HTTPException(status_code=404, detail="Use case not found")
+    return {"use_case": uc.to_dict()}
 
 
 # ============================================================================
