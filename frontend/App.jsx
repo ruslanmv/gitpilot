@@ -7,6 +7,7 @@ import ChatPanel from "./components/ChatPanel.jsx";
 import LlmSettings from "./components/LlmSettings.jsx";
 import FlowViewer from "./components/FlowViewer.jsx";
 import Footer from "./components/Footer.jsx";
+import ProjectSettingsModal from "./components/ProjectSettingsModal.jsx";
 import { apiUrl, safeFetchJSON } from "./utils/api.js";
 
 function makeRepoKey(repo) {
@@ -28,6 +29,7 @@ export default function App() {
   // Repo + Session State Machine
   const [repoStateByKey, setRepoStateByKey] = useState({});
   const [toast, setToast] = useState(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const repoKey = useMemo(() => makeRepoKey(repo), [repo]);
 
@@ -359,11 +361,19 @@ export default function App() {
             >
               🔄 Agent Flow
             </button>
+            {repo && (
+              <button
+                className="nav-btn"
+                onClick={() => setSettingsOpen(true)}
+              >
+                Project Settings
+              </button>
+            )}
             <button
               className={"nav-btn" + (activePage === "admin" ? " nav-btn-active" : "")}
               onClick={() => setActivePage("admin")}
             >
-              ⚙️ Admin / Settings
+              Admin / Settings
             </button>
           </div>
 
@@ -441,6 +451,15 @@ export default function App() {
       </div>
 
       <Footer />
+
+      {repo && (
+        <ProjectSettingsModal
+          owner={repo.full_name?.split("/")[0] || repo.owner}
+          repo={repo.full_name?.split("/")[1] || repo.name}
+          isOpen={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
 
       {toast && (
         <div className="toast-notification">
