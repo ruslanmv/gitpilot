@@ -279,7 +279,12 @@ Use GitPilot from your favourite editor:
 - **VS Code extension** – Sidebar chat panel, inline actions, keybindings (Ctrl+Shift+G), skill invocation, and server configuration
 - Connects to the GitPilot API server — all the same agents and tools available from within your editor
 
-### 17. **Agent Flow Viewer**
+### 17. **Topology Registry — Switchable Agent Architectures** 🆕
+Seven pre-wired agent topologies that control routing, execution, and visualization in one place:
+- **System architectures** (Default fan-out, GitPilot Code ReAct loop) and **task pipelines** (Feature Builder, Bug Hunter, Code Inspector, Architect Mode, Quick Fix) — each with its own agent roster, execution style, and flow graph
+- **Zero-latency classifier** selects the best topology from the user's message without an extra LLM call, while the Flow Viewer dropdown lets you switch or pin a topology at any time
+
+### 18. **Agent Flow Viewer**
 Interactive visual representation of the CrewAI multi-agent system using ReactFlow:
 - **Repository Explorer** – Thoroughly explores codebase structure
 - **Refactor Planner** – Creates safe, step-by-step plans with verified file operations
@@ -288,7 +293,7 @@ Interactive visual representation of the CrewAI multi-agent system using ReactFl
 - **Local Editor & Terminal** – Direct file editing and shell execution agents
 - **GitHub API Tools** – Manages file operations and commits
 
-### 18. **Admin / Settings Console**
+### 19. **Admin / Settings Console**
 Full-featured LLM provider configuration with:
 - **OpenAI** – API key, model selection, optional base URL
 - **Claude** – API key, model selection (Claude 4.5 Sonnet recommended)
@@ -297,7 +302,7 @@ Full-featured LLM provider configuration with:
 
 Settings are persisted to `~/.gitpilot/settings.json` and survive restarts.
 
-### 19. **MCP / A2A Agent Integration (ContextForge Compatible)**
+### 20. **MCP / A2A Agent Integration (ContextForge Compatible)**
 GitPilot can optionally run as an **A2A agent server** that can be **imported by URL** into **MCP ContextForge (MCP Gateway)** and exposed as MCP tools. This makes GitPilot usable not only from the web UI, but also from:
 - MCP-enabled IDEs and CLIs
 - automation pipelines (CI/CD)
@@ -733,6 +738,7 @@ gitpilot/
 ├── github_oauth.py                 # OAuth web + device flow
 ├── llm_provider.py                 # Multi-provider LLM factory
 ├── settings.py                     # Configuration management
+├── topology_registry.py            # Switchable agent topologies (7 built-in)
 │
 │   # --- Phase 1: Feature Parity ---
 ├── workspace.py                    # Local git clone & file operations
@@ -821,8 +827,13 @@ gitpilot/
 - `POST /api/nl-database/translate` – Natural language to SQL
 - `POST /api/nl-database/explain` – Explain SQL in plain English
 
-#### Workflow Visualization
-- `GET /api/flow/current` – Get agent workflow graph
+#### Workflow Visualization & Topologies
+- `GET /api/flow/current` – Get agent workflow graph (supports `?topology=` param)
+- `GET /api/flow/topologies` – List available agent topologies
+- `GET /api/flow/topology/{id}` – Get graph for a specific topology
+- `POST /api/flow/classify` – Auto-detect best topology for a message
+- `GET /api/settings/topology` – Read saved topology preference
+- `POST /api/settings/topology` – Save topology preference
 
 #### A2A / MCP Integration (Optional)
 Enabled only when `GITPILOT_ENABLE_A2A=true`:
@@ -851,7 +862,7 @@ make frontend-build
 # Run development server
 make run
 
-# Run tests (636 tests across 27 test files)
+# Run tests (846 tests across 28 test files)
 make test
 
 # Lint code
@@ -1061,6 +1072,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - ✅ **Predictive Workflows** – Proactive suggestions based on context patterns
 - ✅ **AI Security Scanner** – Secret detection, injection analysis, CWE mapping
 - ✅ **NL Database Queries** – Natural language to SQL translation via MCP
+- ✅ **Topology Registry** – Seven switchable agent architectures with zero-latency message classification and visual topology selector
 
 ### Previous Features (v0.1.2)
 - ✅ Full Multi-LLM Support – All 4 providers fully tested

@@ -45,6 +45,13 @@ from .mcp_client import MCPClient
 from .plugins import PluginManager
 from .skills import SkillManager
 from .smart_model_router import ModelRouter, ModelRouterConfig
+from .topology_registry import (
+    list_topologies as _list_topologies,
+    get_topology_graph as _get_topology_graph,
+    classify_message as _classify_message,
+    get_saved_topology_preference,
+    save_topology_preference,
+)
 from .agent_teams import AgentTeam
 from .learning import LearningEngine
 from .cross_repo import CrossRepoAnalyzer
@@ -266,6 +273,7 @@ class ChatRequest(BaseModel):
     message: str
     branch_name: Optional[str] = None
     auto_pr: bool = False
+    topology_id: Optional[str] = None  # Override topology for this request
 
 
 class IssueCreateRequest(BaseModel):
@@ -623,10 +631,69 @@ async def api_chat_execute(
 
 
 @app.get("/api/flow/current")
-async def api_get_flow():
-    """Return the current agent flow definition as a graph."""
+async def api_get_flow(topology: Optional[str] = Query(None)):
+    """Return the agent flow definition as a graph.
+
+    If ``topology`` query param is provided, returns the graph for that
+    topology.  Otherwise falls back to the user's saved preference, and
+    finally to the legacy ``get_flow_definition()`` output for full
+    backward compatibility.
+    """
+    tid = topology or get_saved_topology_preference()
+    if tid:
+        return _get_topology_graph(tid)
+    # Legacy path — returns the original hardcoded graph
     flow = await get_flow_definition()
     return flow
+
+
+# ============================================================================
+# Topology Registry Endpoints (additive — no existing behaviour changed)
+# ============================================================================
+
+@app.get("/api/flow/topologies")
+async def api_list_topologies():
+    """Return lightweight summaries of all available topology presets."""
+    return _list_topologies()
+
+
+@app.get("/api/flow/topology/{topology_id}")
+async def api_get_topology(topology_id: str):
+    """Return the full flow graph for a specific topology."""
+    return _get_topology_graph(topology_id)
+
+
+class ClassifyRequest(BaseModel):
+    message: str
+
+
+@app.post("/api/flow/classify")
+async def api_classify_message(req: ClassifyRequest):
+    """Auto-detect the best topology for a given user message.
+
+    Returns the recommended topology, confidence score, and up to 4
+    alternatives ranked by relevance.
+    """
+    result = _classify_message(req.message)
+    return result.to_dict()
+
+
+class TopologyPrefRequest(BaseModel):
+    topology: str
+
+
+@app.get("/api/settings/topology")
+async def api_get_topology_pref():
+    """Return the user's saved topology preference (or null)."""
+    pref = get_saved_topology_preference()
+    return {"topology": pref}
+
+
+@app.post("/api/settings/topology")
+async def api_set_topology_pref(req: TopologyPrefRequest):
+    """Save the user's preferred topology."""
+    save_topology_preference(req.topology)
+    return {"status": "ok", "topology": req.topology}
 
 
 # ============================================================================
@@ -654,6 +721,7 @@ async def api_chat_message(req: ChatRequest, authorization: Optional[str] = Head
         full_name = f"{req.repo_owner}/{req.repo_name}"
         result = await dispatch_request(
             req.message, full_name, token=token, branch_name=req.branch_name,
+            topology_id=req.topology_id,
         )
 
         # If auto_pr is requested and execution completed, create PR
@@ -1799,6 +1867,389 @@ async def api_nl_explain(payload: dict):
         raise HTTPException(status_code=400, detail="sql is required")
     explanation = _nl_engine.explain(sql)
     return {"sql": sql, "explanation": explanation}
+
+
+# ============================================================================
+# Branch Listing Endpoint (Claude-Code-on-Web Parity)
+# ============================================================================
+
+class BranchInfo(BaseModel):
+    name: str
+    is_default: bool = False
+    protected: bool = False
+    commit_sha: Optional[str] = None
+
+
+class BranchListResponse(BaseModel):
+    repository: str
+    default_branch: str
+    page: int
+    per_page: int
+    has_more: bool
+    branches: List[BranchInfo]
+
+
+@app.get("/api/repos/{owner}/{repo}/branches", response_model=BranchListResponse)
+async def api_list_branches(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(100, ge=1, le=100),
+    query: Optional[str] = Query(None, description="Substring filter"),
+    authorization: Optional[str] = Header(None),
+):
+    """List branches for a repository with optional search filtering."""
+    import httpx as _httpx
+
+    token = get_github_token(authorization)
+    if not token:
+        raise HTTPException(status_code=401, detail="GitHub token required")
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "gitpilot",
+    }
+    timeout = _httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=10.0)
+
+    async with _httpx.AsyncClient(
+        base_url="https://api.github.com", headers=headers, timeout=timeout
+    ) as client:
+        # Fetch repo info for default_branch
+        repo_resp = await client.get(f"/repos/{owner}/{repo}")
+        if repo_resp.status_code >= 400:
+            logging.warning(
+                "branches: repo lookup failed %s/%s → %s %s",
+                owner, repo, repo_resp.status_code, repo_resp.text[:200],
+            )
+            raise HTTPException(
+                status_code=repo_resp.status_code,
+                detail=f"Cannot access repository: {repo_resp.status_code}",
+            )
+
+        repo_data = repo_resp.json()
+        default_branch_name = repo_data.get("default_branch", "main")
+
+        # Fetch ALL branch pages (GitHub caps at 100 per page)
+        all_raw = []
+        current_page = page
+        while True:
+            branch_resp = await client.get(
+                f"/repos/{owner}/{repo}/branches",
+                params={"page": current_page, "per_page": per_page},
+            )
+            if branch_resp.status_code >= 400:
+                logging.warning(
+                    "branches: list failed %s/%s page=%s → %s %s",
+                    owner, repo, current_page, branch_resp.status_code, branch_resp.text[:200],
+                )
+                raise HTTPException(
+                    status_code=branch_resp.status_code,
+                    detail=f"Failed to list branches: {branch_resp.status_code}",
+                )
+
+            page_data = branch_resp.json() if isinstance(branch_resp.json(), list) else []
+            all_raw.extend(page_data)
+
+            # Check if there are more pages
+            link_header = branch_resp.headers.get("Link", "") or ""
+            if 'rel="next"' not in link_header or len(page_data) < per_page:
+                break
+            current_page += 1
+            # Safety: cap at 10 pages (1000 branches)
+            if current_page - page >= 10:
+                break
+
+    q = (query or "").strip().lower()
+
+    branches = []
+    for b in all_raw:
+        name = (b.get("name") or "").strip()
+        if not name:
+            continue
+        if q and q not in name.lower():
+            continue
+        branches.append(BranchInfo(
+            name=name,
+            is_default=(name == default_branch_name),
+            protected=bool(b.get("protected", False)),
+            commit_sha=(b.get("commit") or {}).get("sha"),
+        ))
+
+    # Sort: default branch first, then alphabetical
+    branches.sort(key=lambda x: (0 if x.is_default else 1, x.name.lower()))
+
+    return BranchListResponse(
+        repository=f"{owner}/{repo}",
+        default_branch=default_branch_name,
+        page=page,
+        per_page=per_page,
+        has_more=False,
+        branches=branches,
+    )
+
+
+# ============================================================================
+# Environment Configuration Endpoints (Claude-Code-on-Web Parity)
+# ============================================================================
+
+import json as _json
+_ENV_ROOT = Path.home() / ".gitpilot" / "environments"
+
+
+class EnvironmentConfig(BaseModel):
+    id: Optional[str] = None
+    name: str = "Default"
+    network_access: str = Field("limited", description="limited | full | none")
+    env_vars: dict = Field(default_factory=dict)
+
+
+class EnvironmentListResponse(BaseModel):
+    environments: List[EnvironmentConfig]
+
+
+@app.get("/api/environments", response_model=EnvironmentListResponse)
+async def api_list_environments():
+    """List all environment configurations."""
+    _ENV_ROOT.mkdir(parents=True, exist_ok=True)
+    envs = []
+    for path in sorted(_ENV_ROOT.glob("*.json")):
+        try:
+            data = _json.loads(path.read_text())
+            envs.append(EnvironmentConfig(**data))
+        except Exception:
+            continue
+    if not envs:
+        envs.append(EnvironmentConfig(id="default", name="Default", network_access="limited"))
+    return EnvironmentListResponse(environments=envs)
+
+
+@app.post("/api/environments")
+async def api_create_environment(config: EnvironmentConfig):
+    """Create a new environment configuration."""
+    import uuid
+    _ENV_ROOT.mkdir(parents=True, exist_ok=True)
+    config.id = config.id or uuid.uuid4().hex[:12]
+    path = _ENV_ROOT / f"{config.id}.json"
+    path.write_text(_json.dumps(config.model_dump(), indent=2))
+    return config.model_dump()
+
+
+@app.put("/api/environments/{env_id}")
+async def api_update_environment(env_id: str, config: EnvironmentConfig):
+    """Update an environment configuration."""
+    _ENV_ROOT.mkdir(parents=True, exist_ok=True)
+    path = _ENV_ROOT / f"{env_id}.json"
+    config.id = env_id
+    path.write_text(_json.dumps(config.model_dump(), indent=2))
+    return config.model_dump()
+
+
+@app.delete("/api/environments/{env_id}")
+async def api_delete_environment(env_id: str):
+    """Delete an environment configuration."""
+    path = _ENV_ROOT / f"{env_id}.json"
+    if path.exists():
+        path.unlink()
+        return {"deleted": True}
+    raise HTTPException(status_code=404, detail="Environment not found")
+
+
+# ============================================================================
+# Session Messages + Diff Endpoints (Claude-Code-on-Web Parity)
+# ============================================================================
+
+@app.post("/api/sessions/{session_id}/message")
+async def api_add_session_message(session_id: str, payload: dict):
+    """Add a message to a session's conversation history."""
+    try:
+        session = _session_mgr.load(session_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Session not found")
+    role = payload.get("role", "user")
+    content = payload.get("content", "")
+    session.add_message(role, content, **payload.get("metadata", {}))
+    _session_mgr.save(session)
+    return {"message_count": len(session.messages)}
+
+
+@app.get("/api/sessions/{session_id}/messages")
+async def api_get_session_messages(session_id: str):
+    """Get all messages for a session."""
+    try:
+        session = _session_mgr.load(session_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {
+        "session_id": session.id,
+        "messages": [
+            {
+                "role": m.role,
+                "content": m.content,
+                "timestamp": m.timestamp,
+                "metadata": m.metadata,
+            }
+            for m in session.messages
+        ],
+    }
+
+
+@app.get("/api/sessions/{session_id}/diff")
+async def api_get_session_diff(session_id: str):
+    """Get diff stats for a session (placeholder for sandbox integration)."""
+    try:
+        session = _session_mgr.load(session_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Session not found")
+    diff = session.metadata.get("diff", {
+        "files_changed": 0,
+        "additions": 0,
+        "deletions": 0,
+        "files": [],
+    })
+    return {"session_id": session.id, "diff": diff}
+
+
+@app.post("/api/sessions/{session_id}/status")
+async def api_update_session_status(session_id: str, payload: dict):
+    """Update session status (active, completed, failed, waiting)."""
+    try:
+        session = _session_mgr.load(session_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Session not found")
+    new_status = payload.get("status", "active")
+    if new_status not in ("active", "paused", "completed", "failed", "waiting"):
+        raise HTTPException(status_code=400, detail="Invalid status")
+    session.status = new_status
+    _session_mgr.save(session)
+    return {"session_id": session.id, "status": session.status}
+
+
+# ============================================================================
+# WebSocket Streaming Endpoint (Claude-Code-on-Web Parity)
+# ============================================================================
+
+from fastapi import WebSocket, WebSocketDisconnect
+
+
+@app.websocket("/ws/sessions/{session_id}")
+async def session_websocket(websocket: WebSocket, session_id: str):
+    """
+    Real-time bidirectional communication for a coding session.
+
+    Server events:
+      { type: "agent_message", content: "..." }
+      { type: "tool_use", tool: "bash", input: "npm test" }
+      { type: "tool_result", tool: "bash", output: "All tests passed" }
+      { type: "diff_update", stats: { additions: N, deletions: N, files: N } }
+      { type: "status_change", status: "completed" }
+      { type: "error", message: "..." }
+
+    Client events:
+      { type: "user_message", content: "..." }
+      { type: "cancel" }
+    """
+    await websocket.accept()
+
+    # Verify session exists
+    try:
+        session = _session_mgr.load(session_id)
+    except FileNotFoundError:
+        await websocket.send_json({"type": "error", "message": "Session not found"})
+        await websocket.close()
+        return
+
+    # Send session history on connect
+    await websocket.send_json({
+        "type": "session_restored",
+        "session_id": session.id,
+        "status": session.status,
+        "message_count": len(session.messages),
+    })
+
+    try:
+        while True:
+            data = await websocket.receive_json()
+            event_type = data.get("type", "")
+
+            if event_type == "user_message":
+                content = data.get("content", "")
+                session.add_message("user", content)
+                _session_mgr.save(session)
+
+                # Acknowledge receipt
+                await websocket.send_json({
+                    "type": "message_received",
+                    "message_index": len(session.messages) - 1,
+                })
+
+                # Stream agent response (integration point for agentic.py)
+                await websocket.send_json({
+                    "type": "status_change",
+                    "status": "active",
+                })
+
+                # Agent processing hook — when the agent orchestrator is wired,
+                # replace this with actual streaming from agentic.py
+                try:
+                    repo_full = session.repo_full_name or ""
+                    parts = repo_full.split("/", 1)
+                    if len(parts) == 2 and content.strip():
+                        # Use existing dispatch for initial response
+                        result = await dispatch_request(
+                            repo_owner=parts[0],
+                            repo_name=parts[1],
+                            message=content,
+                            branch_name=session.branch,
+                        )
+                        answer = ""
+                        if isinstance(result, dict):
+                            answer = result.get("answer", result.get("summary", str(result)))
+                        else:
+                            answer = str(result)
+
+                        # Stream the response
+                        await websocket.send_json({
+                            "type": "agent_message",
+                            "content": answer,
+                        })
+
+                        session.add_message("assistant", answer)
+                        _session_mgr.save(session)
+                    else:
+                        await websocket.send_json({
+                            "type": "agent_message",
+                            "content": "Session is not connected to a repository.",
+                        })
+                except Exception as agent_err:
+                    logger.error(f"Agent error in WS session {session_id}: {agent_err}")
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": str(agent_err),
+                    })
+
+                await websocket.send_json({
+                    "type": "status_change",
+                    "status": "waiting",
+                })
+
+            elif event_type == "cancel":
+                await websocket.send_json({
+                    "type": "status_change",
+                    "status": "waiting",
+                })
+
+            elif event_type == "ping":
+                await websocket.send_json({"type": "pong"})
+
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected for session {session_id}")
+    except Exception as e:
+        logger.error(f"WebSocket error for session {session_id}: {e}")
+        try:
+            await websocket.send_json({"type": "error", "message": str(e)})
+        except Exception:
+            pass
 
 
 # ============================================================================

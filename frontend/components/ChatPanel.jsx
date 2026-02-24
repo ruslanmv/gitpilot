@@ -1,6 +1,11 @@
 // frontend/components/ChatPanel.jsx
 import React, { useEffect, useRef, useState } from "react";
 import AssistantMessage from "./AssistantMessage.jsx";
+import DiffStats from "./DiffStats.jsx";
+import DiffViewer from "./DiffViewer.jsx";
+import CreatePRButton from "./CreatePRButton.jsx";
+import StreamingMessage from "./StreamingMessage.jsx";
+import { SessionWebSocket } from "../utils/ws.js";
 
 // Helper to get headers (inline safety if utility is missing)
 const getHeaders = () => ({
@@ -15,6 +20,7 @@ export default function ChatPanel({
   onExecutionComplete,
   sessionChatState,
   onSessionChatStateChange,
+  sessionId,
 }) {
   // Initialize state from props or defaults
   const [messages, setMessages] = useState(sessionChatState?.messages || []);
@@ -25,8 +31,74 @@ export default function ChatPanel({
   const [executing, setExecuting] = useState(false);
   const [status, setStatus] = useState("");
 
+  // Claude-Code-on-Web: WebSocket streaming + diff + PR
+  const [wsConnected, setWsConnected] = useState(false);
+  const [streamingEvents, setStreamingEvents] = useState([]);
+  const [diffData, setDiffData] = useState(null);
+  const [showDiffViewer, setShowDiffViewer] = useState(false);
+  const wsRef = useRef(null);
+
   const messagesEndRef = useRef(null);
   const prevMsgCountRef = useRef((sessionChatState?.messages || []).length);
+
+  // ---------------------------------------------------------------------------
+  // WebSocket connection management
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    // Clean up previous connection
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+      setWsConnected(false);
+    }
+
+    if (!sessionId) return;
+
+    const ws = new SessionWebSocket(sessionId, {
+      onConnect: () => setWsConnected(true),
+      onDisconnect: () => setWsConnected(false),
+      onMessage: (data) => {
+        if (data.type === "agent_message") {
+          setStreamingEvents((prev) => [...prev, data]);
+        } else if (data.type === "tool_use" || data.type === "tool_result") {
+          setStreamingEvents((prev) => [...prev, data]);
+        } else if (data.type === "diff_update") {
+          setDiffData(data.stats || data);
+        } else if (data.type === "session_restored") {
+          // Session loaded
+        }
+      },
+      onStatusChange: (newStatus) => {
+        if (newStatus === "waiting" && streamingEvents.length > 0) {
+          // Agent finished — consolidate streaming events into a message
+          const textParts = streamingEvents
+            .filter((e) => e.type === "agent_message")
+            .map((e) => e.content);
+          if (textParts.length > 0) {
+            const consolidated = {
+              from: "ai",
+              role: "assistant",
+              answer: textParts.join(""),
+              content: textParts.join(""),
+            };
+            setMessages((prev) => [...prev, consolidated]);
+          }
+          setStreamingEvents([]);
+          setLoadingPlan(false);
+        }
+      },
+      onError: (err) => {
+        console.warn("[ws] Error:", err);
+      },
+    });
+
+    ws.connect();
+    wsRef.current = ws;
+
+    return () => {
+      ws.close();
+    };
+  }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------------------------------------------------------------------------
   // 1) SESSION SYNC: Restore chat when branch OR repo changes
@@ -44,6 +116,8 @@ export default function ChatPanel({
     setStatus("");
     setLoadingPlan(false);
     setExecuting(false);
+    setStreamingEvents([]);
+    setDiffData(null);
 
     // Update msg count tracker so auto-scroll doesn't "jump" on switch
     prevMsgCountRef.current = nextMessages.length;
@@ -67,7 +141,7 @@ export default function ChatPanel({
   // 3) AUTO-SCROLL: Only scroll when a message is appended (reduces flicker)
   // ---------------------------------------------------------------------------
   useEffect(() => {
-    const curCount = messages.length;
+    const curCount = messages.length + streamingEvents.length;
     const prevCount = prevMsgCountRef.current;
 
     // Only scroll when new messages are added
@@ -79,7 +153,7 @@ export default function ChatPanel({
     } else {
       prevMsgCountRef.current = curCount;
     }
-  }, [messages.length]);
+  }, [messages.length, streamingEvents.length]);
 
   // ---------------------------------------------------------------------------
   // HANDLERS
@@ -96,6 +170,14 @@ export default function ChatPanel({
     setLoadingPlan(true);
     setStatus("");
     setPlan(null);
+    setStreamingEvents([]);
+
+    // Try WebSocket first, fall back to HTTP
+    if (wsRef.current?.connected) {
+      wsRef.current.sendMessage(text);
+      setGoal("");
+      return;
+    }
 
     // ✅ Guard: never send null/undefined branch_name
     const effectiveBranch = currentBranch || defaultBranch || "HEAD";
@@ -184,7 +266,7 @@ export default function ChatPanel({
         executionLog: data.executionLog,
       };
 
-      // Show completion immediately (keeps old “Execution Log” section)
+      // Show completion immediately (keeps old "Execution Log" section)
       setMessages((prev) => [...prev, completionMsg]);
 
       // Clear active plan UI
@@ -212,6 +294,8 @@ export default function ChatPanel({
   // ---------------------------------------------------------------------------
   // RENDER
   // ---------------------------------------------------------------------------
+  const isOnSessionBranch = currentBranch && currentBranch !== defaultBranch;
+
   return (
     <div className="chat-container">
       <style>{`
@@ -263,10 +347,11 @@ export default function ChatPanel({
           background: #131316;
         }
 
-        .chat-input-row { display: flex; gap: 10px; align-items: center; }
+        .chat-input-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 
         .chat-input {
           flex: 1;
+          min-width: 200px;
           background: #18181B;
           border: 1px solid #27272A;
           color: white;
@@ -308,6 +393,28 @@ export default function ChatPanel({
           margin-top: 40px;
           font-size: 14px;
         }
+
+        /* WebSocket connection indicator */
+        .ws-indicator {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          font-size: 10px;
+          color: #71717A;
+          padding: 2px 6px;
+          border-radius: 4px;
+          background: rgba(24, 24, 27, 0.6);
+        }
+        .ws-dot {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+        }
+
+        @keyframes blink {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0; }
+        }
       `}</style>
 
       <div className="chat-messages">
@@ -346,17 +453,31 @@ export default function ChatPanel({
                 plan={m.plan}
                 executionLog={m.executionLog}
               />
+              {/* Diff stats indicator (Claude-Code-on-Web parity) */}
+              {m.diff && (
+                <DiffStats diff={m.diff} onClick={() => {
+                  setDiffData(m.diff);
+                  setShowDiffViewer(true);
+                }} />
+              )}
             </div>
           );
         })}
 
-        {loadingPlan && (
+        {/* Streaming events (real-time agent output) */}
+        {streamingEvents.length > 0 && (
+          <div>
+            <StreamingMessage events={streamingEvents} />
+          </div>
+        )}
+
+        {loadingPlan && streamingEvents.length === 0 && (
           <div className="chat-message-ai" style={{ color: "#A1A1AA", fontStyle: "italic", padding: "10px" }}>
             Thinking...
           </div>
         )}
 
-        {!messages.length && !plan && !loadingPlan && (
+        {!messages.length && !plan && !loadingPlan && streamingEvents.length === 0 && (
           <div className="chat-empty-state">
             <div className="chat-empty-icon">💬</div>
             <p>Tell GitPilot what you want to do with this repository.</p>
@@ -369,6 +490,17 @@ export default function ChatPanel({
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Diff stats bar (when agent has made changes) */}
+      {diffData && (
+        <div style={{
+          padding: "8px 16px",
+          borderTop: "1px solid #27272A",
+          background: "#18181B",
+        }}>
+          <DiffStats diff={diffData} onClick={() => setShowDiffViewer(true)} />
+        </div>
+      )}
+
       <div className="chat-input-box">
         {status && (
           <div style={{ fontSize: 11, color: "#ffb3b7", marginBottom: 8 }}>
@@ -379,7 +511,7 @@ export default function ChatPanel({
         <div className="chat-input-row">
           <input
             className="chat-input"
-            placeholder="Describe the change you want to make..."
+            placeholder={wsConnected ? "Send feedback or instructions..." : "Describe the change you want to make..."}
             value={goal}
             onChange={(e) => setGoal(e.target.value)}
             onKeyDown={(e) => {
@@ -398,7 +530,7 @@ export default function ChatPanel({
             onClick={send}
             disabled={loadingPlan || executing || !goal.trim()}
           >
-            {loadingPlan ? "Planning..." : "Generate plan"}
+            {loadingPlan ? "Planning..." : wsConnected ? "Send" : "Generate plan"}
           </button>
 
           <button
@@ -409,8 +541,39 @@ export default function ChatPanel({
           >
             {executing ? "Executing..." : "Approve & execute"}
           </button>
+
+          {/* Create PR button (Claude-Code-on-Web parity) */}
+          {isOnSessionBranch && (
+            <CreatePRButton
+              repo={repo}
+              sessionId={sessionId}
+              branch={currentBranch}
+              defaultBranch={defaultBranch}
+              disabled={executing || loadingPlan}
+            />
+          )}
         </div>
+
+        {/* WebSocket connection indicator */}
+        {sessionId && (
+          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 8 }}>
+            <span className="ws-indicator">
+              <span className="ws-dot" style={{
+                backgroundColor: wsConnected ? "#10B981" : "#EF4444",
+              }} />
+              {wsConnected ? "Live" : "Connecting..."}
+            </span>
+          </div>
+        )}
       </div>
+
+      {/* Diff Viewer overlay */}
+      {showDiffViewer && (
+        <DiffViewer
+          diff={diffData}
+          onClose={() => setShowDiffViewer(false)}
+        />
+      )}
     </div>
   );
 }
