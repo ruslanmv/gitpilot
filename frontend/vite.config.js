@@ -12,7 +12,11 @@ export default defineConfig({
     // Only proxy API requests when NOT running in Vercel dev
     // (Vercel dev handles API routing to serverless functions)
     proxy: process.env.VERCEL ? undefined : {
-      "/api": "http://localhost:8000"
+      "/api": "http://localhost:8000",
+      "/ws": {
+        target: "ws://localhost:8000",
+        ws: true
+      }
     }
   }
 });

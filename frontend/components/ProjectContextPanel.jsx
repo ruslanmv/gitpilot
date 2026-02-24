@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import FileTree from "./FileTree.jsx";
+import BranchPicker from "./BranchPicker.jsx";
 
 // --- INJECTED STYLES FOR ANIMATIONS ---
 const animationStyles = `
@@ -81,9 +82,11 @@ export default function ProjectContextPanel({
   }, [pulseNonce]);
 
   // Main data fetcher (Access + Tree stats) for currentBranch
+  // Stale-while-revalidate: keep previous data visible during fetch
   useEffect(() => {
     if (!repo) return;
 
+    // Only show full "analyzing" spinner if we have no data yet
     if (!accessInfo) setAnalyzing(true);
     setTreeError(null);
 
@@ -100,6 +103,7 @@ export default function ProjectContextPanel({
       console.warn("Unable to read github_token:", e);
     }
 
+    let cancelled = false;
     const cacheBuster = `&_t=${Date.now()}&retry=${retryCount}`;
 
     // A) Access Check (with Stale Cache Fix)
@@ -108,6 +112,7 @@ export default function ProjectContextPanel({
       cache: "no-cache",
     })
       .then(async (res) => {
+        if (cancelled) return;
         const data = await res.json().catch(() => ({}));
 
         if (!res.ok) {
@@ -125,16 +130,20 @@ export default function ProjectContextPanel({
         }
       })
       .catch(() => {
-        setAccessInfo({ can_write: false, app_installed: false, auth_type: "none" });
+        if (!cancelled) setAccessInfo({ can_write: false, app_installed: false, auth_type: "none" });
       });
 
-    // B) Tree count for the selected branch (Uses specific branch to avoid 404s)
-    setAnalyzing(true);
+    // B) Tree count for the selected branch
+    // Don't clear fileCount — keep stale value visible until new one arrives
+    const hadFileCount = fileCount > 0;
+    if (!hadFileCount) setAnalyzing(true);
+
     fetch(`/api/repos/${repo.owner}/${repo.name}/tree?ref=${encodeURIComponent(branch)}&_t=${Date.now()}`, {
       headers,
       cache: "no-cache",
     })
       .then(async (res) => {
+        if (cancelled) return;
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           setTreeError(data.detail || "Failed to load tree");
@@ -144,12 +153,14 @@ export default function ProjectContextPanel({
         setFileCount(Array.isArray(data.files) ? data.files.length : 0);
       })
       .catch((err) => {
+        if (cancelled) return;
         setTreeError(err.message);
         setFileCount(0);
       })
-      .finally(() => setAnalyzing(false));
+      .finally(() => { if (!cancelled) setAnalyzing(false); });
 
     return () => {
+      cancelled = true;
       if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -379,8 +390,12 @@ export default function ProjectContextPanel({
       statusColor = theme.successColor;
     } else if (accessInfo.can_write && retryCount === 0) {
       statusText = "Verifying...";
-    } else if (accessInfo.can_write || accessInfo.auth_type === "none") {
-      statusText = accessInfo.can_write ? "Push Access (No App)" : "Read Only";
+    } else if (accessInfo.can_write) {
+      statusText = "Push Access (No App)";
+      statusColor = theme.warningText;
+      showInstallCard = true;
+    } else {
+      statusText = "Read Only";
       statusColor = theme.warningText;
       showInstallCard = true;
     }
@@ -422,78 +437,16 @@ export default function ProjectContextPanel({
 
       {/* CONTENT */}
       <div style={styles.content}>
-        {/* Branch selector */}
+        {/* Branch selector (Claude-Code-on-Web parity — uses BranchPicker with search) */}
         <div style={styles.statRow}>
           <span style={styles.label}>Branch:</span>
-
-          <div style={styles.dropdownContainer}>
-            <button
-              style={styles.branchButton}
-              onClick={() => setIsDropdownOpen((v) => !v)}
-              onBlur={() => setTimeout(() => setIsDropdownOpen(false), 200)}
-              type="button"
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="6" y1="3" x2="6" y2="15"></line>
-                <circle cx="18" cy="6" r="3"></circle>
-                <circle cx="6" cy="18" r="3"></circle>
-                <path d="M18 9a9 9 0 0 1-9 9"></path>
-              </svg>
-              {branch}
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <polyline points="6 9 12 15 18 9"></polyline>
-              </svg>
-            </button>
-
-            {isDropdownOpen && (
-              <div style={styles.dropdownMenu}>
-                <div
-                  style={{
-                    ...styles.dropdownItem,
-                    fontSize: "10px",
-                    color: theme.textSecondary,
-                    textTransform: "uppercase",
-                  }}
-                >
-                  Switch Branch
-                </div>
-
-                {/* Production */}
-                <div
-                  style={{
-                    ...styles.dropdownItem,
-                    backgroundColor: branch === effectiveDefaultBranch ? "#27272A" : "transparent",
-                  }}
-                  onMouseDown={() => handleManualSwitch(effectiveDefaultBranch)}
-                >
-                  <span style={{ opacity: branch === effectiveDefaultBranch ? 1 : 0 }}>✓</span>
-                  {effectiveDefaultBranch} (Prod)
-                </div>
-
-                {/* AI Session Branches List */}
-                {sessionBranches && sessionBranches.length > 0 && (
-                  <>
-                    <div style={{ borderBottom: `1px solid ${theme.border}`, margin: '4px 0' }}></div>
-                    {sessionBranches.map(sb => (
-                      <div
-                        key={sb}
-                        style={{
-                          ...styles.dropdownItem,
-                          color: theme.aiText,
-                          backgroundColor: branch === sb ? "rgba(59, 130, 246, 0.10)" : "transparent",
-                          borderBottom: "none",
-                        }}
-                        onMouseDown={() => handleManualSwitch(sb)}
-                      >
-                        <span style={{ opacity: branch === sb ? 1 : 0 }}>✓</span>
-                        {sb}
-                      </div>
-                    ))}
-                  </>
-                )}
-              </div>
-            )}
-          </div>
+          <BranchPicker
+            repo={repo}
+            currentBranch={branch}
+            defaultBranch={effectiveDefaultBranch}
+            sessionBranches={sessionBranches}
+            onBranchChange={handleManualSwitch}
+          />
         </div>
 
         {/* Stats */}
