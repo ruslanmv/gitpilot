@@ -16,6 +16,7 @@ from .pr_tools import PR_TOOLS
 from .search_tools import SEARCH_TOOLS
 from .local_tools import LOCAL_TOOLS, LOCAL_FILE_TOOLS, LOCAL_GIT_TOOLS, LOCAL_SHELL_TOOLS
 from .agent_router import AgentType, RequestCategory, WorkflowPlan, route as route_request
+from .context_pack import build_context_pack
 from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,14 @@ async def generate_plan(
     # CRITICAL: Set context INCLUDING branch so tools never fall back to HEAD/main
     active_ref = branch_name or "HEAD"
     set_repo_context(owner, repo, token=token, branch=active_ref)
+
+    # CONTEXT PACK: Load project context (conventions, active use case, asset chunks)
+    # This is additive — if nothing exists, context_pack is empty and agents behave as before.
+    from pathlib import Path as _P
+    workspace_path = _P.home() / ".gitpilot" / "workspaces" / owner / repo
+    context_pack = build_context_pack(workspace_path, query=goal)
+    if context_pack:
+        logger.info("[GitPilot] Context pack loaded (%d chars)", len(context_pack))
 
     # PHASE 1: Explore repository (correct branch)
     logger.info("[GitPilot] Phase 1: Exploring repository %s (ref=%s)...", repo_full_name, active_ref)
@@ -142,24 +151,29 @@ async def generate_plan(
     # PHASE 2: Plan creation based on exploration
     logger.info("[GitPilot] Phase 2: Creating plan based on repository exploration (ref=%s)...", active_ref)
 
+    # Build planner backstory with optional context pack injection
+    _planner_backstory = (
+        "You are an experienced staff engineer who creates plans based on FACTS, not assumptions. "
+        "You have received a complete exploration report of the repository. "
+        "You ONLY create plans for files that actually exist in the exploration report. "
+        "You are extremely careful with DELETE actions - you verify the file exists "
+        "and that it's not on the 'keep' list before marking it for deletion. "
+        "When users ask to delete files, you delete individual FILES, not directory names. "
+        "When users ask to ANALYZE files and GENERATE new content (code, docs, examples), "
+        "you create plans that READ existing files and CREATE new files with generated content. "
+        "You understand that 'analyze X and create Y' means: use tools to read X, then plan to CREATE Y. "
+        "You never make changes yourself, only create detailed plans."
+    )
+    if context_pack:
+        _planner_backstory += "\n\n" + context_pack
+
     planner = Agent(
         role="Repository Refactor Planner",
         goal=(
             "Design safe, step-by-step refactor plans based on ACTUAL repository state "
             "discovered during exploration"
         ),
-        backstory=(
-            "You are an experienced staff engineer who creates plans based on FACTS, not assumptions. "
-            "You have received a complete exploration report of the repository. "
-            "You ONLY create plans for files that actually exist in the exploration report. "
-            "You are extremely careful with DELETE actions - you verify the file exists "
-            "and that it's not on the 'keep' list before marking it for deletion. "
-            "When users ask to delete files, you delete individual FILES, not directory names. "
-            "When users ask to ANALYZE files and GENERATE new content (code, docs, examples), "
-            "you create plans that READ existing files and CREATE new files with generated content. "
-            "You understand that 'analyze X and create Y' means: use tools to read X, then plan to CREATE Y. "
-            "You never make changes yourself, only create detailed plans."
-        ),
+        backstory=_planner_backstory,
         llm=llm,
         tools=REPOSITORY_TOOLS,
         verbose=True,
@@ -700,8 +714,21 @@ async def dispatch_request(
             "message": "Plan generated. Review and approve to execute.",
         }
 
+    # CONTEXT PACK: Load project context for non-plan agents too (additive)
+    _dispatch_ctx_pack = ""
+    if repo_full_name:
+        try:
+            _d_owner, _d_repo = repo_full_name.split("/")
+            from pathlib import Path as _P
+            _d_ws = _P.home() / ".gitpilot" / "workspaces" / _d_owner / _d_repo
+            _dispatch_ctx_pack = build_context_pack(_d_ws, query=user_request)
+        except Exception:
+            pass
+
     # Build the task description
     task_description = _build_task_description(workflow, user_request, repo_full_name, branch_name)
+    if _dispatch_ctx_pack:
+        task_description += "\n\n" + _dispatch_ctx_pack
 
     # Build agent(s) for this workflow
     agents = []
