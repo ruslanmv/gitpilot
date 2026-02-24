@@ -186,12 +186,107 @@ body {
   color: #a1a2b3;
 }
 
-.sidebar-repo-info {
+/* Active context card */
+.sidebar-context-card {
   padding: 10px 12px;
   border-radius: 10px;
   background: #151622;
   border: 1px solid #272832;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   animation: slideIn 0.3s ease;
+}
+
+.sidebar-context-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sidebar-context-close {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: #71717a;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: all 0.15s ease;
+}
+
+.sidebar-context-close:hover {
+  background: #272832;
+  color: #f5f5f7;
+}
+
+.sidebar-section-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #71717a;
+  text-transform: uppercase;
+}
+
+.sidebar-context-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-context-repo {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f5f5f7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-context-meta {
+  font-size: 11px;
+  color: #9a9bb0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sidebar-context-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: #4a4b5e;
+  display: inline-block;
+}
+
+.sidebar-context-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.sidebar-context-btn {
+  border: none;
+  outline: none;
+  background: #1a1b26;
+  color: #9a9bb0;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: 1px solid #272832;
+}
+
+.sidebar-context-btn:hover {
+  background: #222335;
+  color: #c3c5dd;
+  border-color: #3a3b4d;
 }
 
 @keyframes slideIn {
@@ -203,6 +298,15 @@ body {
     opacity: 1;
     transform: translateX(0);
   }
+}
+
+/* Legacy compat — kept for other uses */
+.sidebar-repo-info {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #151622;
+  border: 1px solid #272832;
+  animation: slideIn 0.3s ease;
 }
 
 .sidebar-repo-name {
@@ -687,7 +791,7 @@ body {
 /* Workspace grid - Properly constrained */
 .workspace-grid {
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: 320px minmax(340px, 1fr);
   height: 100%;
   overflow: hidden;
   flex: 1;
@@ -802,9 +906,6 @@ body {
 
 .chat-message-user {
   margin-bottom: 16px;
-  text-align: right;
-  display: flex;
-  justify-content: flex-end;
   animation: slideInRight 0.3s ease;
 }
 
@@ -835,7 +936,6 @@ body {
   }
 }
 
-.chat-message-user span,
 .chat-message-ai span {
   display: inline-block;
   padding: 10px 14px;
@@ -845,8 +945,13 @@ body {
 }
 
 .chat-message-user span {
-  background: #2a2b3c;
-  border: 1px solid #3a3b4d;
+  display: inline;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  border: none;
+  max-width: none;
+  line-height: inherit;
 }
 
 .chat-message-ai span {
@@ -1089,33 +1194,36 @@ body {
 .main-nav {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-top: 14px;
-  margin-bottom: 14px;
+  gap: 2px;
+  margin-top: 10px;
+  margin-bottom: 10px;
 }
 
 .nav-btn {
   border: none;
   outline: none;
-  background: #101117;
-  color: #c3c5dd;
+  background: transparent;
+  color: #9a9bb0;
   border-radius: 8px;
   font-size: 13px;
-  padding: 8px 10px;
+  font-weight: 500;
+  padding: 8px 12px;
   text-align: left;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.15s ease;
 }
 
 .nav-btn:hover {
   background: #1a1b26;
-  transform: translateX(2px);
+  color: #c3c5dd;
 }
 
 .nav-btn-active {
-  background: #2a2b3c;
+  background: #1a1b26;
   color: #f5f5f7;
-  font-weight: 500;
+  font-weight: 600;
+  border-left: 2px solid #ff7a3c;
+  padding-left: 10px;
 }
 
 /* Settings page */
@@ -1518,6 +1626,7 @@ body {
   flex-direction: column;
   background: #050608;
   height: 100%;
+  min-width: 0;
   overflow: hidden;
 }
 

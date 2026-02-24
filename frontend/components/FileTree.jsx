@@ -7,17 +7,22 @@ import React, { useState, useEffect } from "react";
 export default function FileTree({ repo, refreshTrigger, branch }) {
   const [tree, setTree] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [showLoading, setShowLoading] = useState(false);
+  const [isSwitchingBranch, setIsSwitchingBranch] = useState(false);
   const [error, setError] = useState(null);
   const [localRefresh, setLocalRefresh] = useState(0);
 
   useEffect(() => {
     if (!repo) return;
-    setLoading(true);
-    setShowLoading(false);
-    const spinnerTimer = window.setTimeout(() => setShowLoading(true), 200);
+
+    // Determine if this is a branch switch (we already have data)
+    const hasExistingData = tree.length > 0;
+    if (hasExistingData) {
+      setIsSwitchingBranch(true);
+    } else {
+      setLoading(true);
+    }
     setError(null);
-    
+
     // Construct headers manually
     let headers = {};
     try {
@@ -33,6 +38,8 @@ export default function FileTree({ repo, refreshTrigger, branch }) {
     const refParam = branch ? `&ref=${encodeURIComponent(branch)}` : "";
     const cacheBuster = `?_t=${Date.now()}${refParam}`;
 
+    let cancelled = false;
+
     fetch(`/api/repos/${repo.owner}/${repo.name}/tree${cacheBuster}`, { headers })
       .then(async (res) => {
         if (!res.ok) {
@@ -42,6 +49,7 @@ export default function FileTree({ repo, refreshTrigger, branch }) {
         return res.json();
       })
       .then((data) => {
+        if (cancelled) return;
         if (data.files && Array.isArray(data.files)) {
           setTree(buildTree(data.files));
           setError(null);
@@ -50,15 +58,18 @@ export default function FileTree({ repo, refreshTrigger, branch }) {
         }
       })
       .catch((err) => {
+        if (cancelled) return;
         setError(err.message);
         console.error("FileTree error:", err);
       })
       .finally(() => {
-        window.clearTimeout(spinnerTimer);
-        setShowLoading(false);
+        if (cancelled) return;
+        setIsSwitchingBranch(false);
         setLoading(false);
       });
-  }, [repo, branch, refreshTrigger, localRefresh]);
+
+    return () => { cancelled = true; };
+  }, [repo, branch, refreshTrigger, localRefresh]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleRefresh = () => {
     setLocalRefresh(prev => prev + 1);
@@ -104,6 +115,13 @@ export default function FileTree({ repo, refreshTrigger, branch }) {
       gap: "4px",
       transition: "all 0.2s",
       opacity: loading ? 0.5 : 1,
+    },
+    switchingBar: {
+      padding: "6px 20px",
+      fontSize: "11px",
+      color: theme.textSecondary,
+      backgroundColor: "rgba(59, 130, 246, 0.06)",
+      borderBottom: `1px solid ${theme.border}`,
     },
     loadingText: {
       padding: "0 20px",
@@ -168,21 +186,30 @@ export default function FileTree({ repo, refreshTrigger, branch }) {
         </button>
       </div>
 
+      {/* Branch switch indicator (shown above existing tree, doesn't clear it) */}
+      {isSwitchingBranch && (
+        <div style={styles.switchingBar}>Loading branch...</div>
+      )}
+
       {/* Content */}
-      {showLoading && (
+      {loading && tree.length === 0 && (
         <div style={styles.loadingText}>Loading files...</div>
       )}
 
-      {!loading && error && (
-        <div style={styles.errorBox}>⚠️ {error}</div>
+      {!loading && !isSwitchingBranch && error && (
+        <div style={styles.errorBox}>{error}</div>
       )}
 
-      {!loading && !error && tree.length === 0 && (
+      {!loading && !isSwitchingBranch && !error && tree.length === 0 && (
         <div style={styles.emptyText}>No files found</div>
       )}
 
-      {!loading && !error && tree.length > 0 && (
-        <div style={styles.treeContainer}>
+      {tree.length > 0 && (
+        <div style={{
+          ...styles.treeContainer,
+          opacity: isSwitchingBranch ? 0.5 : 1,
+          transition: "opacity 0.15s ease",
+        }}>
           {tree.map((node) => (
             <TreeNode key={node.path} node={node} level={0} />
           ))}

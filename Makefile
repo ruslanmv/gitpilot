@@ -90,7 +90,7 @@ dev: install
 run:
 	@echo "🚀 Starting GitPilot backend on http://127.0.0.1:$(PORT)..."
 	@trap 'kill 0' EXIT; \
-	$(UV) run python -m gitpilot serve --host 127.0.0.1 --port $(PORT) & \
+	$(UV) run python -m gitpilot serve --host 127.0.0.1 --port $(PORT) --no-open & \
 	BACKEND_PID=$$!; \
 	echo "⏳ Waiting for backend to be ready..."; \
 	for i in 1 2 3 4 5 6 7 8 9 10; do \
@@ -106,7 +106,7 @@ run:
 		sleep 1; \
 	done; \
 	echo "🎨 Starting frontend dev server on http://localhost:5173..."; \
-	cd frontend && npm run dev
+	cd frontend && npm run dev -- --open
 
 ## Stop all running processes (ports 8000 and 5173)
 stop:

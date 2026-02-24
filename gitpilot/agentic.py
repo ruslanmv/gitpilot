@@ -17,6 +17,14 @@ from .search_tools import SEARCH_TOOLS
 from .local_tools import LOCAL_TOOLS, LOCAL_FILE_TOOLS, LOCAL_GIT_TOOLS, LOCAL_SHELL_TOOLS
 from .agent_router import AgentType, RequestCategory, WorkflowPlan, route as route_request
 from .context_pack import build_context_pack
+from .topology_registry import (
+    get_topology,
+    get_topology_graph,
+    classify_message,
+    get_saved_topology_preference,
+    ExecutionStyle,
+    RoutingStrategy,
+)
 from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
@@ -669,13 +677,41 @@ async def dispatch_request(
     repo_full_name: str,
     token: Optional[str] = None,
     branch_name: Optional[str] = None,
+    topology_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Route a free-form user request to the appropriate agent(s) and return the result.
 
     This is the single entry-point for the new conversational mode.  For backwards
     compatibility the original ``generate_plan`` / ``execute_plan`` pair is still
     available and untouched.
+
+    If *topology_id* is supplied, topology-aware routing is used:
+      - ``classify_and_dispatch`` → falls through to the existing agent_router
+      - ``always_main_agent`` → all requests go to the primary agent (T2)
+      - ``fixed_sequence`` → a CrewAI sequential crew is built from the
+        topology's agent sequence (T3-T7)
+
+    When *topology_id* is ``None``, behaviour is identical to the original v2
+    dispatcher.
     """
+    # ---------- Topology-aware routing (additive) ----------
+    _active_topology = None
+    _resolved_tid = topology_id or get_saved_topology_preference()
+    if _resolved_tid:
+        _active_topology = get_topology(_resolved_tid)
+
+    if _active_topology and _active_topology.routing_policy.strategy == RoutingStrategy.fixed_sequence:
+        # Pipeline topologies (T3-T7): build a multi-task sequential crew
+        return await _dispatch_pipeline(
+            _active_topology, user_request, repo_full_name,
+            token=token, branch_name=branch_name,
+        )
+
+    # For ``classify_and_dispatch`` (T1/default) and ``always_main_agent`` (T2)
+    # we fall through to the existing routing.  T2's react_loop execution will
+    # be wired in a future phase; for now it uses the same single-task path
+    # but the *visualization* already shows the correct graph.
+
     workflow = route_request(user_request)
     logger.info(
         "[GitPilot] Router: category=%s agents=%s desc=%s",
@@ -764,6 +800,131 @@ async def dispatch_request(
         "agents_used": [a.value for a in workflow.agents],
         "result": result_text,
         "entity_number": workflow.entity_number,
+    }
+
+
+# ============================================================================
+# Topology Pipeline Dispatcher (additive — T3-T7)
+# ============================================================================
+
+# Maps topology agent IDs to AgentType enum + task descriptions.
+# This bridge lets the topology registry reference agents by string ID while
+# reusing the existing _get_agent() builders.
+_TOPO_AGENT_MAP = {
+    "explorer":   (AgentType.EXPLORER,      "Explore the codebase: map project structure, discover relevant files, "
+                                             "identify patterns, dependencies, and test conventions. "
+                                             "Return a structured analysis with file paths and key findings."),
+    "planner":    (AgentType.PLANNER,       "Based on the exploration results, create a detailed implementation plan. "
+                                             "Include: files to modify, files to create, step-by-step order, "
+                                             "and test strategy. Consider trade-offs and alternatives."),
+    "developer":  (AgentType.CODE_WRITER,   "Execute the implementation plan step by step. For each step: "
+                                             "make the code change, then run tests. If tests fail, fix the issue "
+                                             "before moving to the next step. Follow project coding standards."),
+    "reviewer":   (AgentType.CODE_REVIEWER, "Review all code changes. Check for: security vulnerabilities, "
+                                             "code quality, test coverage, performance issues. "
+                                             "Organise findings by severity: Critical, Warning, Suggestion."),
+    "git_agent":  (AgentType.PR_MANAGER,    "Create a branch, commit all changes with a descriptive message, "
+                                             "push the branch, and create a GitHub PR. PR should summarise "
+                                             "the changes clearly with a test plan."),
+}
+
+
+async def _dispatch_pipeline(
+    topology,
+    user_request: str,
+    repo_full_name: str,
+    token: Optional[str] = None,
+    branch_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Run a topology's fixed-sequence pipeline as a multi-task CrewAI crew.
+
+    Each agent in the sequence gets its own Task.  Tasks are linked via
+    CrewAI's ``context`` parameter so the output of step N feeds step N+1.
+    """
+    sequence = topology.routing_policy.sequence or []
+    if not sequence:
+        return {"error": "Topology has no agent sequence defined"}
+
+    # Set repo context
+    if repo_full_name:
+        owner, repo = repo_full_name.split("/")
+        active_ref = branch_name or "HEAD"
+        set_repo_context(owner, repo, token=token, branch=active_ref)
+
+    llm = build_llm()
+
+    # Build agents and tasks
+    agents = []
+    tasks = []
+    for i, agent_id in enumerate(sequence):
+        mapping = _TOPO_AGENT_MAP.get(agent_id)
+        if not mapping:
+            logger.warning("[GitPilot] Unknown topology agent ID: %s — skipping", agent_id)
+            continue
+        agent_type, base_description = mapping
+        agent = _get_agent(agent_type, llm)
+        agents.append(agent)
+
+        # Build task description: combine base description with user request
+        task_desc = (
+            f"User request: {user_request}\n"
+            f"Repository: {repo_full_name}\n"
+        )
+        if branch_name:
+            task_desc += f"Branch: {branch_name}\n"
+        task_desc += f"\nYour role in this pipeline: {base_description}"
+
+        # Context chaining: each task after the first receives prior tasks
+        context = tasks[:] if tasks else []
+
+        task = Task(
+            description=task_desc,
+            expected_output=f"Structured output from the {agent_id} phase",
+            agent=agent,
+            context=context if context else None,
+        )
+        tasks.append(task)
+
+    if not agents:
+        return {"error": "No valid agents could be built for this topology"}
+
+    # Load optional context pack
+    _ctx_pack = ""
+    if repo_full_name:
+        try:
+            from pathlib import Path as _P
+            _owner, _repo = repo_full_name.split("/")
+            _ws = _P.home() / ".gitpilot" / "workspaces" / _owner / _repo
+            _ctx_pack = build_context_pack(_ws, query=user_request)
+        except Exception:
+            pass
+    if _ctx_pack:
+        # Append context pack to the first task's description
+        tasks[0].description += "\n\n" + _ctx_pack
+
+    crew = Crew(
+        agents=agents,
+        tasks=tasks,
+        process=Process.sequential,
+        verbose=True,
+    )
+
+    def _run():
+        result = crew.kickoff()
+        if hasattr(result, "raw"):
+            return result.raw
+        return str(result)
+
+    ctx = contextvars.copy_context()
+    result_text = await asyncio.to_thread(ctx.run, _run)
+
+    return {
+        "category": "topology_pipeline",
+        "topology_id": topology.id,
+        "topology_name": topology.name,
+        "execution_style": topology.execution_style.value,
+        "agents_used": sequence,
+        "result": result_text,
     }
 
 
@@ -960,11 +1121,21 @@ async def create_pr_after_execution(
 
 
 # ============================================================================
-# Flow Definition (v2 -- expanded graph)
+# Flow Definition (v3 -- topology-aware with legacy fallback)
 # ============================================================================
 
-async def get_flow_definition() -> dict:
-    """Return the current CrewAI agent workflow as a visual graph."""
+async def get_flow_definition(topology_id: Optional[str] = None) -> dict:
+    """Return the agent workflow as a visual graph.
+
+    When *topology_id* is provided (or a saved preference exists), the graph
+    is served from the topology registry.  Otherwise the original hardcoded
+    graph is returned for backward compatibility.
+    """
+    tid = topology_id or get_saved_topology_preference()
+    if tid:
+        return get_topology_graph(tid)
+
+    # Legacy hardcoded graph (unchanged from v2)
     return {
         "nodes": [
             {

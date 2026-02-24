@@ -2,12 +2,15 @@ import React, { useEffect, useMemo, useState } from "react";
 import ContextTab from "./ProjectSettings/ContextTab.jsx";
 import UseCaseTab from "./ProjectSettings/UseCaseTab.jsx";
 import ConventionsTab from "./ProjectSettings/ConventionsTab.jsx";
+import EnvironmentSelector from "./EnvironmentSelector.jsx";
 
 export default function ProjectSettingsModal({
   owner,
   repo,
   isOpen,
   onClose,
+  activeEnvId,
+  onEnvChange,
 }) {
   const [activeTab, setActiveTab] = useState("context");
 
@@ -61,6 +64,11 @@ export default function ProjectSettingsModal({
             isActive={activeTab === "conventions"}
             onClick={() => setActiveTab("conventions")}
           />
+          <TabButton
+            label="Environment"
+            isActive={activeTab === "environment"}
+            onClick={() => setActiveTab("environment")}
+          />
         </div>
 
         <div style={styles.body}>
@@ -68,6 +76,17 @@ export default function ProjectSettingsModal({
           {activeTab === "usecase" && <UseCaseTab owner={owner} repo={repo} />}
           {activeTab === "conventions" && (
             <ConventionsTab owner={owner} repo={repo} />
+          )}
+          {activeTab === "environment" && (
+            <div style={{ maxWidth: 480 }}>
+              <div style={{ marginBottom: 12, fontSize: 13, color: "rgba(255,255,255,0.65)" }}>
+                Select and configure the execution environment for agent operations.
+              </div>
+              <EnvironmentSelector
+                activeEnvId={activeEnvId}
+                onEnvChange={onEnvChange}
+              />
+            </div>
           )}
         </div>
 

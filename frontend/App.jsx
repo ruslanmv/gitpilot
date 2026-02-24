@@ -8,6 +8,7 @@ import LlmSettings from "./components/LlmSettings.jsx";
 import FlowViewer from "./components/FlowViewer.jsx";
 import Footer from "./components/Footer.jsx";
 import ProjectSettingsModal from "./components/ProjectSettingsModal.jsx";
+import SessionSidebar from "./components/SessionSidebar.jsx";
 import { apiUrl, safeFetchJSON } from "./utils/api.js";
 
 function makeRepoKey(repo) {
@@ -30,6 +31,14 @@ export default function App() {
   const [repoStateByKey, setRepoStateByKey] = useState({});
   const [toast, setToast] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // Claude-Code-on-Web: Session sidebar + Environment state
+  const [activeSessionId, setActiveSessionId] = useState(null);
+  const [activeEnvId, setActiveEnvId] = useState("default");
+  const [sessionRefreshNonce, setSessionRefreshNonce] = useState(0);
+
+  // Sidebar UX: repo switcher collapsed by default once a repo is selected
+  const [repoSwitcherOpen, setRepoSwitcherOpen] = useState(false);
 
   const repoKey = useMemo(() => makeRepoKey(repo), [repo]);
 
@@ -86,6 +95,42 @@ export default function App() {
   const showToast = (title, message) => {
     setToast({ title, message });
     window.setTimeout(() => setToast(null), 5000);
+  };
+
+  // ---------------------------------------------------------------------------
+  // Session management (Claude-Code-on-Web parity)
+  // ---------------------------------------------------------------------------
+  const handleNewSession = async () => {
+    if (!repo) return;
+    try {
+      const token = localStorage.getItem("github_token");
+      const headers = {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      };
+      const res = await fetch("/api/sessions", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          repo_full_name: repoKey,
+          branch: currentBranch,
+        }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      setActiveSessionId(data.session_id);
+      setSessionRefreshNonce((n) => n + 1);
+      showToast("Session Created", `New session started.`);
+    } catch (err) {
+      console.warn("Failed to create session:", err);
+    }
+  };
+
+  const handleSelectSession = (session) => {
+    setActiveSessionId(session.id);
+    if (session.branch && session.branch !== currentBranch) {
+      handleBranchChange(session.branch);
+    }
   };
 
   // ---------------------------------------------------------------------------
@@ -340,57 +385,95 @@ export default function App() {
     <div className="app-root">
       <div className="main-wrapper">
         <aside className="sidebar">
+          {/* ---- Brand ---- */}
           <div className="logo-row">
             <div className="logo-square">GP</div>
             <div>
               <div className="logo-title">GitPilot</div>
-              <div className="logo-subtitle">Agentic GitHub copilot</div>
+              <div className="logo-subtitle">Agentic GitHub Copilot</div>
             </div>
           </div>
 
+          {/* ---- Navigation ---- */}
           <div className="main-nav">
             <button
               className={"nav-btn" + (activePage === "workspace" ? " nav-btn-active" : "")}
               onClick={() => setActivePage("workspace")}
             >
-              📁 Workspace
+              Workspace
             </button>
             <button
               className={"nav-btn" + (activePage === "flow" ? " nav-btn-active" : "")}
               onClick={() => setActivePage("flow")}
             >
-              🔄 Agent Flow
+              Agent Workflow
             </button>
-            {repo && (
-              <button
-                className="nav-btn"
-                onClick={() => setSettingsOpen(true)}
-              >
-                Project Settings
-              </button>
-            )}
             <button
               className={"nav-btn" + (activePage === "admin" ? " nav-btn-active" : "")}
               onClick={() => setActivePage("admin")}
             >
-              Admin / Settings
+              Settings
             </button>
           </div>
 
-          {activePage === "workspace" && (
-            <>
-              <RepoSelector onSelect={setRepo} />
-              {repo && (
-                <div className="sidebar-repo-info">
-                  <div className="sidebar-repo-name">{repo.full_name}</div>
-                  <div className="sidebar-repo-meta">
-                    {repo.private ? "Private" : "Public"} repository
-                  </div>
+          {/* ---- Active Context ---- */}
+          {repo && (
+            <div className="sidebar-context-card">
+              <div className="sidebar-context-header">
+                <div className="sidebar-section-label">CURRENT CONTEXT</div>
+                <button
+                  className="sidebar-context-close"
+                  onClick={() => { setRepo(null); setRepoSwitcherOpen(false); }}
+                  title="Exit repository context"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
+              </div>
+              <div className="sidebar-context-body">
+                <div className="sidebar-context-repo">{repo.full_name}</div>
+                <div className="sidebar-context-meta">
+                  <span>{currentBranch || defaultBranch}</span>
+                  <span className="sidebar-context-dot" />
+                  <span>{repo.private ? "Private" : "Public"}</span>
                 </div>
-              )}
-            </>
+              </div>
+              <div className="sidebar-context-actions">
+                <button
+                  className="sidebar-context-btn"
+                  onClick={() => setRepoSwitcherOpen((v) => !v)}
+                >
+                  {repoSwitcherOpen ? "Close" : "Switch repo"}
+                </button>
+                <button
+                  className="sidebar-context-btn"
+                  onClick={() => setSettingsOpen(true)}
+                >
+                  Project settings
+                </button>
+              </div>
+            </div>
           )}
 
+          {/* ---- Repository Switcher (collapsed when repo selected) ---- */}
+          {(!repo || repoSwitcherOpen) && (
+            <RepoSelector onSelect={(r) => { setRepo(r); setRepoSwitcherOpen(false); }} />
+          )}
+
+          {/* ---- Sessions ---- */}
+          {repo && (
+            <SessionSidebar
+              repo={repo}
+              activeSessionId={activeSessionId}
+              onSelectSession={handleSelectSession}
+              onNewSession={handleNewSession}
+              refreshNonce={sessionRefreshNonce}
+            />
+          )}
+
+          {/* ---- User ---- */}
           {userInfo && (
             <div className="user-profile">
               <div className="user-profile-header">
@@ -437,6 +520,7 @@ export default function App() {
                     onExecutionComplete={handleExecutionComplete}
                     sessionChatState={currentChatState}
                     onSessionChatStateChange={updateChatForCurrentBranch}
+                    sessionId={activeSessionId}
                   />
                 </main>
               </div>
@@ -458,6 +542,8 @@ export default function App() {
           repo={repo.full_name?.split("/")[1] || repo.name}
           isOpen={settingsOpen}
           onClose={() => setSettingsOpen(false)}
+          activeEnvId={activeEnvId}
+          onEnvChange={setActiveEnvId}
         />
       )}
 
