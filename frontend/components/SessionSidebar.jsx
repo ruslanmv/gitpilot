@@ -102,7 +102,7 @@ export default function SessionSidebar({
             No sessions yet.
             <br />
             <span style={{ fontSize: 11, opacity: 0.6 }}>
-              Start a chat to create one.
+              Your first message will create one automatically.
             </span>
           </div>
         )}

@@ -59,6 +59,11 @@ class Session:
     status: str = "active"  # active | paused | completed
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+    # Multi-repo context support
+    # Each entry: {"full_name": "owner/repo", "branch": "main", "mode": "read"|"write"}
+    repos: List[Dict[str, Any]] = field(default_factory=list)
+    active_repo: Optional[str] = None  # full_name of the write-target repo
+
     def add_message(self, role: str, content: str, **meta):
         self.messages.append(Message(role=role, content=content, metadata=meta))
         self.updated_at = datetime.now(timezone.utc).isoformat()
@@ -71,6 +76,18 @@ class Session:
         data = dict(data)  # shallow copy
         data["messages"] = [Message(**m) for m in data.get("messages", [])]
         data["checkpoints"] = [Checkpoint(**c) for c in data.get("checkpoints", [])]
+
+        # Backwards-compatible migration: populate repos from legacy single-repo
+        if not data.get("repos") and data.get("repo_full_name"):
+            data["repos"] = [{
+                "full_name": data["repo_full_name"],
+                "branch": data.get("branch", "main"),
+                "mode": "write",
+            }]
+            data.setdefault("active_repo", data["repo_full_name"])
+        data.setdefault("repos", [])
+        data.setdefault("active_repo", None)
+
         return cls(**data)
 
 
@@ -126,6 +143,8 @@ class SessionManager:
                     "status": data.get("status", "active"),
                     "updated_at": data.get("updated_at"),
                     "pr_number": data.get("pr_number"),
+                    "repos": data.get("repos", []),
+                    "active_repo": data.get("active_repo"),
                 })
                 if len(sessions) >= limit:
                     break

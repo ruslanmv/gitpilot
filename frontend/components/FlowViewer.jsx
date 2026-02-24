@@ -19,89 +19,245 @@ function colourFor(type) {
   return NODE_COLOURS[type] || DEFAULT_COLOUR;
 }
 
+const STYLE_COLOURS = {
+  single_task: "#6c8cff",
+  react_loop: "#ff7a3c",
+  crew_pipeline: "#4caf88",
+};
+
+const STYLE_LABELS = {
+  single_task: "Dispatch",
+  react_loop: "ReAct Loop",
+  crew_pipeline: "Pipeline",
+};
+
 /* ------------------------------------------------------------------ */
-/*  TopologySelector — dropdown grouped by category                    */
+/*  TopologyCard — single clickable topology card                      */
 /* ------------------------------------------------------------------ */
-function TopologySelector({ topologies, active, onChange, loading }) {
-  const systems  = topologies.filter((t) => t.category === "system");
+function TopologyCard({ topology, isActive, onClick }) {
+  const styleColor = STYLE_COLOURS[topology.execution_style] || "#9a9bb0";
+  const agentCount = topology.agents_used?.length || 0;
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        ...cardStyles.card,
+        borderColor: isActive ? styleColor : "#1e1f30",
+        backgroundColor: isActive ? `${styleColor}0D` : "#0c0d14",
+      }}
+    >
+      <div style={cardStyles.cardTop}>
+        <span style={cardStyles.icon}>{topology.icon}</span>
+        <span
+          style={{
+            ...cardStyles.styleBadge,
+            color: styleColor,
+            borderColor: `${styleColor}40`,
+          }}
+        >
+          {STYLE_LABELS[topology.execution_style] || topology.execution_style}
+        </span>
+      </div>
+      <div
+        style={{
+          ...cardStyles.name,
+          color: isActive ? "#f5f5f7" : "#c3c5dd",
+        }}
+      >
+        {topology.name}
+      </div>
+      <div style={cardStyles.desc}>{topology.description}</div>
+      <div style={cardStyles.agentCount}>
+        {agentCount} agent{agentCount !== 1 ? "s" : ""}
+      </div>
+    </button>
+  );
+}
+
+const cardStyles = {
+  card: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
+    padding: "10px 12px",
+    borderRadius: 8,
+    border: "1px solid #1e1f30",
+    cursor: "pointer",
+    textAlign: "left",
+    minWidth: 170,
+    maxWidth: 200,
+    flexShrink: 0,
+    transition: "border-color 0.2s, background-color 0.2s",
+  },
+  cardTop: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 6,
+  },
+  icon: {
+    fontSize: 18,
+  },
+  styleBadge: {
+    fontSize: 9,
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: "0.05em",
+    padding: "1px 6px",
+    borderRadius: 4,
+    border: "1px solid",
+  },
+  name: {
+    fontSize: 12,
+    fontWeight: 600,
+    lineHeight: 1.3,
+  },
+  desc: {
+    fontSize: 10,
+    color: "#71717A",
+    lineHeight: 1.3,
+    overflow: "hidden",
+    display: "-webkit-box",
+    WebkitLineClamp: 2,
+    WebkitBoxOrient: "vertical",
+  },
+  agentCount: {
+    fontSize: 9,
+    color: "#52525B",
+    fontWeight: 600,
+    marginTop: 2,
+  },
+};
+
+/* ------------------------------------------------------------------ */
+/*  TopologyPanel — card grid grouped by category                      */
+/* ------------------------------------------------------------------ */
+function TopologyPanel({
+  topologies,
+  activeTopology,
+  autoMode,
+  autoResult,
+  onSelect,
+  onToggleAuto,
+}) {
+  const systems = topologies.filter((t) => t.category === "system");
   const pipelines = topologies.filter((t) => t.category === "pipeline");
 
   return (
-    <div className="topology-selector">
-      <label htmlFor="topo-select">Topology:</label>
-      <select
-        id="topo-select"
-        value={active || ""}
-        onChange={(e) => onChange(e.target.value)}
-        disabled={loading}
-        style={{
-          background: "#1a1b2e",
-          color: "#e0e1f0",
-          border: "1px solid #3a3b4d",
-          borderRadius: 8,
-          padding: "6px 12px",
-          fontSize: 13,
-          fontWeight: 500,
-          cursor: "pointer",
-          minWidth: 240,
-        }}
-      >
-        <optgroup label="System Architectures">
+    <div style={panelStyles.root}>
+      {/* Auto-detect toggle */}
+      <div style={panelStyles.autoRow}>
+        <button
+          type="button"
+          onClick={onToggleAuto}
+          style={{
+            ...panelStyles.autoBtn,
+            borderColor: autoMode ? "#ff7a3c" : "#27272A",
+            color: autoMode ? "#ff7a3c" : "#71717A",
+            backgroundColor: autoMode ? "rgba(255, 122, 60, 0.06)" : "transparent",
+          }}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="10" />
+            <path d="M12 6v6l4 2" />
+          </svg>
+          Auto
+        </button>
+        {autoMode && autoResult && (
+          <span style={panelStyles.autoHint}>
+            Detected: {autoResult.icon} {autoResult.name}
+            {autoResult.confidence != null && (
+              <span style={{ opacity: 0.6 }}>
+                {" "}({Math.round(autoResult.confidence * 100)}%)
+              </span>
+            )}
+          </span>
+        )}
+      </div>
+
+      {/* System architectures */}
+      <div style={panelStyles.section}>
+        <div style={panelStyles.sectionLabel}>System Architectures</div>
+        <div style={panelStyles.cardRow}>
           {systems.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.icon} {t.name}
-            </option>
+            <TopologyCard
+              key={t.id}
+              topology={t}
+              isActive={activeTopology === t.id}
+              onClick={() => onSelect(t.id)}
+            />
           ))}
-        </optgroup>
-        <optgroup label="Task Pipelines">
+        </div>
+      </div>
+
+      {/* Task pipelines */}
+      <div style={panelStyles.section}>
+        <div style={panelStyles.sectionLabel}>Task Pipelines</div>
+        <div style={panelStyles.cardRow}>
           {pipelines.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.icon} {t.name} ({t.agents_used.length} agents)
-            </option>
+            <TopologyCard
+              key={t.id}
+              topology={t}
+              isActive={activeTopology === t.id}
+              onClick={() => onSelect(t.id)}
+            />
           ))}
-        </optgroup>
-      </select>
+        </div>
+      </div>
     </div>
   );
 }
 
-/* ------------------------------------------------------------------ */
-/*  TopologyBadge — shows execution style + agent count                */
-/* ------------------------------------------------------------------ */
-function TopologyBadge({ topology }) {
-  if (!topology) return null;
-
-  const styleLabels = {
-    single_task: "Single-Task",
-    react_loop: "ReAct Loop",
-    crew_pipeline: "Pipeline",
-  };
-
-  return (
-    <div
-      className="topology-badge"
-      style={{
-        display: "flex",
-        gap: 8,
-        alignItems: "center",
-        fontSize: 12,
-        color: "#9a9bb0",
-      }}
-    >
-      <span
-        style={{
-          background: "#1e1f30",
-          border: "1px solid #3a3b4d",
-          borderRadius: 6,
-          padding: "2px 8px",
-        }}
-      >
-        {styleLabels[topology.execution_style] || topology.execution_style}
-      </span>
-      <span>{topology.agents_used?.length || 0} agents</span>
-    </div>
-  );
-}
+const panelStyles = {
+  root: {
+    padding: "8px 16px 12px",
+    borderBottom: "1px solid #1e1f30",
+    backgroundColor: "#08090e",
+  },
+  autoRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 10,
+  },
+  autoBtn: {
+    display: "flex",
+    alignItems: "center",
+    gap: 5,
+    padding: "4px 10px",
+    borderRadius: 6,
+    border: "1px solid #27272A",
+    background: "transparent",
+    fontSize: 11,
+    fontWeight: 600,
+    cursor: "pointer",
+    transition: "border-color 0.15s, color 0.15s",
+  },
+  autoHint: {
+    fontSize: 11,
+    color: "#9a9bb0",
+  },
+  section: {
+    marginBottom: 8,
+  },
+  sectionLabel: {
+    fontSize: 9,
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: "0.08em",
+    color: "#52525B",
+    marginBottom: 6,
+  },
+  cardRow: {
+    display: "flex",
+    gap: 8,
+    overflowX: "auto",
+    scrollbarWidth: "none",
+    paddingBottom: 2,
+  },
+};
 
 /* ------------------------------------------------------------------ */
 /*  Main FlowViewer component                                          */
@@ -116,6 +272,12 @@ export default function FlowViewer() {
   const [topologies, setTopologies] = useState([]);
   const [activeTopology, setActiveTopology] = useState(null);
   const [topologyMeta, setTopologyMeta] = useState(null);
+
+  // Auto-detection state
+  const [autoMode, setAutoMode] = useState(false);
+  const [autoResult, setAutoResult] = useState(null);
+  const [autoTestMessage, setAutoTestMessage] = useState("");
+
   const initialLoadDone = useRef(false);
 
   /* ---------- Load topology list on mount ---------- */
@@ -167,19 +329,17 @@ export default function FlowViewer() {
         });
       }
 
-      // Use explicit positions from the topology, or fall back to grid layout
+      // Build ReactFlow nodes
       const RFnodes = data.nodes.map((n, i) => {
         const nodeType = n.type || "default";
         const colour = colourFor(nodeType);
         const d = n.data || {};
 
-        // Build the label content
         const label = d.label || n.label || n.id;
         const description = d.description || n.description || "";
         const model = d.model;
         const mode = d.mode;
 
-        // Use position from topology data if available, otherwise grid fallback
         const pos = n.position || {
           x: 50 + (i % 3) * 250,
           y: 50 + Math.floor(i / 3) * 180,
@@ -194,14 +354,7 @@ export default function FlowViewer() {
                   {label}
                 </div>
                 {model && (
-                  <div
-                    style={{
-                      fontSize: 9,
-                      color: "#6c8cff",
-                      marginBottom: 2,
-                      fontFamily: "monospace",
-                    }}
-                  >
+                  <div style={{ fontSize: 9, color: "#6c8cff", marginBottom: 2, fontFamily: "monospace" }}>
                     {model}
                   </div>
                 )}
@@ -216,14 +369,7 @@ export default function FlowViewer() {
                     {mode}
                   </div>
                 )}
-                <div
-                  style={{
-                    fontSize: 10,
-                    color: "#9a9bb0",
-                    maxWidth: 160,
-                    lineHeight: 1.3,
-                  }}
-                >
+                <div style={{ fontSize: 10, color: "#9a9bb0", maxWidth: 160, lineHeight: 1.3 }}>
                   {description}
                 </div>
               </div>
@@ -244,6 +390,7 @@ export default function FlowViewer() {
         };
       });
 
+      // Build ReactFlow edges
       const RFedges = data.edges.map((e) => ({
         id: e.id,
         source: e.source,
@@ -251,15 +398,8 @@ export default function FlowViewer() {
         label: e.label,
         animated: e.animated !== false,
         style: { stroke: "#7a7b8e", strokeWidth: 2 },
-        labelStyle: {
-          fill: "#c3c5dd",
-          fontSize: 11,
-          fontWeight: 500,
-        },
-        labelBgStyle: {
-          fill: "#101117",
-          fillOpacity: 0.9,
-        },
+        labelStyle: { fill: "#c3c5dd", fontSize: 11, fontWeight: 500 },
+        labelBgStyle: { fill: "#101117", fillOpacity: 0.9 },
         ...(e.type === "bidirectional" && {
           markerEnd: { type: "arrowclosed", color: "#7a7b8e" },
           markerStart: { type: "arrowclosed", color: "#7a7b8e" },
@@ -278,7 +418,7 @@ export default function FlowViewer() {
     }
   }, [topologies]);
 
-  // Load graph on mount and whenever activeTopology changes
+  // Load graph whenever activeTopology changes
   useEffect(() => {
     loadGraph(activeTopology);
   }, [activeTopology, loadGraph]);
@@ -287,6 +427,7 @@ export default function FlowViewer() {
   const handleTopologyChange = useCallback(
     async (newTopologyId) => {
       setActiveTopology(newTopologyId);
+      setAutoMode(false); // Manual selection disables auto
       // Persist preference (fire-and-forget)
       try {
         await fetch("/api/settings/topology", {
@@ -301,8 +442,55 @@ export default function FlowViewer() {
     []
   );
 
+  /* ---------- Auto-detection ---------- */
+  const handleToggleAuto = useCallback(() => {
+    setAutoMode((prev) => !prev);
+    if (!autoMode) {
+      setAutoResult(null);
+    }
+  }, [autoMode]);
+
+  const handleAutoClassify = useCallback(
+    async (message) => {
+      if (!message.trim()) return;
+      try {
+        const res = await fetch("/api/flow/classify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message }),
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const recommendedId = data.recommended_topology;
+        const topo = topologies.find((t) => t.id === recommendedId);
+        setAutoResult({
+          id: recommendedId,
+          name: topo?.name || recommendedId,
+          icon: topo?.icon || "",
+          confidence: data.confidence,
+          alternatives: data.alternatives || [],
+        });
+        setActiveTopology(recommendedId);
+      } catch (e) {
+        console.warn("Auto-classify failed:", e);
+      }
+    },
+    [topologies]
+  );
+
+  // Debounced auto-classify when test message changes
+  useEffect(() => {
+    if (!autoMode || !autoTestMessage.trim()) return;
+    const t = setTimeout(() => handleAutoClassify(autoTestMessage), 500);
+    return () => clearTimeout(t);
+  }, [autoTestMessage, autoMode, handleAutoClassify]);
+
+  /* ---------- Render ---------- */
+  const activeStyleColor = STYLE_COLOURS[topologyMeta?.execution_style] || "#9a9bb0";
+
   return (
     <div className="flow-root">
+      {/* Header */}
       <div className="flow-header">
         <div>
           <h1>Agent Workflow</h1>
@@ -311,36 +499,96 @@ export default function FlowViewer() {
             plan and apply changes to your repositories.
           </p>
         </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
-          {topologies.length > 0 && (
-            <TopologySelector
-              topologies={topologies}
-              active={activeTopology}
-              onChange={handleTopologyChange}
-              loading={loading}
-            />
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {topologyMeta && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#9a9bb0" }}>
+              <span style={{ fontSize: 18 }}>{topologyMeta.icon}</span>
+              <span style={{ fontWeight: 600, color: "#e0e1f0" }}>{topologyMeta.name}</span>
+              <span
+                style={{
+                  padding: "2px 8px",
+                  borderRadius: 6,
+                  border: `1px solid ${activeStyleColor}40`,
+                  color: activeStyleColor,
+                  fontSize: 10,
+                  fontWeight: 700,
+                  textTransform: "uppercase",
+                }}
+              >
+                {STYLE_LABELS[topologyMeta.execution_style] || topologyMeta.execution_style}
+              </span>
+              <span>{topologyMeta.agents_used?.length || 0} agents</span>
+            </div>
           )}
-          <TopologyBadge topology={topologyMeta} />
-          {loading && <span className="badge">Loading...</span>}
+          {loading && <span style={{ fontSize: 11, color: "#6c8cff" }}>Loading...</span>}
         </div>
       </div>
 
-      {topologyMeta && topologyMeta.description && (
+      {/* Topology selector panel */}
+      {topologies.length > 0 && (
+        <TopologyPanel
+          topologies={topologies}
+          activeTopology={activeTopology}
+          autoMode={autoMode}
+          autoResult={autoResult}
+          onSelect={handleTopologyChange}
+          onToggleAuto={handleToggleAuto}
+        />
+      )}
+
+      {/* Auto-detection test input (shown when auto mode is on) */}
+      {autoMode && (
+        <div style={autoInputStyles.wrap}>
+          <div style={autoInputStyles.label}>
+            Test auto-detection: type a task description to see which topology is recommended
+          </div>
+          <input
+            type="text"
+            placeholder='e.g. "Fix the 403 error in auth middleware" or "Add a REST endpoint for users"'
+            value={autoTestMessage}
+            onChange={(e) => setAutoTestMessage(e.target.value)}
+            style={autoInputStyles.input}
+          />
+          {autoResult && autoResult.alternatives?.length > 0 && (
+            <div style={autoInputStyles.altRow}>
+              <span style={{ color: "#52525B", fontSize: 10 }}>Alternatives:</span>
+              {autoResult.alternatives.slice(0, 3).map((alt) => {
+                const altTopo = topologies.find((t) => t.id === alt.id);
+                return (
+                  <button
+                    key={alt.id}
+                    type="button"
+                    style={autoInputStyles.altBtn}
+                    onClick={() => handleTopologyChange(alt.id)}
+                  >
+                    {altTopo?.icon} {altTopo?.name || alt.id}
+                    <span style={{ opacity: 0.5 }}>
+                      {alt.confidence != null ? ` ${Math.round(alt.confidence * 100)}%` : ""}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Description bar */}
+      {topologyMeta && topologyMeta.description && !autoMode && (
         <div
           style={{
             padding: "8px 16px",
-            margin: "0 0 8px",
             fontSize: 12,
             color: "#9a9bb0",
-            background: "#13141f",
-            borderRadius: 8,
-            border: "1px solid #1e1f30",
+            background: "#0a0b12",
+            borderBottom: "1px solid #1e1f30",
           }}
         >
           {topologyMeta.icon} {topologyMeta.description}
         </div>
       )}
 
+      {/* ReactFlow canvas */}
       <div className="flow-canvas">
         {error ? (
           <div className="flow-error">
@@ -368,3 +616,44 @@ export default function FlowViewer() {
     </div>
   );
 }
+
+const autoInputStyles = {
+  wrap: {
+    padding: "8px 16px 10px",
+    borderBottom: "1px solid #1e1f30",
+    backgroundColor: "#0c0d14",
+  },
+  label: {
+    fontSize: 10,
+    color: "#71717A",
+    marginBottom: 6,
+  },
+  input: {
+    width: "100%",
+    padding: "8px 12px",
+    borderRadius: 6,
+    border: "1px solid #27272A",
+    background: "#08090e",
+    color: "#e0e1f0",
+    fontSize: 12,
+    fontFamily: "monospace",
+    outline: "none",
+    boxSizing: "border-box",
+  },
+  altRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 6,
+    flexWrap: "wrap",
+  },
+  altBtn: {
+    padding: "2px 8px",
+    borderRadius: 4,
+    border: "1px solid #27272A",
+    background: "transparent",
+    color: "#9a9bb0",
+    fontSize: 10,
+    cursor: "pointer",
+  },
+};

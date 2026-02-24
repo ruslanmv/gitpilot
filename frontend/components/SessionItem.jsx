@@ -24,9 +24,10 @@ export default function SessionItem({ session, isActive, onSelect, onDelete }) {
 
   const timeAgo = formatTimeAgo(session.updated_at);
 
+  // Prefer name (set from first user prompt) over generic fallback
   const title =
     session.name ||
-    (session.branch ? `Session on ${session.branch}` : `Session ${session.id?.slice(0, 8)}`);
+    (session.branch ? `${session.branch}` : `Session ${session.id?.slice(0, 8)}`);
 
   return (
     <div
