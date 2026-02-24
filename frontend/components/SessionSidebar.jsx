@@ -13,6 +13,7 @@ export default function SessionSidebar({
   activeSessionId,
   onSelectSession,
   onNewSession,
+  onDeleteSession,
   refreshNonce = 0,
 }) {
   const [sessions, setSessions] = useState([]);
@@ -69,6 +70,8 @@ export default function SessionSidebar({
       const headers = token ? { Authorization: `Bearer ${token}` } : {};
       await fetch(`/api/sessions/${sessionId}`, { method: "DELETE", headers });
       setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+      // Notify parent so it can clear the chat if this was the active session
+      onDeleteSession?.(sessionId);
     } catch (err) {
       console.warn("Failed to delete session:", err);
     }
