@@ -16,7 +16,7 @@ const getHeaders = () => ({
 export default function ChatPanel({
   repo,
   defaultBranch = "main",
-  currentBranch, // ✅ do NOT default here; parent must pass the real one
+  currentBranch, // do NOT default here; parent must pass the real one
   onExecutionComplete,
   sessionChatState,
   onSessionChatStateChange,
@@ -37,6 +37,10 @@ export default function ChatPanel({
   const [diffData, setDiffData] = useState(null);
   const [showDiffViewer, setShowDiffViewer] = useState(false);
   const wsRef = useRef(null);
+
+  // Ref mirrors streamingEvents so WS callbacks avoid stale closures
+  const streamingEventsRef = useRef([]);
+  useEffect(() => { streamingEventsRef.current = streamingEvents; }, [streamingEvents]);
 
   const messagesEndRef = useRef(null);
   const prevMsgCountRef = useRef((sessionChatState?.messages || []).length);
@@ -69,26 +73,33 @@ export default function ChatPanel({
         }
       },
       onStatusChange: (newStatus) => {
-        if (newStatus === "waiting" && streamingEvents.length > 0) {
-          // Agent finished — consolidate streaming events into a message
-          const textParts = streamingEvents
-            .filter((e) => e.type === "agent_message")
-            .map((e) => e.content);
-          if (textParts.length > 0) {
-            const consolidated = {
-              from: "ai",
-              role: "assistant",
-              answer: textParts.join(""),
-              content: textParts.join(""),
-            };
-            setMessages((prev) => [...prev, consolidated]);
-          }
-          setStreamingEvents([]);
+        if (newStatus === "waiting") {
+          // Always clear loading state when agent finishes
           setLoadingPlan(false);
+
+          // Consolidate streaming events into a chat message (use ref to
+          // avoid stale closure — streamingEvents state would be stale here)
+          const events = streamingEventsRef.current;
+          if (events.length > 0) {
+            const textParts = events
+              .filter((e) => e.type === "agent_message")
+              .map((e) => e.content);
+            if (textParts.length > 0) {
+              const consolidated = {
+                from: "ai",
+                role: "assistant",
+                answer: textParts.join(""),
+                content: textParts.join(""),
+              };
+              setMessages((prev) => [...prev, consolidated]);
+            }
+            setStreamingEvents([]);
+          }
         }
       },
       onError: (err) => {
         console.warn("[ws] Error:", err);
+        setLoadingPlan(false);
       },
     });
 
@@ -101,7 +112,7 @@ export default function ChatPanel({
   }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------------------------------------------------------------------------
-  // 1) SESSION SYNC: Restore chat when branch OR repo changes
+  // 1) SESSION SYNC: Restore chat when branch, repo, OR session changes
   // IMPORTANT: Do NOT depend on sessionChatState here (prevents prop/state loop)
   // ---------------------------------------------------------------------------
   useEffect(() => {
@@ -111,7 +122,7 @@ export default function ChatPanel({
     setMessages(nextMessages);
     setPlan(nextPlan);
 
-    // Reset transient UI state on branch/repo switch
+    // Reset transient UI state on branch/repo/session switch
     setGoal("");
     setStatus("");
     setLoadingPlan(false);
@@ -122,7 +133,7 @@ export default function ChatPanel({
     // Update msg count tracker so auto-scroll doesn't "jump" on switch
     prevMsgCountRef.current = nextMessages.length;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentBranch, repo?.full_name]);
+  }, [currentBranch, repo?.full_name, sessionId]);
 
   // ---------------------------------------------------------------------------
   // 2) PERSISTENCE: Save chat to Parent (no loop now because sync only on branch)
@@ -163,7 +174,7 @@ export default function ChatPanel({
 
     const text = goal.trim();
 
-    // Optimistic update (old UX: user bubble appears immediately)
+    // Optimistic update (user bubble appears immediately)
     const userMsg = { from: "user", role: "user", text, content: text };
     setMessages((prev) => [...prev, userMsg]);
 
@@ -172,14 +183,8 @@ export default function ChatPanel({
     setPlan(null);
     setStreamingEvents([]);
 
-    // Try WebSocket first, fall back to HTTP
-    if (wsRef.current?.connected) {
-      wsRef.current.sendMessage(text);
-      setGoal("");
-      return;
-    }
-
-    // ✅ Guard: never send null/undefined branch_name
+    // Always use HTTP for plan generation (the original reliable flow).
+    // WebSocket is only used for real-time streaming feedback display.
     const effectiveBranch = currentBranch || defaultBranch || "HEAD";
 
     try {
@@ -199,19 +204,24 @@ export default function ChatPanel({
 
       setPlan(data);
 
+      // Extract summary from nested plan structure or top-level
+      const summary =
+        data.plan?.summary || data.summary || data.message ||
+        "Here is the proposed plan for your request.";
+
       // Assistant response (Answer + Action Plan)
       setMessages((prev) => [
         ...prev,
         {
           from: "ai",
           role: "assistant",
-          answer: data.summary || "Here is the proposed plan for your request.",
-          content: data.summary || "Here is the proposed plan for your request.",
+          answer: summary,
+          content: summary,
           plan: data,
         },
       ]);
 
-      // Clear input only after success (old behavior)
+      // Clear input only after success
       setGoal("");
     } catch (err) {
       const msg = String(err?.message || err);

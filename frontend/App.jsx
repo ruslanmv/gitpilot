@@ -1,5 +1,5 @@
 // frontend/App.jsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import LoginPage from "./components/LoginPage.jsx";
 import RepoSelector from "./components/RepoSelector.jsx";
 import ProjectContextPanel from "./components/ProjectContextPanel.jsx";
@@ -9,6 +9,8 @@ import FlowViewer from "./components/FlowViewer.jsx";
 import Footer from "./components/Footer.jsx";
 import ProjectSettingsModal from "./components/ProjectSettingsModal.jsx";
 import SessionSidebar from "./components/SessionSidebar.jsx";
+import ContextBar from "./components/ContextBar.jsx";
+import AddRepoModal from "./components/AddRepoModal.jsx";
 import { apiUrl, safeFetchJSON } from "./utils/api.js";
 
 function makeRepoKey(repo) {
@@ -21,7 +23,12 @@ function uniq(arr) {
 }
 
 export default function App() {
-  const [repo, setRepo] = useState(null);
+  // ---- Multi-repo context state ----
+  const [contextRepos, setContextRepos] = useState([]);
+  // Each entry: { repoKey: "owner/repo", repo: {...}, branch: "main" }
+  const [activeRepoKey, setActiveRepoKey] = useState(null);
+  const [addRepoOpen, setAddRepoOpen] = useState(false);
+
   const [activePage, setActivePage] = useState("workspace");
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -37,10 +44,13 @@ export default function App() {
   const [activeEnvId, setActiveEnvId] = useState("default");
   const [sessionRefreshNonce, setSessionRefreshNonce] = useState(0);
 
-  // Sidebar UX: repo switcher collapsed by default once a repo is selected
-  const [repoSwitcherOpen, setRepoSwitcherOpen] = useState(false);
+  // ---- Derived `repo` — keeps all downstream consumers unchanged ----
+  const repo = useMemo(() => {
+    const entry = contextRepos.find((r) => r.repoKey === activeRepoKey);
+    return entry?.repo || null;
+  }, [contextRepos, activeRepoKey]);
 
-  const repoKey = useMemo(() => makeRepoKey(repo), [repo]);
+  const repoKey = activeRepoKey;
 
   // Convenient selectors
   const currentRepoState = repoKey ? repoStateByKey[repoKey] : null;
@@ -52,7 +62,66 @@ export default function App() {
   const pulseNonce = currentRepoState?.pulseNonce || 0;
   const chatByBranch = currentRepoState?.chatByBranch || {};
 
-  // Init / reconcile repo state
+  // ---------------------------------------------------------------------------
+  // Multi-repo context management
+  // ---------------------------------------------------------------------------
+  const addRepoToContext = useCallback((r) => {
+    const key = makeRepoKey(r);
+    if (!key) return;
+
+    setContextRepos((prev) => {
+      // Don't add duplicates
+      if (prev.some((e) => e.repoKey === key)) {
+        // Already in context — just activate it
+        setActiveRepoKey(key);
+        return prev;
+      }
+      const entry = { repoKey: key, repo: r, branch: r.default_branch || "main" };
+      const next = [...prev, entry];
+      return next;
+    });
+    setActiveRepoKey(key);
+    setAddRepoOpen(false);
+  }, []);
+
+  const removeRepoFromContext = useCallback((key) => {
+    setContextRepos((prev) => {
+      const next = prev.filter((e) => e.repoKey !== key);
+      // Reassign active if we removed the active one
+      setActiveRepoKey((curActive) => {
+        if (curActive === key) {
+          return next.length > 0 ? next[0].repoKey : null;
+        }
+        return curActive;
+      });
+      return next;
+    });
+  }, []);
+
+  const clearAllContext = useCallback(() => {
+    setContextRepos([]);
+    setActiveRepoKey(null);
+  }, []);
+
+  const handleContextBranchChange = useCallback((targetRepoKey, newBranch) => {
+    // Update branch in contextRepos
+    setContextRepos((prev) =>
+      prev.map((e) =>
+        e.repoKey === targetRepoKey ? { ...e, branch: newBranch } : e
+      )
+    );
+    // Update branch in repoStateByKey
+    setRepoStateByKey((prev) => {
+      const cur = prev[targetRepoKey];
+      if (!cur) return prev;
+      return {
+        ...prev,
+        [targetRepoKey]: { ...cur, currentBranch: newBranch },
+      };
+    });
+  }, []);
+
+  // Init / reconcile repo state when active repo changes
   useEffect(() => {
     if (!repoKey || !repo) return;
 
@@ -114,6 +183,12 @@ export default function App() {
         body: JSON.stringify({
           repo_full_name: repoKey,
           branch: currentBranch,
+          repos: contextRepos.map((e) => ({
+            full_name: e.repoKey,
+            branch: e.branch,
+            mode: e.repoKey === activeRepoKey ? "write" : "read",
+          })),
+          active_repo: activeRepoKey,
         }),
       });
       if (!res.ok) return;
@@ -169,7 +244,37 @@ export default function App() {
   }, [chatByBranch, currentBranch, defaultBranch]);
 
   // ---------------------------------------------------------------------------
-  // Branch change (manual)
+  // Session-scoped chat state: isolate messages per (session + branch) instead
+  // of per-branch alone.  This prevents session A's messages from leaking into
+  // session B when both sessions share the same branch.
+  // ---------------------------------------------------------------------------
+  const [chatBySession, setChatBySession] = useState({});
+
+  const sessionChatState = useMemo(() => {
+    if (!activeSessionId) {
+      // No session — fall back to legacy branch-keyed chat
+      return currentChatState;
+    }
+    return chatBySession[activeSessionId] || { messages: [], plan: null };
+  }, [activeSessionId, chatBySession, currentChatState]);
+
+  const updateSessionChat = (patch) => {
+    if (activeSessionId) {
+      setChatBySession((prev) => ({
+        ...prev,
+        [activeSessionId]: {
+          ...(prev[activeSessionId] || { messages: [], plan: null }),
+          ...patch,
+        },
+      }));
+    } else {
+      // No active session — use legacy branch-keyed persistence
+      updateChatForCurrentBranch(patch);
+    }
+  };
+
+  // ---------------------------------------------------------------------------
+  // Branch change (manual — for active repo)
   // ---------------------------------------------------------------------------
   const handleBranchChange = (nextBranch) => {
     if (!repoKey) return;
@@ -192,6 +297,13 @@ export default function App() {
       return { ...prev, [repoKey]: nextState };
     });
 
+    // Also update contextRepos branch tracking
+    setContextRepos((prev) =>
+      prev.map((e) =>
+        e.repoKey === repoKey ? { ...e, branch: nextBranch } : e
+      )
+    );
+
     if (nextBranch === defaultBranch) {
       showToast("New Session", `Switched to ${defaultBranch}. Chat cleared.`);
     } else {
@@ -202,7 +314,6 @@ export default function App() {
   // ---------------------------------------------------------------------------
   // Execution complete
   // ---------------------------------------------------------------------------
-  // ✅ FIX: accept completionMsg and seed branch with it
   const handleExecutionComplete = ({
     branch,
     mode,
@@ -229,7 +340,6 @@ export default function App() {
 
       if (!next.chatByBranch) next.chatByBranch = {};
 
-      // Determine the branch we executed from (best-effort, but stable)
       const prevBranchKey =
         sourceBranch || cur.currentBranch || cur.defaultBranch || defaultBranch;
 
@@ -243,7 +353,6 @@ export default function App() {
             : `✅ **Update Published:** Commits pushed to \`${branch}\`.`,
       };
 
-      // Make sure completionMsg is valid and normalized
       const normalizedCompletion =
         completionMsg && (completionMsg.answer || completionMsg.content || completionMsg.executionLog)
           ? {
@@ -256,20 +365,15 @@ export default function App() {
           : null;
 
       if (mode === "hard-switch") {
-        // 1) Register branch
         next.sessionBranches = uniq([...(next.sessionBranches || []), branch]);
-
-        // 2) Switch UI context
         next.currentBranch = branch;
         next.pulseNonce = (next.pulseNonce || 0) + 1;
 
-        // 3) Handle chat history seeding/appending (✅ FIX)
         const existingTargetChat = next.chatByBranch[branch];
         const isExistingSession =
           existingTargetChat && (existingTargetChat.messages || []).length > 0;
 
         if (isExistingSession) {
-          // Existing branch: append completion + success message
           const appended = [
             ...(existingTargetChat.messages || []),
             ...(normalizedCompletion ? [normalizedCompletion] : []),
@@ -282,7 +386,6 @@ export default function App() {
             plan: null,
           };
         } else {
-          // New branch: seed from previous branch history + completion + success
           const prevChat =
             (cur.chatByBranch && cur.chatByBranch[prevBranchKey]) || { messages: [], plan: null };
 
@@ -296,12 +399,10 @@ export default function App() {
           };
         }
 
-        // Ensure default branch bucket exists
         if (!next.chatByBranch[next.defaultBranch]) {
           next.chatByBranch[next.defaultBranch] = { messages: [], plan: null };
         }
       } else if (mode === "sticky") {
-        // Sticky mode: stay on current branch, update that branch history
         next.currentBranch = cur.currentBranch || branch;
 
         const targetChat = next.chatByBranch[branch] || { messages: [], plan: null };
@@ -369,7 +470,7 @@ export default function App() {
     localStorage.removeItem("github_user");
     setIsAuthenticated(false);
     setUserInfo(null);
-    setRepo(null);
+    clearAllContext();
   };
 
   if (isLoading)
@@ -380,6 +481,8 @@ export default function App() {
     );
 
   if (!isAuthenticated) return <LoginPage onAuthenticated={handleAuthenticated} />;
+
+  const hasContext = contextRepos.length > 0;
 
   return (
     <div className="app-root">
@@ -416,50 +519,9 @@ export default function App() {
             </button>
           </div>
 
-          {/* ---- Active Context ---- */}
-          {repo && (
-            <div className="sidebar-context-card">
-              <div className="sidebar-context-header">
-                <div className="sidebar-section-label">CURRENT CONTEXT</div>
-                <button
-                  className="sidebar-context-close"
-                  onClick={() => { setRepo(null); setRepoSwitcherOpen(false); }}
-                  title="Exit repository context"
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <line x1="18" y1="6" x2="6" y2="18" />
-                    <line x1="6" y1="6" x2="18" y2="18" />
-                  </svg>
-                </button>
-              </div>
-              <div className="sidebar-context-body">
-                <div className="sidebar-context-repo">{repo.full_name}</div>
-                <div className="sidebar-context-meta">
-                  <span>{currentBranch || defaultBranch}</span>
-                  <span className="sidebar-context-dot" />
-                  <span>{repo.private ? "Private" : "Public"}</span>
-                </div>
-              </div>
-              <div className="sidebar-context-actions">
-                <button
-                  className="sidebar-context-btn"
-                  onClick={() => setRepoSwitcherOpen((v) => !v)}
-                >
-                  {repoSwitcherOpen ? "Close" : "Switch repo"}
-                </button>
-                <button
-                  className="sidebar-context-btn"
-                  onClick={() => setSettingsOpen(true)}
-                >
-                  Project settings
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* ---- Repository Switcher (collapsed when repo selected) ---- */}
-          {(!repo || repoSwitcherOpen) && (
-            <RepoSelector onSelect={(r) => { setRepo(r); setRepoSwitcherOpen(false); }} />
+          {/* ---- Repository Switcher (shown when no context) ---- */}
+          {!hasContext && (
+            <RepoSelector onSelect={(r) => addRepoToContext(r)} />
           )}
 
           {/* ---- Sessions ---- */}
@@ -495,34 +557,49 @@ export default function App() {
           {activePage === "flow" && <FlowViewer />}
           {activePage === "workspace" &&
             (repo ? (
-              <div className="workspace-grid">
-                <aside className="gp-context-column">
-                  <ProjectContextPanel
-                    repo={repo}
-                    defaultBranch={defaultBranch}
-                    currentBranch={currentBranch}
-                    sessionBranches={sessionBranches}
-                    onBranchChange={handleBranchChange}
-                    pulseNonce={pulseNonce}
-                    lastExecution={lastExecution}
-                  />
-                </aside>
+              <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+                {/* ---- Context Bar (single source of truth for repo selection) ---- */}
+                <ContextBar
+                  contextRepos={contextRepos}
+                  activeRepoKey={activeRepoKey}
+                  repoStateByKey={repoStateByKey}
+                  onActivate={setActiveRepoKey}
+                  onRemove={removeRepoFromContext}
+                  onAdd={() => setAddRepoOpen(true)}
+                  onBranchChange={handleContextBranchChange}
+                />
 
-                <main className="gp-chat-column">
-                  <div className="panel-header">
-                    <span>GitPilot chat</span>
-                  </div>
+                <div className="workspace-grid" style={{ flex: 1 }}>
+                  <aside className="gp-context-column">
+                    <ProjectContextPanel
+                      repo={repo}
+                      defaultBranch={defaultBranch}
+                      currentBranch={currentBranch}
+                      sessionBranches={sessionBranches}
+                      onBranchChange={handleBranchChange}
+                      pulseNonce={pulseNonce}
+                      lastExecution={lastExecution}
+                      onSettingsClick={() => setSettingsOpen(true)}
+                    />
+                  </aside>
 
-                  <ChatPanel
-                    repo={repo}
-                    defaultBranch={defaultBranch}
-                    currentBranch={currentBranch}
-                    onExecutionComplete={handleExecutionComplete}
-                    sessionChatState={currentChatState}
-                    onSessionChatStateChange={updateChatForCurrentBranch}
-                    sessionId={activeSessionId}
-                  />
-                </main>
+                  <main className="gp-chat-column">
+                    <div className="panel-header">
+                      <span>GitPilot chat</span>
+                    </div>
+
+                    <ChatPanel
+                      key={activeSessionId || "no-session"}
+                      repo={repo}
+                      defaultBranch={defaultBranch}
+                      currentBranch={currentBranch}
+                      onExecutionComplete={handleExecutionComplete}
+                      sessionChatState={sessionChatState}
+                      onSessionChatStateChange={updateSessionChat}
+                      sessionId={activeSessionId}
+                    />
+                  </main>
+                </div>
               </div>
             ) : (
               <div className="empty-state">
@@ -546,6 +623,14 @@ export default function App() {
           onEnvChange={setActiveEnvId}
         />
       )}
+
+      {/* Add Repo Modal */}
+      <AddRepoModal
+        isOpen={addRepoOpen}
+        onSelect={addRepoToContext}
+        onClose={() => setAddRepoOpen(false)}
+        excludeKeys={contextRepos.map((e) => e.repoKey)}
+      />
 
       {toast && (
         <div className="toast-notification">

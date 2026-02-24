@@ -673,11 +673,21 @@ def _build_terminal_agent(llm) -> Agent:
 # ============================================================================
 
 async def dispatch_request(
-    user_request: str,
-    repo_full_name: str,
+    user_request: Optional[str] = None,
+    repo_full_name: Optional[str] = None,
     token: Optional[str] = None,
     branch_name: Optional[str] = None,
     topology_id: Optional[str] = None,
+    # -----------------------------------------------------------------
+    # Backwards-compatible keyword arguments.
+    # Older callers (notably early WebSocket and A2A adapters) used:
+    #   dispatch_request(repo_owner=..., repo_name=..., message=...)
+    # Keeping these kwargs prevents crashes when frontend/backend drift.
+    # -----------------------------------------------------------------
+    repo_owner: Optional[str] = None,
+    repo_name: Optional[str] = None,
+    message: Optional[str] = None,
+    **_ignored_kwargs: Any,
 ) -> Dict[str, Any]:
     """Route a free-form user request to the appropriate agent(s) and return the result.
 
@@ -694,6 +704,16 @@ async def dispatch_request(
     When *topology_id* is ``None``, behaviour is identical to the original v2
     dispatcher.
     """
+    # ---- Input normalization / compat layer ----
+    if user_request is None and message is not None:
+        user_request = message
+    if repo_full_name is None and repo_owner and repo_name:
+        repo_full_name = f"{repo_owner}/{repo_name}"
+
+    if not user_request:
+        raise ValueError("dispatch_request: missing user_request (or legacy 'message')")
+    if not repo_full_name:
+        raise ValueError("dispatch_request: missing repo_full_name (or legacy repo_owner/repo_name)")
     # ---------- Topology-aware routing (additive) ----------
     _active_topology = None
     _resolved_tid = topology_id or get_saved_topology_preference()
