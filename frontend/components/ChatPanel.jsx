@@ -16,11 +16,12 @@ const getHeaders = () => ({
 export default function ChatPanel({
   repo,
   defaultBranch = "main",
-  currentBranch, // ✅ do NOT default here; parent must pass the real one
+  currentBranch, // do NOT default here; parent must pass the real one
   onExecutionComplete,
   sessionChatState,
   onSessionChatStateChange,
   sessionId,
+  onEnsureSession,
 }) {
   // Initialize state from props or defaults
   const [messages, setMessages] = useState(sessionChatState?.messages || []);
@@ -37,6 +38,14 @@ export default function ChatPanel({
   const [diffData, setDiffData] = useState(null);
   const [showDiffViewer, setShowDiffViewer] = useState(false);
   const wsRef = useRef(null);
+
+  // Ref mirrors streamingEvents so WS callbacks avoid stale closures
+  const streamingEventsRef = useRef([]);
+  useEffect(() => { streamingEventsRef.current = streamingEvents; }, [streamingEvents]);
+
+  // Skip the session-sync useEffect reset when we just created a session
+  // (the parent already seeded the messages into chatBySession)
+  const skipNextSyncRef = useRef(false);
 
   const messagesEndRef = useRef(null);
   const prevMsgCountRef = useRef((sessionChatState?.messages || []).length);
@@ -69,26 +78,33 @@ export default function ChatPanel({
         }
       },
       onStatusChange: (newStatus) => {
-        if (newStatus === "waiting" && streamingEvents.length > 0) {
-          // Agent finished — consolidate streaming events into a message
-          const textParts = streamingEvents
-            .filter((e) => e.type === "agent_message")
-            .map((e) => e.content);
-          if (textParts.length > 0) {
-            const consolidated = {
-              from: "ai",
-              role: "assistant",
-              answer: textParts.join(""),
-              content: textParts.join(""),
-            };
-            setMessages((prev) => [...prev, consolidated]);
-          }
-          setStreamingEvents([]);
+        if (newStatus === "waiting") {
+          // Always clear loading state when agent finishes
           setLoadingPlan(false);
+
+          // Consolidate streaming events into a chat message (use ref to
+          // avoid stale closure — streamingEvents state would be stale here)
+          const events = streamingEventsRef.current;
+          if (events.length > 0) {
+            const textParts = events
+              .filter((e) => e.type === "agent_message")
+              .map((e) => e.content);
+            if (textParts.length > 0) {
+              const consolidated = {
+                from: "ai",
+                role: "assistant",
+                answer: textParts.join(""),
+                content: textParts.join(""),
+              };
+              setMessages((prev) => [...prev, consolidated]);
+            }
+            setStreamingEvents([]);
+          }
         }
       },
       onError: (err) => {
         console.warn("[ws] Error:", err);
+        setLoadingPlan(false);
       },
     });
 
@@ -101,17 +117,25 @@ export default function ChatPanel({
   }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------------------------------------------------------------------------
-  // 1) SESSION SYNC: Restore chat when branch OR repo changes
+  // 1) SESSION SYNC: Restore chat when branch, repo, OR session changes
   // IMPORTANT: Do NOT depend on sessionChatState here (prevents prop/state loop)
   // ---------------------------------------------------------------------------
   useEffect(() => {
+    // When send() just created a session, the parent seeded the messages
+    // into chatBySession already.  Skip the reset so we don't wipe
+    // the optimistic user message that was already rendered.
+    if (skipNextSyncRef.current) {
+      skipNextSyncRef.current = false;
+      return;
+    }
+
     const nextMessages = sessionChatState?.messages || [];
     const nextPlan = sessionChatState?.plan || null;
 
     setMessages(nextMessages);
     setPlan(nextPlan);
 
-    // Reset transient UI state on branch/repo switch
+    // Reset transient UI state on branch/repo/session switch
     setGoal("");
     setStatus("");
     setLoadingPlan(false);
@@ -122,7 +146,7 @@ export default function ChatPanel({
     // Update msg count tracker so auto-scroll doesn't "jump" on switch
     prevMsgCountRef.current = nextMessages.length;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentBranch, repo?.full_name]);
+  }, [currentBranch, repo?.full_name, sessionId]);
 
   // ---------------------------------------------------------------------------
   // 2) PERSISTENCE: Save chat to Parent (no loop now because sync only on branch)
@@ -158,12 +182,24 @@ export default function ChatPanel({
   // ---------------------------------------------------------------------------
   // HANDLERS
   // ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Persist a message to the backend session (fire-and-forget)
+  // ---------------------------------------------------------------------------
+  const persistMessage = (sid, role, content) => {
+    if (!sid) return;
+    fetch(`/api/sessions/${sid}/message`, {
+      method: "POST",
+      headers: getHeaders(),
+      body: JSON.stringify({ role, content }),
+    }).catch(() => {}); // best-effort
+  };
+
   const send = async () => {
     if (!repo || !goal.trim()) return;
 
     const text = goal.trim();
 
-    // Optimistic update (old UX: user bubble appears immediately)
+    // Optimistic update (user bubble appears immediately)
     const userMsg = { from: "user", role: "user", text, content: text };
     setMessages((prev) => [...prev, userMsg]);
 
@@ -172,14 +208,30 @@ export default function ChatPanel({
     setPlan(null);
     setStreamingEvents([]);
 
-    // Try WebSocket first, fall back to HTTP
-    if (wsRef.current?.connected) {
-      wsRef.current.sendMessage(text);
-      setGoal("");
-      return;
+    // ------- Implicit session creation (Claude Code parity) -------
+    // Every chat must be backed by a session.  If none exists yet,
+    // create one on-demand before sending the plan request.
+    let sid = sessionId;
+    if (!sid && typeof onEnsureSession === "function") {
+      // Derive a short title from the first message
+      const sessionName = text.length > 60 ? text.slice(0, 57) + "..." : text;
+
+      // Tell the sync useEffect to skip the reset that would otherwise
+      // wipe the optimistic user message when activeSessionId changes.
+      skipNextSyncRef.current = true;
+
+      sid = await onEnsureSession(sessionName, [userMsg]);
+      if (!sid) {
+        // Session creation failed — continue without session
+        skipNextSyncRef.current = false;
+      }
     }
 
-    // ✅ Guard: never send null/undefined branch_name
+    // Persist user message to backend session
+    persistMessage(sid, "user", text);
+
+    // Always use HTTP for plan generation (the original reliable flow).
+    // WebSocket is only used for real-time streaming feedback display.
     const effectiveBranch = currentBranch || defaultBranch || "HEAD";
 
     try {
@@ -199,19 +251,27 @@ export default function ChatPanel({
 
       setPlan(data);
 
+      // Extract summary from nested plan structure or top-level
+      const summary =
+        data.plan?.summary || data.summary || data.message ||
+        "Here is the proposed plan for your request.";
+
       // Assistant response (Answer + Action Plan)
       setMessages((prev) => [
         ...prev,
         {
           from: "ai",
           role: "assistant",
-          answer: data.summary || "Here is the proposed plan for your request.",
-          content: data.summary || "Here is the proposed plan for your request.",
+          answer: summary,
+          content: summary,
           plan: data,
         },
       ]);
 
-      // Clear input only after success (old behavior)
+      // Persist assistant response to backend session
+      persistMessage(sid, "assistant", summary);
+
+      // Clear input only after success
       setGoal("");
     } catch (err) {
       const msg = String(err?.message || err);

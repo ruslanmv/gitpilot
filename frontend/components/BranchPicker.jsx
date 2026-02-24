@@ -16,14 +16,31 @@ import { createPortal } from "react-dom";
 // Simple per-repo branch cache so reopening the dropdown is instant
 const branchCache = {};
 
+/**
+ * Props:
+ *   repo, currentBranch, defaultBranch, sessionBranches, onBranchChange
+ *     — standard branch-picker props
+ *
+ *   externalAnchorRef (optional) — a React ref pointing to an external DOM
+ *     element to anchor the dropdown to.  When provided:
+ *       - BranchPicker skips rendering its own trigger button
+ *       - the dropdown opens immediately on mount
+ *       - closing the dropdown calls onClose()
+ *
+ *   onClose (optional) — called when the dropdown is dismissed (outside
+ *     click or Escape).  Only meaningful with externalAnchorRef.
+ */
 export default function BranchPicker({
   repo,
   currentBranch,
   defaultBranch,
   sessionBranches = [],
   onBranchChange,
+  externalAnchorRef,
+  onClose,
 }) {
-  const [open, setOpen] = useState(false);
+  const isExternalMode = !!externalAnchorRef;
+  const [open, setOpen] = useState(isExternalMode);
   const [query, setQuery] = useState("");
   const [branches, setBranches] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -35,6 +52,9 @@ export default function BranchPicker({
   const branch = currentBranch || defaultBranch || "main";
   const isAiSession = sessionBranches.includes(branch) && branch !== defaultBranch;
 
+  // The element used for dropdown positioning
+  const anchorRef = isExternalMode ? externalAnchorRef : triggerRef;
+
   const cacheKey = repo ? `${repo.owner}/${repo.name}` : null;
 
   // Seed from cache on mount / repo change
@@ -44,7 +64,7 @@ export default function BranchPicker({
     }
   }, [cacheKey]);
 
-  // Fetch branches
+  // Fetch branches from GitHub via backend
   const fetchBranches = useCallback(async (searchQuery) => {
     if (!repo) return;
     setLoading(true);
@@ -81,6 +101,7 @@ export default function BranchPicker({
     }
   }, [repo, cacheKey]);
 
+  // Fetch + focus when opened
   useEffect(() => {
     if (open) {
       fetchBranches(query);
@@ -95,24 +116,28 @@ export default function BranchPicker({
     return () => clearTimeout(t);
   }, [query, open, fetchBranches]);
 
-  // Close on outside click (check both trigger and portal dropdown)
+  // Close on outside click
   useEffect(() => {
     if (!open) return;
     const handler = (e) => {
-      const inTrigger = triggerRef.current && triggerRef.current.contains(e.target);
+      const inAnchor = anchorRef.current && anchorRef.current.contains(e.target);
       const inDropdown = dropdownRef.current && dropdownRef.current.contains(e.target);
-      if (!inTrigger && !inDropdown) {
-        setOpen(false);
-        setQuery("");
+      if (!inAnchor && !inDropdown) {
+        handleClose();
       }
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleSelect = (branchName) => {
+  const handleClose = useCallback(() => {
     setOpen(false);
     setQuery("");
+    onClose?.();
+  }, [onClose]);
+
+  const handleSelect = (branchName) => {
+    handleClose();
     if (branchName !== branch) {
       onBranchChange?.(branchName);
     }
@@ -126,10 +151,10 @@ export default function BranchPicker({
     }
   }
 
-  // Calculate portal position from trigger button
+  // Calculate portal position from anchor element
   const getDropdownPosition = () => {
-    if (!triggerRef.current) return { top: 0, left: 0 };
-    const rect = triggerRef.current.getBoundingClientRect();
+    if (!anchorRef.current) return { top: 0, left: 0 };
+    const rect = anchorRef.current.getBoundingClientRect();
     return {
       top: rect.bottom + 4,
       left: rect.left,
@@ -140,29 +165,31 @@ export default function BranchPicker({
 
   return (
     <div style={styles.container}>
-      {/* Trigger button */}
-      <button
-        ref={triggerRef}
-        type="button"
-        style={{
-          ...styles.trigger,
-          borderColor: isAiSession ? "rgba(59, 130, 246, 0.3)" : "#3F3F46",
-          color: isAiSession ? "#60a5fa" : "#E4E4E7",
-          backgroundColor: isAiSession ? "rgba(59, 130, 246, 0.05)" : "transparent",
-        }}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <line x1="6" y1="3" x2="6" y2="15" />
-          <circle cx="18" cy="6" r="3" />
-          <circle cx="6" cy="18" r="3" />
-          <path d="M18 9a9 9 0 0 1-9 9" />
-        </svg>
-        <span style={styles.branchName}>{branch}</span>
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <polyline points="6 9 12 15 18 9" />
-        </svg>
-      </button>
+      {/* Trigger button — hidden when using external anchor */}
+      {!isExternalMode && (
+        <button
+          ref={triggerRef}
+          type="button"
+          style={{
+            ...styles.trigger,
+            borderColor: isAiSession ? "rgba(59, 130, 246, 0.3)" : "#3F3F46",
+            color: isAiSession ? "#60a5fa" : "#E4E4E7",
+            backgroundColor: isAiSession ? "rgba(59, 130, 246, 0.05)" : "transparent",
+          }}
+          onClick={() => setOpen((v) => !v)}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <line x1="6" y1="3" x2="6" y2="15" />
+            <circle cx="18" cy="6" r="3" />
+            <circle cx="6" cy="18" r="3" />
+            <path d="M18 9a9 9 0 0 1-9 9" />
+          </svg>
+          <span style={styles.branchName}>{branch}</span>
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+      )}
 
       {/* Dropdown — portaled to document.body to escape overflow:hidden */}
       {open && createPortal(
@@ -185,8 +212,7 @@ export default function BranchPicker({
               style={styles.searchInput}
               onKeyDown={(e) => {
                 if (e.key === "Escape") {
-                  setOpen(false);
-                  setQuery("");
+                  handleClose();
                 }
               }}
             />

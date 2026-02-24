@@ -7,6 +7,9 @@
 
 const WS_RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 16000];
 const HEARTBEAT_INTERVAL = 30000;
+const MAX_RECONNECT_ATTEMPTS = 5;
+// If a connection dies within this window it counts as unstable
+const MIN_STABLE_DURATION_MS = 3000;
 
 export class SessionWebSocket {
   constructor(sessionId, { onMessage, onStatusChange, onError, onConnect, onDisconnect } = {}) {
@@ -16,6 +19,7 @@ export class SessionWebSocket {
     this._reconnectAttempt = 0;
     this._heartbeatTimer = null;
     this._closed = false;
+    this._connectTime = 0;
   }
 
   connect() {
@@ -36,6 +40,7 @@ export class SessionWebSocket {
     this._ws = new WebSocket(wsUrl);
 
     this._ws.onopen = () => {
+      this._connectTime = Date.now();
       this._reconnectAttempt = 0;
       this._startHeartbeat();
       this._handlers.onConnect?.();
@@ -53,8 +58,19 @@ export class SessionWebSocket {
     this._ws.onclose = (event) => {
       this._stopHeartbeat();
       this._handlers.onDisconnect?.(event);
+
       if (!this._closed) {
-        this._scheduleReconnect();
+        // If connection died very quickly, count it as unstable
+        const lived = Date.now() - (this._connectTime || 0);
+        if (lived < MIN_STABLE_DURATION_MS) {
+          this._reconnectAttempt++;
+        }
+
+        if (this._reconnectAttempt < MAX_RECONNECT_ATTEMPTS) {
+          this._scheduleReconnect();
+        } else {
+          console.warn('[ws] Max reconnect attempts reached, giving up.');
+        }
       }
     };
 
