@@ -21,13 +21,13 @@ export GITPILOT_CONFIG_DIR=/tmp/gitpilot
 # -- Display configuration ---------------------------------------------------
 echo "[1/2] Configuration:"
 echo "       Provider: ${GITPILOT_PROVIDER:-ollabridge}"
-echo "       OllaBridge URL: ${OLLABRIDGE_BASE_URL:-https://ruslanmv-ollabridge-cloud.hf.space}"
+echo "       OllaBridge URL: ${OLLABRIDGE_BASE_URL:-https://ruslanmv-ollabridge.hf.space}"
 echo "       Model: ${GITPILOT_OLLABRIDGE_MODEL:-qwen2.5:1.5b}"
 echo ""
 
 # -- Check OllaBridge Cloud connectivity (non-blocking) ----------------------
 echo "[2/2] Checking LLM provider..."
-if curl -sf "${OLLABRIDGE_BASE_URL:-https://ruslanmv-ollabridge-cloud.hf.space}/health" > /dev/null 2>&1; then
+if curl -sf "${OLLABRIDGE_BASE_URL:-https://ruslanmv-ollabridge.hf.space}/health" > /dev/null 2>&1; then
     echo "       OllaBridge Cloud is reachable"
 else
     echo "       OllaBridge Cloud not reachable (will retry on first request)"
