@@ -14,6 +14,7 @@ DOCKER_COMPOSE := $(shell if command -v docker > /dev/null && docker compose ver
         dev run test lint fmt build publish-test publish clean stop \
         vercel vercel-build vercel-deploy \
         build-container run-container stop-container logs-container clean-container publish-container \
+        extension-install extension-compile extension-package extension-publish publish-extension \
         mcp mcp-down mcp-logs gateway gateway-down gateway-logs gateway-register
 
 ## Show available targets
@@ -46,6 +47,22 @@ help:
 	@echo "  make logs-container   View logs from all containers"
 	@echo "  make clean-container  Remove containers, images, and volumes"
 	@echo "  make publish-container Publish Docker images to Docker Hub"
+	@echo ""
+	@echo "VS Code Extension Commands:"
+	@echo "  make extension-install   Install extension npm dependencies"
+	@echo "  make extension-compile   Compile TypeScript to JavaScript"
+	@echo "  make extension-package   Package extension into .vsix file"
+	@echo "  make extension-publish   Publish extension to VS Code Marketplace"
+	@echo "  make publish-extension   Alias for extension-publish"
+	@echo ""
+	@echo "  Extension publish requires VSCE_PAT (Azure DevOps Personal Access Token)"
+	@echo "  with Marketplace > Manage scope."
+	@echo ""
+	@echo "  Usage:"
+	@echo "    make publish-extension VSCE_PAT=your-pat-here"
+	@echo "    # or"
+	@echo "    export VSCE_PAT=your-pat-here"
+	@echo "    make publish-extension"
 	@echo ""
 	@echo "MCP Deployment Commands:"
 	@echo "  make mcp              Start GitPilot MCP server (A2A endpoints only)"
@@ -322,6 +339,76 @@ publish-container:
 	@echo "4. Redeploy Vercel to use new backend URL"
 	@echo ""
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# =============================================================================
+# VS Code Extension (Build, Package, Publish)
+# =============================================================================
+
+EXTENSION_DIR := extensions/vscode
+VSCE          ?= npx vsce
+
+## Install VS Code extension npm dependencies
+extension-install:
+	@echo "📦 Installing VS Code extension dependencies..."
+	@cd $(EXTENSION_DIR) && npm install
+	@echo "✅ Extension dependencies installed."
+
+## Compile TypeScript to JavaScript
+extension-compile: extension-install
+	@echo "🔧 Compiling VS Code extension TypeScript..."
+	@cd $(EXTENSION_DIR) && npm run compile
+	@echo "✅ Extension compiled successfully."
+
+## Package extension into .vsix file
+extension-package: extension-compile
+	@echo "📦 Packaging VS Code extension..."
+	@cd $(EXTENSION_DIR) && $(VSCE) package
+	@echo ""
+	@echo "✅ Extension packaged successfully!"
+	@echo ""
+	@echo "📁 VSIX file:"
+	@ls -lh $(EXTENSION_DIR)/*.vsix 2>/dev/null || echo "  (no .vsix found)"
+	@echo ""
+	@echo "Install locally with:"
+	@echo "  code --install-extension $(EXTENSION_DIR)/gitpilot-vscode-*.vsix"
+
+## Publish extension to VS Code Marketplace
+extension-publish: extension-compile
+	@echo "🚀 Publishing VS Code extension to Marketplace..."
+	@echo ""
+	@if [ -z "$(VSCE_PAT)" ]; then \
+		echo "❌ Error: VSCE_PAT not set!"; \
+		echo ""; \
+		echo "You need an Azure DevOps Personal Access Token with"; \
+		echo "Marketplace > Manage scope."; \
+		echo ""; \
+		echo "Usage:"; \
+		echo "  make publish-extension VSCE_PAT=your-pat-here"; \
+		echo ""; \
+		echo "Or:"; \
+		echo "  export VSCE_PAT=your-pat-here"; \
+		echo "  make publish-extension"; \
+		echo ""; \
+		echo "To create a PAT:"; \
+		echo "  1. Go to https://dev.azure.com/_usersSettings/tokens"; \
+		echo "  2. New Token → Organization: All accessible organizations"; \
+		echo "  3. Scopes → Show all → check Marketplace > Manage"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@cd $(EXTENSION_DIR) && $(VSCE) publish -p "$(VSCE_PAT)"
+	@echo ""
+	@echo "✅ Extension published successfully!"
+	@echo ""
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo "🎉 Your extension is live at:"
+	@echo "  https://marketplace.visualstudio.com/items?itemName=ruslanmv.gitpilot-vscode"
+	@echo ""
+	@echo "Search 'GitPilot' in VS Code Extensions to install."
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+## Alias: publish-extension → extension-publish
+publish-extension: extension-publish
+
 # =============================================================================
 # MCP Server Deployment (GitPilot with A2A endpoints - Simple MCP Server)
 # =============================================================================
