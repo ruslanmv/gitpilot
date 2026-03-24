@@ -20,6 +20,7 @@ class LLMProvider(str, enum.Enum):
     claude = "claude"
     watsonx = "watsonx"
     ollama = "ollama"
+    ollabridge = "ollabridge"
 
 
 class OpenAIConfig(BaseModel):
@@ -46,6 +47,12 @@ class OllamaConfig(BaseModel):
     model: str = Field(default="llama3")
 
 
+class OllaBridgeConfig(BaseModel):
+    base_url: str = Field(default="http://localhost:8000")
+    model: str = Field(default="qwen2.5:1.5b")
+    api_key: str = Field(default="")  # Optional: for authenticated endpoints
+
+
 class AppSettings(BaseModel):
     provider: LLMProvider = Field(default=LLMProvider.openai)
 
@@ -53,6 +60,7 @@ class AppSettings(BaseModel):
     claude: ClaudeConfig = Field(default_factory=ClaudeConfig)
     watsonx: WatsonxConfig = Field(default_factory=WatsonxConfig)
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
+    ollabridge: OllaBridgeConfig = Field(default_factory=OllaBridgeConfig)
 
     langflow_url: str = Field(default="http://localhost:7860")
     langflow_api_key: Optional[str] = None
@@ -115,6 +123,14 @@ class AppSettings(BaseModel):
         if os.getenv("GITPILOT_OLLAMA_MODEL"):
             settings.ollama.model = os.getenv("GITPILOT_OLLAMA_MODEL")
 
+        # OllaBridge / OllaBridge Cloud
+        if os.getenv("OLLABRIDGE_BASE_URL"):
+            settings.ollabridge.base_url = os.getenv("OLLABRIDGE_BASE_URL")
+        if os.getenv("GITPILOT_OLLABRIDGE_MODEL"):
+            settings.ollabridge.model = os.getenv("GITPILOT_OLLABRIDGE_MODEL")
+        if os.getenv("OLLABRIDGE_API_KEY"):
+            settings.ollabridge.api_key = os.getenv("OLLABRIDGE_API_KEY")
+
         # LangFlow (optional)
         if os.getenv("GITPILOT_LANGFLOW_URL"):
             settings.langflow_url = os.getenv("GITPILOT_LANGFLOW_URL")
@@ -170,6 +186,8 @@ def update_settings(updates: dict) -> AppSettings:
         _settings.watsonx = WatsonxConfig(**updates["watsonx"])
     if "ollama" in updates:
         _settings.ollama = OllamaConfig(**updates["ollama"])
+    if "ollabridge" in updates:
+        _settings.ollabridge = OllaBridgeConfig(**updates["ollabridge"])
 
     _settings.save()
     return _settings

@@ -142,6 +142,31 @@ def _list_ollama_models(settings: AppSettings) -> Tuple[List[str], Optional[str]
         return [], f"Error listing Ollama models from {url}: {e}"
 
 
+def _list_ollabridge_models(settings: AppSettings) -> Tuple[List[str], Optional[str]]:
+    """
+    List models from an OllaBridge / OllaBridge Cloud instance via /v1/models.
+    Uses the OpenAI-compatible endpoint.
+    """
+    base_url = getattr(settings.ollabridge, "base_url", None) or os.getenv(
+        "OLLABRIDGE_BASE_URL", "http://localhost:8000"
+    )
+    api_key = getattr(settings.ollabridge, "api_key", None) or os.getenv("OLLABRIDGE_API_KEY", "")
+    url = f"{base_url.rstrip('/')}/v1/models"
+
+    headers: Dict[str, str] = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        data = resp.json().get("data", [])
+        models = sorted({m.get("id", "") for m in data if m.get("id")})
+        return models, None
+    except Exception as e:
+        return [], f"Error listing OllaBridge models from {url}: {e}"
+
+
 # --- Public helper ------------------------------------------------------------
 
 
@@ -166,5 +191,7 @@ def list_models_for_provider(
         return _list_watsonx_models(settings)
     if provider == LLMProvider.ollama:
         return _list_ollama_models(settings)
+    if provider == LLMProvider.ollabridge:
+        return _list_ollabridge_models(settings)
 
     return [], f"Unsupported provider: {provider}"

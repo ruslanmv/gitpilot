@@ -107,7 +107,7 @@ def build_llm() -> LLM:
             model=model,
             api_key=api_key,
             base_url=base_url,
-            project_id=project_id,  # ← CRITICAL: This was missing!
+            project_id=project_id,  # \u2190 CRITICAL: This was missing!
             temperature=0.3,  # Default temperature
             max_tokens=1024,  # Default max tokens
         )
@@ -129,5 +129,29 @@ def build_llm() -> LLM:
             model = f"ollama/{model}"
 
         return LLM(model=model, base_url=base_url)
+
+    if provider == LLMProvider.ollabridge:
+        # OllaBridge / OllaBridge Cloud - OpenAI-compatible API
+        model = settings.ollabridge.model or os.getenv("GITPILOT_OLLABRIDGE_MODEL", "qwen2.5:1.5b")
+        base_url = settings.ollabridge.base_url or os.getenv("OLLABRIDGE_BASE_URL", "http://localhost:8000")
+        api_key = settings.ollabridge.api_key or os.getenv("OLLABRIDGE_API_KEY", "")
+
+        # Validate required configuration
+        if not base_url:
+            raise ValueError(
+                "OllaBridge base URL is required. "
+                "Configure it in Admin / LLM Settings or set OLLABRIDGE_BASE_URL environment variable."
+            )
+
+        # OllaBridge exposes an OpenAI-compatible API at /v1/
+        # Use the openai/ prefix so CrewAI routes through the OpenAI adapter
+        if not model.startswith("openai/"):
+            model = f"openai/{model}"
+
+        return LLM(
+            model=model,
+            api_key=api_key or "ollabridge",  # Placeholder key for non-auth endpoints
+            base_url=f"{base_url.rstrip('/')}/v1",
+        )
 
     raise ValueError(f"Unsupported provider: {provider}")
