@@ -72,7 +72,7 @@ class ModelsResponse(BaseModel):
 
 
 @router.get("/models", response_model=ModelsResponse)
-async def proxy_models(base_url: str = "https://ruslanmv-ollabridge-cloud.hf.space", api_key: str = ""):
+async def proxy_models(base_url: str = "https://ruslanmv-ollabridge.hf.space", api_key: str = ""):
     """Proxy model listing request to an OllaBridge instance."""
     base = base_url.rstrip("/")
     try:
@@ -99,7 +99,7 @@ async def proxy_models(base_url: str = "https://ruslanmv-ollabridge-cloud.hf.spa
 
 
 @router.get("/health")
-async def proxy_health(base_url: str = "https://ruslanmv-ollabridge-cloud.hf.space"):
+async def proxy_health(base_url: str = "https://ruslanmv-ollabridge.hf.space"):
     """Check OllaBridge instance health."""
     base = base_url.rstrip("/")
     try:
