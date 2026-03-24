@@ -107,7 +107,7 @@ export default function LlmSettings() {
     setPairing(true);
     setPairResult(null);
     try {
-      const baseUrl = settings?.ollabridge?.base_url || "https://ruslanmv-ollabridge-cloud.hf.space";
+      const baseUrl = settings?.ollabridge?.base_url || "https://ruslanmv-ollabridge.hf.space";
       const res = await fetch("/api/ollabridge/pair", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -285,14 +285,14 @@ export default function LlmSettings() {
           <input
             className="settings-input"
             type="text"
-            placeholder="https://ruslanmv-ollabridge-cloud.hf.space"
+            placeholder="https://ruslanmv-ollabridge.hf.space"
             value={settings.ollabridge?.base_url || ""}
             onChange={(e) =>
               updateField("ollabridge", "base_url", e.target.value)
             }
           />
           <div className="settings-hint">
-            Default: https://ruslanmv-ollabridge-cloud.hf.space (free, no key
+            Default: https://ruslanmv-ollabridge.hf.space (free, no key
             needed)
           </div>
 
