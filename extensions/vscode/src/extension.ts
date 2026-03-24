@@ -1,161 +1,141 @@
 /**
- * GitPilot VS Code Extension
+ * GitPilot VS Code Extension — Main Entry Point
  *
- * Connects to the GitPilot API server and provides:
- * - Sidebar chat panel
- * - Inline code actions (review, explain)
- * - Terminal integration
- * - Session management
- * - Skill invocation via command palette
+ * Enterprise-grade agentic AI assistant for GitHub repositories.
+ *
+ * Architecture:
+ *   api/           → HTTP client with retry, auth, health monitoring
+ *   views/         → Webview providers (Chat sidebar)
+ *   tree/          → TreeView providers (Sessions, Skills/Plugins)
+ *   providers/     → CodeLens, CodeActions, Security Diagnostics
+ *   commands/      → All command handlers (chat, review, security, skills, server)
+ *   panels/        → Full webview panels (Agent Flow Viewer)
+ *   utils/         → Config, context detection, status bar
  */
 import * as vscode from 'vscode';
 
-let serverUrl: string;
+import { GitPilotApiClient } from './api/client';
+import { getConfig, onConfigChange } from './utils/config';
+import { StatusBarManager } from './utils/statusBar';
+import { ChatViewProvider } from './views/chatViewProvider';
+import { SessionsTreeProvider } from './tree/sessionsTreeProvider';
+import { SkillsTreeProvider } from './tree/skillsTreeProvider';
+import { SecurityDiagnosticsProvider } from './providers/securityDiagnostics';
+import { GitPilotCodeLensProvider } from './providers/codeLensProvider';
+import { GitPilotCodeActionProvider } from './providers/codeActionProvider';
+import { AgentFlowPanel } from './panels/agentFlowPanel';
+
+import { registerChatCommands } from './commands/chat';
+import { registerReviewCommands } from './commands/review';
+import { registerSecurityCommands } from './commands/security';
+import { registerSkillCommands } from './commands/skills';
+import { registerServerCommands } from './commands/server';
+import { registerGitCommands } from './commands/git';
 
 export function activate(context: vscode.ExtensionContext) {
-    serverUrl = vscode.workspace.getConfiguration('gitpilot').get('serverUrl', 'http://127.0.0.1:8000');
+    const config = getConfig();
 
-    // Register commands
+    // ── Core services ──────────────────────────────────────────
+    const client = new GitPilotApiClient(config.serverUrl, config.githubToken);
+    const statusBar = new StatusBarManager();
+    const chatProvider = new ChatViewProvider(context.extensionUri, client);
+    const sessionsTree = new SessionsTreeProvider(client);
+    const skillsTree = new SkillsTreeProvider(client);
+    const securityProvider = new SecurityDiagnosticsProvider(client);
+    const codeLensProvider = new GitPilotCodeLensProvider(config.showInlineHints);
+
+    // ── Connection state → UI sync ─────────────────────────────
+    client.onStateChange((state) => {
+        statusBar.update(state);
+        chatProvider.updateConnectionState(state === 'connected');
+        if (state === 'connected') {
+            sessionsTree.refresh();
+            skillsTree.refresh();
+        }
+    });
+
+    // ── Register views ─────────────────────────────────────────
     context.subscriptions.push(
-        vscode.commands.registerCommand('gitpilot.openChat', openChat),
-        vscode.commands.registerCommand('gitpilot.sendMessage', sendMessage),
-        vscode.commands.registerCommand('gitpilot.reviewFile', reviewCurrentFile),
-        vscode.commands.registerCommand('gitpilot.explainSelection', explainSelection),
-        vscode.commands.registerCommand('gitpilot.runCommand', runTerminalCommand),
-        vscode.commands.registerCommand('gitpilot.setServer', setServerUrl),
-        vscode.commands.registerCommand('gitpilot.invokeSkill', invokeSkill),
+        vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, chatProvider),
+        vscode.window.registerTreeDataProvider('gitpilot.sessionsView', sessionsTree),
+        vscode.window.registerTreeDataProvider('gitpilot.skillsView', skillsTree),
     );
 
-    // Auto-connect check
-    if (vscode.workspace.getConfiguration('gitpilot').get('autoConnect', true)) {
-        checkConnection();
+    // ── Register providers ─────────────────────────────────────
+    const codeLensDisposable = vscode.languages.registerCodeLensProvider(
+        { scheme: 'file' },
+        codeLensProvider,
+    );
+    const codeActionDisposable = vscode.languages.registerCodeActionsProvider(
+        { scheme: 'file' },
+        new GitPilotCodeActionProvider(),
+        { providedCodeActionKinds: GitPilotCodeActionProvider.providedCodeActionKinds },
+    );
+    context.subscriptions.push(codeLensDisposable, codeActionDisposable);
+
+    // ── Register all command groups ────────────────────────────
+    registerChatCommands(context, client, chatProvider);
+    registerReviewCommands(context, chatProvider);
+    registerSecurityCommands(context, securityProvider);
+    registerSkillCommands(context, client, chatProvider);
+    registerServerCommands(context, client, chatProvider);
+    registerGitCommands(context, client, chatProvider);
+
+    // ── Additional commands ────────────────────────────────────
+    context.subscriptions.push(
+        vscode.commands.registerCommand('gitpilot.showAgentFlow', () => {
+            AgentFlowPanel.show(client, context.extensionUri);
+        }),
+
+        vscode.commands.registerCommand('gitpilot.refreshSessions', () => {
+            sessionsTree.refresh();
+        }),
+
+        vscode.commands.registerCommand('gitpilot.refreshSkills', () => {
+            skillsTree.refresh();
+        }),
+
+        vscode.commands.registerCommand('gitpilot.runCommand', async () => {
+            const command = await vscode.window.showInputBox({
+                prompt: 'Enter command to run via GitPilot',
+                placeHolder: 'e.g., npm test',
+            });
+            if (!command) { return; }
+            chatProvider.sendMessageFromCommand(`Run this command: ${command}`);
+            vscode.commands.executeCommand('gitpilot.chatView.focus');
+        }),
+    );
+
+    // ── Configuration change handling ──────────────────────────
+    context.subscriptions.push(
+        onConfigChange((newConfig) => {
+            client.setServerUrl(newConfig.serverUrl);
+            client.setToken(newConfig.githubToken);
+            codeLensProvider.setEnabled(newConfig.showInlineHints);
+
+            if (newConfig.scanOnSave) {
+                securityProvider.enableScanOnSave();
+            }
+        }),
+    );
+
+    // ── Security scan on save (if enabled) ─────────────────────
+    if (config.scanOnSave) {
+        securityProvider.enableScanOnSave();
     }
 
-    // Status bar
-    const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-    statusBar.text = '$(rocket) GitPilot';
-    statusBar.tooltip = 'GitPilot AI Assistant';
-    statusBar.command = 'gitpilot.openChat';
-    statusBar.show();
-    context.subscriptions.push(statusBar);
+    // ── Disposables ────────────────────────────────────────────
+    context.subscriptions.push(statusBar, securityProvider, { dispose: () => client.dispose() });
+
+    // ── Auto-connect ───────────────────────────────────────────
+    if (config.autoConnect) {
+        client.connect().then((connected) => {
+            if (connected) {
+                const channel = vscode.window.createOutputChannel('GitPilot');
+                channel.appendLine(`Connected to GitPilot server at ${config.serverUrl}`);
+            }
+        });
+    }
 }
 
 export function deactivate() {}
-
-// --- Commands ---
-
-async function openChat() {
-    vscode.window.showInformationMessage('GitPilot: Chat panel opening...');
-    // In a full implementation, this would open a webview panel
-    // connected to the GitPilot API
-}
-
-async function sendMessage() {
-    const message = await vscode.window.showInputBox({
-        prompt: 'Enter your message for GitPilot',
-        placeHolder: 'e.g., Review the authentication module',
-    });
-    if (!message) return;
-
-    try {
-        const response = await apiRequest('/api/chat/message', {
-            method: 'POST',
-            body: JSON.stringify({
-                repo_owner: '',
-                repo_name: '',
-                message: message,
-            }),
-        });
-        vscode.window.showInformationMessage(`GitPilot: ${response.result?.substring(0, 200) || 'Done'}`);
-    } catch (err: any) {
-        vscode.window.showErrorMessage(`GitPilot Error: ${err.message}`);
-    }
-}
-
-async function reviewCurrentFile() {
-    const editor = vscode.window.activeTextEditor;
-    if (!editor) {
-        vscode.window.showWarningMessage('No active file to review');
-        return;
-    }
-    const filePath = editor.document.uri.fsPath;
-    const content = editor.document.getText();
-    vscode.window.showInformationMessage(`GitPilot: Reviewing ${filePath}...`);
-}
-
-async function explainSelection() {
-    const editor = vscode.window.activeTextEditor;
-    if (!editor) return;
-    const selection = editor.document.getText(editor.selection);
-    if (!selection) {
-        vscode.window.showWarningMessage('No text selected');
-        return;
-    }
-    vscode.window.showInformationMessage(`GitPilot: Explaining selected code...`);
-}
-
-async function runTerminalCommand() {
-    const command = await vscode.window.showInputBox({
-        prompt: 'Enter command to run',
-        placeHolder: 'e.g., npm test',
-    });
-    if (!command) return;
-    vscode.window.showInformationMessage(`GitPilot: Running "${command}"...`);
-}
-
-async function setServerUrl() {
-    const url = await vscode.window.showInputBox({
-        prompt: 'Enter GitPilot server URL',
-        value: serverUrl,
-    });
-    if (url) {
-        serverUrl = url;
-        await vscode.workspace.getConfiguration('gitpilot').update('serverUrl', url, true);
-        vscode.window.showInformationMessage(`GitPilot server set to: ${url}`);
-    }
-}
-
-async function invokeSkill() {
-    try {
-        const response = await apiRequest('/api/skills');
-        const skills = response.skills || [];
-        if (skills.length === 0) {
-            vscode.window.showInformationMessage('No skills available');
-            return;
-        }
-        const items = skills.map((s: any) => ({
-            label: `/${s.name}`,
-            description: s.description,
-        }));
-        const selected = await vscode.window.showQuickPick(items, {
-            placeHolder: 'Select a skill to invoke',
-        });
-        if (selected) {
-            vscode.window.showInformationMessage(`GitPilot: Invoking ${selected.label}...`);
-        }
-    } catch (err: any) {
-        vscode.window.showErrorMessage(`Failed to load skills: ${err.message}`);
-    }
-}
-
-// --- Helpers ---
-
-async function checkConnection() {
-    try {
-        await apiRequest('/api/health');
-    } catch {
-        // Silent fail — server might not be running
-    }
-}
-
-async function apiRequest(path: string, options?: RequestInit): Promise<any> {
-    const url = `${serverUrl}${path}`;
-    const resp = await fetch(url, {
-        headers: { 'Content-Type': 'application/json' },
-        ...options,
-    });
-    if (!resp.ok) {
-        throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
-    }
-    return resp.json();
-}
