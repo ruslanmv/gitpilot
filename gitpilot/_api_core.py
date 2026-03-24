@@ -1,4 +1,5 @@
-# gitpilot/api.py
+# gitpilot/_api_core.py -- Original API module (re-exported by api.py)
+from __future__ import annotations
 
 from pathlib import Path
 from typing import List, Optional
@@ -2379,13 +2380,3 @@ async def catch_all_spa_routes(full_path: str):
         {"message": "GitPilot UI not built. The static files directory is missing."},
         status_code=500,
     )
-
-# ---------------------------------------------------------------------------
-# OllaBridge Cloud Extension (additive, non-destructive)
-# ---------------------------------------------------------------------------
-try:
-    from .api_ollabridge_ext import apply_ollabridge_extension as _apply_ob
-    _apply_ob(app)
-    del _apply_ob
-except ImportError:
-    pass  # Extension not available, skip gracefully
