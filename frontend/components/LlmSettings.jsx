@@ -1,6 +1,20 @@
 import React, { useEffect, useState } from "react";
 
-const PROVIDERS = ["openai", "claude", "watsonx", "ollama"];
+const PROVIDERS = ["ollabridge", "openai", "claude", "watsonx", "ollama"];
+
+const PROVIDER_LABELS = {
+  ollabridge: "OllaBridge Cloud",
+  openai: "OpenAI",
+  claude: "Claude",
+  watsonx: "Watsonx",
+  ollama: "Ollama",
+};
+
+const AUTH_MODES = [
+  { id: "device", label: "Device Pairing", icon: "\uD83D\uDCF1" },
+  { id: "apikey", label: "API Key", icon: "\uD83D\uDD11" },
+  { id: "local", label: "Local Trust", icon: "\uD83C\uDFE0" },
+];
 
 export default function LlmSettings() {
   const [settings, setSettings] = useState(null);
@@ -8,10 +22,15 @@ export default function LlmSettings() {
   const [error, setError] = useState("");
   const [savedMsg, setSavedMsg] = useState("");
 
-  // modelsByProvider: { openai: [...], claude: [...], ... }
   const [modelsByProvider, setModelsByProvider] = useState({});
   const [modelsError, setModelsError] = useState("");
   const [loadingModelsFor, setLoadingModelsFor] = useState("");
+
+  // OllaBridge pairing state
+  const [authMode, setAuthMode] = useState("local");
+  const [pairCode, setPairCode] = useState("");
+  const [pairing, setPairing] = useState(false);
+  const [pairResult, setPairResult] = useState(null);
 
   useEffect(() => {
     const load = async () => {
@@ -48,7 +67,7 @@ export default function LlmSettings() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(settings),
       });
-        const data = await res.json();
+      const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to save settings");
       setSettings(data);
       setSavedMsg("Settings saved successfully!");
@@ -82,11 +101,39 @@ export default function LlmSettings() {
     }
   };
 
+  // OllaBridge device pairing
+  const handlePair = async () => {
+    if (!pairCode.trim()) return;
+    setPairing(true);
+    setPairResult(null);
+    try {
+      const baseUrl = settings?.ollabridge?.base_url || "https://ruslanmv-ollabridge-cloud.hf.space";
+      const res = await fetch("/api/ollabridge/pair", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ base_url: baseUrl, code: pairCode.trim() }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setPairResult({ ok: true, message: "Paired successfully!" });
+        if (data.token) {
+          updateField("ollabridge", "api_key", data.token);
+        }
+      } else {
+        setPairResult({ ok: false, message: data.error || "Pairing failed" });
+      }
+    } catch (e) {
+      setPairResult({ ok: false, message: e.message });
+    } finally {
+      setPairing(false);
+    }
+  };
+
   if (!settings) {
     return (
       <div className="settings-root">
         <h1>Admin / LLM Settings</h1>
-        <p className="settings-muted">Loading current configuration…</p>
+        <p className="settings-muted">Loading current configuration\u2026</p>
       </div>
     );
   }
@@ -105,20 +152,208 @@ export default function LlmSettings() {
       {/* ACTIVE PROVIDER */}
       <div className="settings-card">
         <label className="settings-label">Active provider</label>
-        <select
-          className="settings-select"
-          value={provider}
-          onChange={(e) =>
-            setSettings((prev) => ({ ...prev, provider: e.target.value }))
-          }
-        >
+        <div className="settings-provider-tabs">
           {PROVIDERS.map((p) => (
-            <option key={p} value={p}>
-              {p.charAt(0).toUpperCase() + p.slice(1)}
-            </option>
+            <button
+              key={p}
+              type="button"
+              className={
+                "settings-provider-tab" +
+                (provider === p ? " settings-provider-tab-active" : "")
+              }
+              onClick={() =>
+                setSettings((prev) => ({ ...prev, provider: p }))
+              }
+            >
+              {PROVIDER_LABELS[p] || p}
+            </button>
           ))}
-        </select>
+        </div>
       </div>
+
+      {/* ============================================================ */}
+      {/* OLLABRIDGE CLOUD                                              */}
+      {/* ============================================================ */}
+      {provider === "ollabridge" && (
+        <div className="settings-card">
+          <div className="settings-title">OllaBridge Cloud Configuration</div>
+          <div className="settings-hint" style={{ marginBottom: 12 }}>
+            Connect to OllaBridge Cloud or any OllaBridge instance for LLM
+            inference. No API key required for public endpoints.
+          </div>
+
+          {/* AUTH MODE TABS */}
+          <label className="settings-label">Authentication Mode</label>
+          <div className="ob-auth-tabs">
+            {AUTH_MODES.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                className={
+                  "ob-auth-tab" +
+                  (authMode === m.id ? " ob-auth-tab-active" : "")
+                }
+                onClick={() => setAuthMode(m.id)}
+              >
+                <span className="ob-auth-tab-icon">{m.icon}</span>
+                <span>{m.label}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* DEVICE PAIRING MODE */}
+          {authMode === "device" && (
+            <div className="ob-auth-panel">
+              <div className="ob-auth-desc">
+                Enter the pairing code from your OllaBridge console and
+                click Pair.
+              </div>
+              <div className="ob-pair-row">
+                <input
+                  className="settings-input ob-pair-input"
+                  type="text"
+                  maxLength={9}
+                  placeholder="ABCD-1234"
+                  value={pairCode}
+                  onChange={(e) => setPairCode(e.target.value.toUpperCase())}
+                  onKeyDown={(e) => e.key === "Enter" && handlePair()}
+                />
+                <button
+                  type="button"
+                  className="ob-pair-btn"
+                  onClick={handlePair}
+                  disabled={pairing || !pairCode.trim()}
+                >
+                  {pairing ? (
+                    <span className="ob-pair-spinner" />
+                  ) : (
+                    "\uD83D\uDD17"
+                  )}{" "}
+                  Pair
+                </button>
+              </div>
+              {pairResult && (
+                <div
+                  className={
+                    "ob-pair-result " +
+                    (pairResult.ok
+                      ? "ob-pair-result-ok"
+                      : "ob-pair-result-err")
+                  }
+                >
+                  {pairResult.message}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* API KEY MODE */}
+          {authMode === "apikey" && (
+            <div className="ob-auth-panel">
+              <div className="ob-auth-desc">
+                Enter your OllaBridge API key or device token for authenticated
+                access.
+              </div>
+              <label className="settings-label">API Key / Device Token</label>
+              <input
+                className="settings-input"
+                type="password"
+                placeholder="Enter API key or device token"
+                value={settings.ollabridge?.api_key || ""}
+                onChange={(e) =>
+                  updateField("ollabridge", "api_key", e.target.value)
+                }
+              />
+            </div>
+          )}
+
+          {/* LOCAL TRUST MODE */}
+          {authMode === "local" && (
+            <div className="ob-auth-panel">
+              <div className="ob-auth-desc">
+                Connect to a local or trusted OllaBridge instance without
+                authentication. Ideal for local development or pre-configured
+                cloud endpoints.
+              </div>
+            </div>
+          )}
+
+          {/* BASE URL */}
+          <label className="settings-label" style={{ marginTop: 12 }}>
+            Base URL
+          </label>
+          <input
+            className="settings-input"
+            type="text"
+            placeholder="https://ruslanmv-ollabridge-cloud.hf.space"
+            value={settings.ollabridge?.base_url || ""}
+            onChange={(e) =>
+              updateField("ollabridge", "base_url", e.target.value)
+            }
+          />
+          <div className="settings-hint">
+            Default: https://ruslanmv-ollabridge-cloud.hf.space (free, no key
+            needed)
+          </div>
+
+          {/* MODEL */}
+          <label className="settings-label" style={{ marginTop: 12 }}>
+            Model
+          </label>
+          <div className="ob-model-row">
+            <input
+              className="settings-input"
+              type="text"
+              placeholder="qwen2.5:1.5b"
+              value={settings.ollabridge?.model || ""}
+              onChange={(e) =>
+                updateField("ollabridge", "model", e.target.value)
+              }
+              style={{ flex: 1 }}
+            />
+            <button
+              type="button"
+              className="ob-fetch-btn"
+              onClick={() => loadModelsForProvider("ollabridge")}
+              disabled={loadingModelsFor === "ollabridge"}
+            >
+              {loadingModelsFor === "ollabridge" ? (
+                <span className="ob-pair-spinner" />
+              ) : (
+                "\uD83D\uDD04"
+              )}{" "}
+              Fetch Models
+            </button>
+          </div>
+
+          {availableModels.length > 0 && (
+            <>
+              <label className="settings-label" style={{ marginTop: 8 }}>
+                Available models
+              </label>
+              <select
+                className="settings-select"
+                value={settings.ollabridge?.model || ""}
+                onChange={(e) =>
+                  updateField("ollabridge", "model", e.target.value)
+                }
+              >
+                <option value="">-- select a model --</option>
+                {availableModels.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
+
+          <div className="settings-hint" style={{ marginTop: 4 }}>
+            Examples: qwen2.5:1.5b, llama3, mistral, codellama,
+            deepseek-coder
+          </div>
+        </div>
+      )}
 
       {/* OPENAI */}
       {provider === "openai" && (
@@ -152,7 +387,7 @@ export default function LlmSettings() {
             disabled={loadingModelsFor === "openai"}
           >
             {loadingModelsFor === "openai"
-              ? "Loading models…"
+              ? "Loading models\u2026"
               : "Load available models"}
           </button>
 
@@ -226,7 +461,7 @@ export default function LlmSettings() {
             disabled={loadingModelsFor === "claude"}
           >
             {loadingModelsFor === "claude"
-              ? "Loading models…"
+              ? "Loading models\u2026"
               : "Load available models"}
           </button>
 
@@ -315,7 +550,7 @@ export default function LlmSettings() {
             disabled={loadingModelsFor === "watsonx"}
           >
             {loadingModelsFor === "watsonx"
-              ? "Loading models…"
+              ? "Loading models\u2026"
               : "Load available models"}
           </button>
 
@@ -391,7 +626,7 @@ export default function LlmSettings() {
             disabled={loadingModelsFor === "ollama"}
           >
             {loadingModelsFor === "ollama"
-              ? "Loading models…"
+              ? "Loading models\u2026"
               : "Load available models"}
           </button>
 
@@ -436,7 +671,7 @@ export default function LlmSettings() {
           onClick={handleSave}
           disabled={saving}
         >
-          {saving ? "Saving…" : "Save settings"}
+          {saving ? "Saving\u2026" : "Save settings"}
         </button>
         {savedMsg && <span className="settings-success">{savedMsg}</span>}
         {error && <span className="settings-error">{error}</span>}

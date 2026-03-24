@@ -1,0 +1,222 @@
+/* ============================================================================
+   OLLABRIDGE CLOUD - Provider Tabs & Pairing UI
+   ============================================================================ */
+
+/* Provider selection tabs (replaces dropdown) */
+.settings-provider-tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.settings-provider-tab {
+  border: 1px solid #272832;
+  outline: none;
+  background: #0a0b0f;
+  color: #9a9bb0;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+.settings-provider-tab:hover {
+  background: #1a1b26;
+  color: #c3c5dd;
+  border-color: #3a3b4d;
+}
+
+.settings-provider-tab-active {
+  background: rgba(255, 122, 60, 0.12);
+  color: #ff7a3c;
+  border-color: #ff7a3c;
+  font-weight: 600;
+}
+
+.settings-provider-tab-active:hover {
+  background: rgba(255, 122, 60, 0.18);
+  color: #ff8b52;
+}
+
+/* Auth mode tabs (Device Pairing / API Key / Local Trust) */
+.ob-auth-tabs {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+  margin-bottom: 8px;
+}
+
+.ob-auth-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #272832;
+  outline: none;
+  background: #0a0b0f;
+  color: #9a9bb0;
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+.ob-auth-tab:hover {
+  background: #1a1b26;
+  color: #c3c5dd;
+  border-color: #3a3b4d;
+}
+
+.ob-auth-tab-active {
+  background: rgba(59, 130, 246, 0.1);
+  color: #60a5fa;
+  border-color: #3B82F6;
+  font-weight: 600;
+}
+
+.ob-auth-tab-active:hover {
+  background: rgba(59, 130, 246, 0.15);
+}
+
+.ob-auth-tab-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+/* Auth panel (content below tabs) */
+.ob-auth-panel {
+  padding: 12px;
+  background: #0a0b0f;
+  border: 1px solid #1e1f30;
+  border-radius: 8px;
+  margin-bottom: 4px;
+}
+
+.ob-auth-desc {
+  font-size: 12px;
+  color: #9a9bb0;
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+
+/* Pairing row */
+.ob-pair-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.ob-pair-input {
+  flex: 1;
+  font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+  font-size: 16px !important;
+  letter-spacing: 2px;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.ob-pair-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  outline: none;
+  background: #3B82F6;
+  color: #fff;
+  border-radius: 8px;
+  padding: 9px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  font-family: inherit;
+}
+
+.ob-pair-btn:hover:not(:disabled) {
+  background: #4d93f7;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.ob-pair-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Pair spinner */
+.ob-pair-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+/* Pair result feedback */
+.ob-pair-result {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  animation: fadeIn 0.3s ease;
+}
+
+.ob-pair-result-ok {
+  background: rgba(76, 175, 136, 0.12);
+  border: 1px solid rgba(76, 175, 136, 0.3);
+  color: #7cffb3;
+}
+
+.ob-pair-result-err {
+  background: rgba(255, 82, 82, 0.1);
+  border: 1px solid rgba(255, 82, 82, 0.3);
+  color: #ff8a8a;
+}
+
+/* Model row (input + fetch button) */
+.ob-model-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.ob-fetch-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #272832;
+  outline: none;
+  background: #1a1b26;
+  color: #c3c5dd;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  font-family: inherit;
+}
+
+.ob-fetch-btn:hover:not(:disabled) {
+  background: #222335;
+  border-color: #3a3b4d;
+  color: #f5f5f7;
+  transform: translateY(-1px);
+}
+
+.ob-fetch-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
