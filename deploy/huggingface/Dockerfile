@@ -32,18 +32,14 @@ RUN useradd -m -u 1000 appuser && \
 
 WORKDIR /app
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
-ENV UV_PROJECT_ENVIRONMENT="/app/.venv"
-
 COPY pyproject.toml README.md ./
 COPY gitpilot ./gitpilot
 
 # Copy built frontend into gitpilot/web/
 COPY --from=frontend-builder /build/dist/ ./gitpilot/web/
 
-# Install Python dependencies
-RUN uv sync --all-extras --no-dev 2>/dev/null || \
-    pip install --no-cache-dir --upgrade pip && \
+# Install Python dependencies (pip-only for reliability on HF Spaces)
+RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir \
         "fastapi>=0.111.0" \
         "uvicorn[standard]>=0.30.0" \
@@ -53,7 +49,7 @@ RUN uv sync --all-extras --no-dev 2>/dev/null || \
         "pydantic>=2.7.0" \
         "rich>=13.0.0" \
         "pyjwt[crypto]>=2.8.0" \
-        "litellm>=1.80.5" \
+        "litellm" \
         "crewai>=0.76.9" \
         "crewai-tools>=0.13.4" \
         "anthropic>=0.39.0" && \
