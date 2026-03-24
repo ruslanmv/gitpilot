@@ -41,7 +41,7 @@ async def proxy_pair(req: PairRequest):
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
                 f"{base}/pair",
-                json={"user_code": req.code},
+                json={"code": req.code},
                 headers={"Content-Type": "application/json"},
             )
             if resp.status_code == 200:
