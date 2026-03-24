@@ -53,7 +53,17 @@ async def proxy_pair(req: PairRequest):
             # Try to extract error message
             try:
                 err_data = resp.json()
-                err_msg = err_data.get("detail") or err_data.get("error") or f"HTTP {resp.status_code}"
+                detail = err_data.get("detail") or err_data.get("error")
+                # detail may be a list (Pydantic validation errors) or a string
+                if isinstance(detail, list):
+                    err_msg = "; ".join(
+                        e.get("msg", str(e)) if isinstance(e, dict) else str(e)
+                        for e in detail
+                    )
+                elif detail:
+                    err_msg = str(detail)
+                else:
+                    err_msg = f"HTTP {resp.status_code}"
             except Exception:
                 err_msg = f"HTTP {resp.status_code}"
             return PairResponse(success=False, error=err_msg)
