@@ -53,7 +53,7 @@ GitPilot connects to your favorite LLM provider. Configure in **Admin / LLM Sett
 
 ## Connect to OllaBridge Cloud
 
-By default, GitPilot connects to [OllaBridge Cloud](https://huggingface.co/spaces/ruslanmv/ollabridge-cloud) for LLM inference. This provides free access to open-source models without needing API keys.
+By default, GitPilot connects to [OllaBridge Cloud](https://huggingface.co/spaces/ruslanmv/ollabridge) for LLM inference. This provides free access to open-source models without needing API keys.
 
 To use your own OllaBridge instance:
 1. Go to **Admin / LLM Settings**
@@ -67,7 +67,7 @@ Configure via HF Spaces secrets:
 | Variable | Description | Default |
 |---|---|---|
 | `GITPILOT_PROVIDER` | LLM provider | `ollabridge` |
-| `OLLABRIDGE_BASE_URL` | OllaBridge Cloud URL | `https://ruslanmv-ollabridge-cloud.hf.space` |
+| `OLLABRIDGE_BASE_URL` | OllaBridge Cloud URL | `https://ruslanmv-ollabridge.hf.space` |
 | `GITHUB_TOKEN` | GitHub personal access token | - |
 | `OPENAI_API_KEY` | OpenAI API key (if using OpenAI) | - |
 | `ANTHROPIC_API_KEY` | Anthropic API key (if using Claude) | - |
@@ -75,5 +75,5 @@ Configure via HF Spaces secrets:
 ## Links
 
 - [GitPilot Repository](https://github.com/ruslanmv/gitpilot)
-- [OllaBridge Cloud](https://huggingface.co/spaces/ruslanmv/ollabridge-cloud)
+- [OllaBridge Cloud](https://huggingface.co/spaces/ruslanmv/ollabridge)
 - [Documentation](https://github.com/ruslanmv/gitpilot#readme)
