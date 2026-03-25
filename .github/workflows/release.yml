@@ -1,5 +1,6 @@
 # .github/workflows/release.yml
 # Build distributions on GitHub Release and publish to PyPI (Trusted Publishers)
+# Automatically patches version from the release tag before building.
 
 name: Build & Publish to PyPI
 
@@ -20,10 +21,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Extract version from release tag
+        id: version
+        run: |
+          RAW="${GITHUB_REF#refs/tags/}"
+          SEMVER="${RAW#v}"
+          echo "VERSION=$SEMVER" >> "$GITHUB_ENV"
+          echo "📦 Building version: $SEMVER"
+
+      - name: Patch pyproject.toml version
+        run: |
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
+          echo "✅ pyproject.toml → $VERSION"
+          grep '^version' pyproject.toml
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          # Match pyproject.toml: requires-python = ">=3.11,<3.12"
           python-version: "3.11"
           cache: "pip"
 
