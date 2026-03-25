@@ -419,6 +419,11 @@ export default function ChatPanel({
           border-radius: 8px;
           outline: none;
           font-size: 14px;
+          font-family: inherit;
+          resize: none;
+          min-height: 40px;
+          max-height: 160px;
+          line-height: 1.4;
         }
 
         /* Enterprise controls (restored) */
@@ -569,11 +574,16 @@ export default function ChatPanel({
         )}
 
         <div className="chat-input-row">
-          <input
+          <textarea
             className="chat-input"
             placeholder={wsConnected ? "Send feedback or instructions..." : "Describe the change you want to make..."}
             value={goal}
-            onChange={(e) => setGoal(e.target.value)}
+            rows={1}
+            onChange={(e) => {
+              setGoal(e.target.value);
+              e.target.style.height = "40px";
+              e.target.style.height = Math.min(e.target.scrollHeight, 160) + "px";
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();

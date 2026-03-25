@@ -1,6 +1,9 @@
 /**
  * Workspace context detection.
- * Extracts repo owner/name from git remote, detects project type.
+ *
+ * Detects git repository info from the workspace and passes it to the
+ * GitPilot server. If no git repo is found, offers to initialize one
+ * so the server can track version history.
  */
 import * as vscode from 'vscode';
 import * as path from 'path';
@@ -11,6 +14,8 @@ export interface WorkspaceContext {
     repoOwner: string;
     repoName: string;
     branch: string;
+    remoteUrl: string;
+    isGitRepo: boolean;
     hasGitPilotConfig: boolean;
 }
 
@@ -21,30 +26,84 @@ export function getWorkspaceContext(): WorkspaceContext {
     let owner = '';
     let name = '';
     let branch = '';
+    let remoteUrl = '';
+    let isGitRepo = false;
 
     if (root) {
+        // Check if this is a git repo
         try {
-            const remote = execSync('git remote get-url origin', { cwd: root, encoding: 'utf-8' }).trim();
-            const match = remote.match(/[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?$/);
-            if (match) {
-                owner = match[1];
-                name = match[2];
-            }
+            execSync('git rev-parse --git-dir', { cwd: root, encoding: 'utf-8', stdio: 'pipe' });
+            isGitRepo = true;
         } catch { /* not a git repo */ }
 
-        try {
-            branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: root, encoding: 'utf-8' }).trim();
-        } catch { /* ignore */ }
+        if (isGitRepo) {
+            // Extract remote URL for owner/name
+            try {
+                remoteUrl = execSync('git remote get-url origin', { cwd: root, encoding: 'utf-8', stdio: 'pipe' }).trim();
+                const match = remoteUrl.match(/[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?$/);
+                if (match) {
+                    owner = match[1];
+                    name = match[2];
+                }
+            } catch {
+                // Repo exists but has no remote — use folder name
+                name = path.basename(root);
+                owner = 'local';
+            }
+
+            // Get current branch
+            try {
+                branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: root, encoding: 'utf-8', stdio: 'pipe' }).trim();
+            } catch { /* ignore */ }
+        } else {
+            // No git repo — use workspace folder name as project identifier
+            name = path.basename(root);
+            owner = 'local';
+        }
     }
 
     let hasConfig = false;
     if (root) {
         try {
-            const configPath = path.join(root, '.gitpilot');
             const fs = require('fs');
-            hasConfig = fs.existsSync(configPath);
+            hasConfig = fs.existsSync(path.join(root, '.gitpilot'));
         } catch { /* ignore */ }
     }
 
-    return { workspaceRoot: root, repoOwner: owner, repoName: name, branch, hasGitPilotConfig: hasConfig };
+    return { workspaceRoot: root, repoOwner: owner, repoName: name, branch, remoteUrl, isGitRepo, hasGitPilotConfig: hasConfig };
+}
+
+/**
+ * Initialize a git repo in the workspace if one doesn't exist.
+ * Returns true if a repo was created or already exists.
+ */
+export async function ensureGitRepo(): Promise<boolean> {
+    const ctx = getWorkspaceContext();
+    if (ctx.isGitRepo) { return true; }
+    if (!ctx.workspaceRoot) {
+        vscode.window.showWarningMessage('No workspace folder open.');
+        return false;
+    }
+
+    const choice = await vscode.window.showInformationMessage(
+        'This workspace is not a git repository. GitPilot works best with version control. Initialize a git repo?',
+        'Initialize Git Repo',
+        'Continue Without Git',
+    );
+
+    if (choice === 'Initialize Git Repo') {
+        try {
+            execSync('git init', { cwd: ctx.workspaceRoot, encoding: 'utf-8', stdio: 'pipe' });
+            execSync('git add -A', { cwd: ctx.workspaceRoot, encoding: 'utf-8', stdio: 'pipe' });
+            execSync('git commit -m "Initial commit (GitPilot)" --allow-empty', { cwd: ctx.workspaceRoot, encoding: 'utf-8', stdio: 'pipe' });
+            vscode.window.showInformationMessage('Git repository initialized with initial commit.');
+            return true;
+        } catch (err: any) {
+            vscode.window.showErrorMessage(`Failed to initialize git: ${err.message}`);
+            return false;
+        }
+    }
+
+    // User chose to continue without git — still works, just no version control
+    return false;
 }

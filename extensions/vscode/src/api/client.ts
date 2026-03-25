@@ -31,9 +31,17 @@ export interface ChatPlanResponse {
 
 export interface ChatExecuteResponse {
     result: string;
+    message?: string;
     files_changed: string[];
     commit_sha?: string;
     pr_url?: string;
+    html_url?: string;
+    commit_url?: string;
+    branch?: string;
+    branch_name?: string;
+    mode?: string;
+    diff_stats?: { additions: number; deletions: number; files_changed: number };
+    execution_log?: Array<{ step: number; title: string; status: string; detail?: string }>;
 }
 
 export interface SessionInfo {
@@ -286,7 +294,7 @@ export class GitPilotApiClient {
         await this.request(`/api/flow/topology/${encodeURIComponent(id)}`, { method: 'POST' });
     }
 
-    // --- Settings ---
+    // --- Settings & Provider Management ---
 
     async getSettings(): Promise<Record<string, any>> {
         return this.request('/api/settings');
@@ -295,6 +303,50 @@ export class GitPilotApiClient {
     async getModels(): Promise<Array<{ id: string; name: string; provider: string }>> {
         const resp = await this.request<{ models: any[] }>('/api/settings/models');
         return resp.models || [];
+    }
+
+    async setProvider(provider: string): Promise<Record<string, any>> {
+        return this.request('/api/settings/provider', {
+            method: 'POST',
+            body: JSON.stringify({ provider }),
+        });
+    }
+
+    async updateLlmSettings(updates: Record<string, any>): Promise<Record<string, any>> {
+        return this.request('/api/settings/llm', {
+            method: 'PUT',
+            body: JSON.stringify(updates),
+        });
+    }
+
+    async getOllaBridgeModels(baseUrl?: string, apiKey?: string): Promise<string[]> {
+        const params = new URLSearchParams();
+        if (baseUrl) { params.set('base_url', baseUrl); }
+        if (apiKey) { params.set('api_key', apiKey); }
+        const qs = params.toString();
+        const resp = await this.request<{ models: string[] }>(`/api/ollabridge/models${qs ? '?' + qs : ''}`);
+        return resp.models || [];
+    }
+
+    async getOllaBridgeHealth(baseUrl?: string): Promise<{ status: string }> {
+        const params = baseUrl ? `?base_url=${encodeURIComponent(baseUrl)}` : '';
+        return this.request(`/api/ollabridge/health${params}`);
+    }
+
+    async ollaBridgePair(baseUrl: string, code: string): Promise<{ success: boolean; token?: string; error?: string }> {
+        return this.request('/api/ollabridge/pair', {
+            method: 'POST',
+            body: JSON.stringify({ base_url: baseUrl, code }),
+        });
+    }
+
+    // --- Pull Requests ---
+
+    async createPR(owner: string, repo: string, branch: string, title: string, body?: string): Promise<{ url: string; number: number }> {
+        return this.request('/api/chat/execute-with-pr', {
+            method: 'POST',
+            body: JSON.stringify({ repo_owner: owner, repo_name: repo, branch, title, body }),
+        });
     }
 
     // --- Predictions ---
