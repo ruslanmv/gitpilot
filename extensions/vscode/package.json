@@ -169,6 +169,36 @@
         "icon": "$(type-hierarchy)"
       },
       {
+        "command": "gitpilot.selectProvider",
+        "title": "Select LLM Provider",
+        "category": "GitPilot",
+        "icon": "$(server-environment)"
+      },
+      {
+        "command": "gitpilot.selectModel",
+        "title": "Select Model",
+        "category": "GitPilot",
+        "icon": "$(symbol-enum)"
+      },
+      {
+        "command": "gitpilot.ollaBridgePair",
+        "title": "Pair with OllaBridge Cloud",
+        "category": "GitPilot",
+        "icon": "$(link)"
+      },
+      {
+        "command": "gitpilot.setLlmApiKey",
+        "title": "Set LLM API Key",
+        "category": "GitPilot",
+        "icon": "$(key)"
+      },
+      {
+        "command": "gitpilot.setLlmBaseUrl",
+        "title": "Set LLM Base URL",
+        "category": "GitPilot",
+        "icon": "$(globe)"
+      },
+      {
         "command": "gitpilot.selectTopology",
         "title": "Select Agent Topology",
         "category": "GitPilot"

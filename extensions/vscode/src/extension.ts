@@ -2,13 +2,17 @@
  * GitPilot VS Code Extension — Main Entry Point
  *
  * Enterprise-grade agentic AI assistant for GitHub repositories.
+ * The server handles all AI/LLM logic (OllaBridge, OpenAI, Claude,
+ * Ollama, Watsonx), agentic workflows (CrewAI), and multi-agent
+ * orchestration. The VS Code extension provides the chat UI, code
+ * intelligence, provider management, and developer experience.
  *
  * Architecture:
  *   api/           → HTTP client with retry, auth, health monitoring
  *   views/         → Webview providers (Chat sidebar)
  *   tree/          → TreeView providers (Sessions, Skills/Plugins)
  *   providers/     → CodeLens, CodeActions, Security Diagnostics
- *   commands/      → All command handlers (chat, review, security, skills, server)
+ *   commands/      → All command handlers (chat, review, security, skills, server, git)
  *   panels/        → Full webview panels (Agent Flow Viewer)
  *   utils/         → Config, context detection, status bar
  */
@@ -16,6 +20,7 @@ import * as vscode from 'vscode';
 
 import { GitPilotApiClient } from './api/client';
 import { getConfig, onConfigChange } from './utils/config';
+import { getWorkspaceContext, ensureGitRepo } from './utils/context';
 import { StatusBarManager } from './utils/statusBar';
 import { ChatViewProvider } from './views/chatViewProvider';
 import { SessionsTreeProvider } from './tree/sessionsTreeProvider';
@@ -135,6 +140,22 @@ export function activate(context: vscode.ExtensionContext) {
                 channel.appendLine(`Connected to GitPilot server at ${config.serverUrl}`);
             }
         });
+    }
+
+    // ── Git repo detection ─────────────────────────────────────
+    // Check workspace for git repo; prompt to initialize if missing
+    const wsCtx = getWorkspaceContext();
+    if (wsCtx.workspaceRoot && !wsCtx.isGitRepo) {
+        // Defer prompt slightly so VS Code is fully loaded
+        setTimeout(() => { ensureGitRepo(); }, 3000);
+    }
+    if (wsCtx.workspaceRoot) {
+        const channel = vscode.window.createOutputChannel('GitPilot');
+        if (wsCtx.isGitRepo) {
+            channel.appendLine(`Workspace: ${wsCtx.repoOwner}/${wsCtx.repoName} (branch: ${wsCtx.branch || 'HEAD'})`);
+        } else {
+            channel.appendLine(`Workspace: ${wsCtx.workspaceRoot} (no git repo detected)`);
+        }
     }
 }
 
