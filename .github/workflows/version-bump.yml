@@ -1,0 +1,77 @@
+# =============================================================================
+# Auto Version Bump
+# =============================================================================
+# After a release is published, updates all version files in the repo to match
+# the release tag and commits the change back to the default branch.
+# This keeps source files in sync with the latest release.
+#
+# Version files updated:
+#   - pyproject.toml
+#   - frontend/package.json
+#   - extensions/vscode/package.json
+# =============================================================================
+name: Auto Version Bump
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    name: Bump version files
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.target_commitish }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version from tag
+        run: |
+          RAW="${GITHUB_REF#refs/tags/}"
+          VERSION="${RAW#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "📦 Bumping all version files to: $VERSION"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Update pyproject.toml
+        run: |
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
+          echo "✅ pyproject.toml → $VERSION"
+
+      - name: Update frontend/package.json
+        run: |
+          cd frontend
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          echo "✅ frontend/package.json → $VERSION"
+
+      - name: Update extensions/vscode/package.json
+        run: |
+          cd extensions/vscode
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          echo "✅ extensions/vscode/package.json → $VERSION"
+
+      - name: Commit and push version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add pyproject.toml frontend/package.json frontend/package-lock.json \
+                  extensions/vscode/package.json extensions/vscode/package-lock.json
+
+          # Only commit if there are changes
+          if git diff --cached --quiet; then
+            echo "ℹ️  All version files already at $VERSION — nothing to commit."
+          else
+            git commit -m "chore: bump version to $VERSION [skip ci]"
+            git push
+            echo "✅ Version bump committed and pushed."
+          fi
