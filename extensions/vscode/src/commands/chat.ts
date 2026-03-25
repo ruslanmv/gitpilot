@@ -39,12 +39,8 @@ export function registerChatCommands(
         }),
 
         vscode.commands.registerCommand('gitpilot.loadSession', async (sessionId: string) => {
-            try {
-                const session = await client.getSession(sessionId);
-                vscode.window.showInformationMessage(`Loaded session: ${session.id} (${session.messages?.length || 0} messages)`);
-            } catch (err: any) {
-                vscode.window.showErrorMessage(`Failed to load session: ${err.message}`);
-            }
+            await chatProvider.loadSessionIntoChat(sessionId);
+            vscode.commands.executeCommand('gitpilot.chatView.focus');
         }),
 
         vscode.commands.registerCommand('gitpilot.deleteSession', async (item: any) => {

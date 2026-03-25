@@ -54,7 +54,7 @@ class OllaBridgeConfig(BaseModel):
 
 
 class AppSettings(BaseModel):
-    provider: LLMProvider = Field(default=LLMProvider.openai)
+    provider: LLMProvider = Field(default=LLMProvider.ollabridge)
 
     openai: OpenAIConfig = Field(default_factory=OpenAIConfig)
     claude: ClaudeConfig = Field(default_factory=ClaudeConfig)
