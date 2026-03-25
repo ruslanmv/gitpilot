@@ -24,8 +24,8 @@ COPY pyproject.toml README.md ./
 COPY gitpilot ./gitpilot
 
 # Install Python dependencies using uv
-# uv is now in PATH (/usr/local/bin), no need for explicit path
-RUN uv sync --all-extras --no-dev
+# Use 'uv pip install' for production (no lock file needed, main deps only)
+RUN uv venv /app/.venv && uv pip install --no-cache .
 
 # Expose port
 EXPOSE 8000
