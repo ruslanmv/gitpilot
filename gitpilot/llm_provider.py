@@ -148,10 +148,20 @@ def build_llm() -> LLM:
         if not model.startswith("openai/"):
             model = f"openai/{model}"
 
+        ollabridge_api_base = f"{base_url.rstrip('/')}/v1"
+        ollabridge_key = api_key or "ollabridge"
+
+        # CRITICAL: Set environment variables so litellm/OpenAI client uses
+        # the remote OllaBridge URL instead of falling back to localhost.
+        # Without this, the openai/ prefix causes litellm to check OPENAI_API_BASE
+        # and default to localhost when it's not set.
+        os.environ["OPENAI_API_KEY"] = ollabridge_key
+        os.environ["OPENAI_API_BASE"] = ollabridge_api_base
+
         return LLM(
             model=model,
-            api_key=api_key or "ollabridge",  # Placeholder key for non-auth endpoints
-            base_url=f"{base_url.rstrip('/')}/v1",
+            api_key=ollabridge_key,
+            base_url=ollabridge_api_base,
         )
 
     raise ValueError(f"Unsupported provider: {provider}")
