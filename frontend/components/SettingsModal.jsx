@@ -5,6 +5,8 @@ export default function SettingsModal({ onClose }) {
   const [models, setModels] = useState([]);
   const [modelsError, setModelsError] = useState(null);
   const [loadingModels, setLoadingModels] = useState(false);
+  const [testResult, setTestResult] = useState(null); // { ok: bool, message: string }
+  const [testing, setTesting] = useState(false);
 
   const loadSettings = async () => {
     const res = await fetch("/api/settings");
@@ -108,6 +110,25 @@ export default function SettingsModal({ onClose }) {
     setSettings(data);
   };
 
+  const testConnection = async () => {
+    if (!settings) return;
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const res = await fetch(`/api/settings/test?provider=${settings.provider}`);
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        setTestResult({ ok: false, message: data.error || data.detail || "Connection failed" });
+      } else {
+        setTestResult({ ok: true, message: data.message || "Connection successful" });
+      }
+    } catch (err) {
+      setTestResult({ ok: false, message: err.message || "Connection test failed" });
+    } finally {
+      setTesting(false);
+    }
+  };
+
   if (!settings) return null;
 
   const activeModel = currentModelForActiveProvider();
@@ -161,7 +182,16 @@ export default function SettingsModal({ onClose }) {
             Active provider: <strong>{settings.provider}</strong>
           </div>
 
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              className="chat-btn secondary"
+              style={{ padding: "4px 8px", fontSize: 11 }}
+              onClick={testConnection}
+              disabled={testing}
+            >
+              {testing ? "Testing…" : "Test Connection"}
+            </button>
             <button
               type="button"
               className="chat-btn secondary"
@@ -182,6 +212,20 @@ export default function SettingsModal({ onClose }) {
           {modelsError && (
             <div style={{ marginTop: 8, color: "#ff8080", fontSize: 12 }}>
               {modelsError}
+            </div>
+          )}
+
+          {testResult && (
+            <div style={{
+              marginTop: 8,
+              padding: "6px 10px",
+              borderRadius: 6,
+              background: testResult.ok ? "#0d3320" : "#3d1111",
+              border: `1px solid ${testResult.ok ? "#166534" : "#7f1d1d"}`,
+              color: testResult.ok ? "#86efac" : "#fca5a5",
+              fontSize: 12,
+            }}>
+              {testResult.ok ? "✓ " : "✗ "}{testResult.message}
             </div>
           )}
 

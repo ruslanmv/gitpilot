@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import os
 
+import httpx
 from crewai import LLM
+
+from gitpilot.models import ProviderHealth, ProviderSummary
 
 from .settings import LLMProvider, get_settings
 
@@ -45,13 +48,15 @@ def build_llm() -> LLM:
         if not api_key:
             raise ValueError(
                 "Claude API key is required. "
-                "Configure it in Admin / LLM Settings or set ANTHROPIC_API_KEY environment variable."
+                "Configure it in Admin / LLM Settings or set "
+                "ANTHROPIC_API_KEY environment variable."
             )
 
-        # CRITICAL: Set API key as environment variable (required by CrewAI's native Anthropic provider)
+        # CRITICAL: Set API key as environment variable
+        # (required by CrewAI's native Anthropic provider)
         # CrewAI's Anthropic integration checks for this env var internally
         os.environ["ANTHROPIC_API_KEY"] = api_key
-        
+
         # Optional: Set base URL as environment variable if provided
         if base_url:
             os.environ["ANTHROPIC_BASE_URL"] = base_url
@@ -88,12 +93,13 @@ def build_llm() -> LLM:
         if not project_id:
             raise ValueError(
                 "Watsonx project ID is required. "
-                "Configure it in Admin / LLM Settings or set WATSONX_PROJECT_ID environment variable."
+                "Configure it in Admin / LLM Settings or set "
+                "WATSONX_PROJECT_ID environment variable."
             )
 
         # CRITICAL: Set project ID as environment variable (required by watsonx.ai SDK)
         os.environ["WATSONX_PROJECT_ID"] = project_id
-        
+
         # CRITICAL: Also set the base URL as WATSONX_URL (some integrations use this)
         os.environ["WATSONX_URL"] = base_url
 
@@ -140,7 +146,8 @@ def build_llm() -> LLM:
         if not base_url:
             raise ValueError(
                 "OllaBridge base URL is required. "
-                "Configure it in Admin / LLM Settings or set OLLABRIDGE_BASE_URL environment variable."
+                "Configure it in Admin / LLM Settings or set "
+                "OLLABRIDGE_BASE_URL environment variable."
             )
 
         # OllaBridge exposes an OpenAI-compatible API at /v1/
@@ -165,3 +172,116 @@ def build_llm() -> LLM:
         )
 
     raise ValueError(f"Unsupported provider: {provider}")
+
+
+def validate_provider_config(settings) -> tuple[bool, list[str]]:
+    """Validate provider configuration and return (is_valid, errors)."""
+    errors = []
+    provider = settings.provider
+
+    if provider == LLMProvider.openai:
+        if not settings.openai.api_key:
+            errors.append("OpenAI API key is required")
+    elif provider == LLMProvider.claude:
+        if not settings.claude.api_key:
+            errors.append("Anthropic API key is required")
+    elif provider == LLMProvider.watsonx:
+        if not settings.watsonx.api_key:
+            errors.append("Watsonx API key is required")
+        if not settings.watsonx.project_id:
+            errors.append("Watsonx project ID is required")
+    elif provider == LLMProvider.ollama:
+        pass  # Local, always valid
+    elif provider == LLMProvider.ollabridge:
+        pass  # Local default, always valid
+
+    return (len(errors) == 0, errors)
+
+
+def get_effective_model(settings) -> str | None:
+    """Get the active model name for the current provider."""
+    provider = settings.provider
+    if provider == LLMProvider.openai:
+        return settings.openai.model
+    if provider == LLMProvider.claude:
+        return settings.claude.model
+    if provider == LLMProvider.watsonx:
+        return settings.watsonx.model_id
+    if provider == LLMProvider.ollama:
+        return settings.ollama.model
+    if provider == LLMProvider.ollabridge:
+        return settings.ollabridge.model
+    return None
+
+
+def _apply_health(summary: ProviderSummary, status_code: int) -> None:
+    """Set health and models_available from HTTP status code."""
+    ok = status_code == 200
+    summary.health = ProviderHealth.ok if ok else ProviderHealth.error
+    summary.models_available = ok
+
+
+async def test_provider_connection(settings) -> ProviderSummary:
+    """Test the current provider connection and return status."""
+    summary = settings.get_provider_summary()
+    provider = settings.provider
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            if provider == LLMProvider.openai:
+                url = settings.openai.base_url or "https://api.openai.com"
+                resp = await client.get(
+                    f"{url}/v1/models",
+                    headers={"Authorization": f"Bearer {settings.openai.api_key}"},
+                )
+                _apply_health(summary, resp.status_code)
+
+            elif provider == LLMProvider.claude:
+                url = settings.claude.base_url or "https://api.anthropic.com"
+                headers = {
+                    "x-api-key": settings.claude.api_key,
+                    "anthropic-version": "2023-06-01",
+                }
+                resp = await client.get(f"{url}/v1/models", headers=headers)
+                _apply_health(summary, resp.status_code)
+
+            elif provider == LLMProvider.watsonx:
+                base = settings.watsonx.base_url or "https://us-south.ml.cloud.ibm.com"
+                resp = await client.get(
+                    f"{base}/ml/v1/foundation_model_specs",
+                    params={"version": "2024-03-14", "limit": "1"},
+                    headers={"Authorization": f"Bearer {settings.watsonx.api_key}"},
+                )
+                _apply_health(summary, resp.status_code)
+
+            elif provider == LLMProvider.ollama:
+                base = settings.ollama.base_url or "http://127.0.0.1:11434"
+                resp = await client.get(f"{base}/api/tags")
+                _apply_health(summary, resp.status_code)
+
+            elif provider == LLMProvider.ollabridge:
+                base = settings.ollabridge.base_url or "http://127.0.0.1:8000"
+                base = base.rstrip("/")
+                if base.endswith("/v1"):
+                    base = base[:-3]
+                    summary.warning = (
+                        "Do not include /v1; GitPilot adds it automatically."
+                    )
+                api_key = settings.ollabridge.api_key or "ollabridge"
+                resp = await client.get(
+                    f"{base}/v1/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+                _apply_health(summary, resp.status_code)
+
+    except httpx.ConnectError:
+        summary.health = ProviderHealth.error
+        summary.warning = f"Cannot connect to {provider.value} server"
+    except httpx.TimeoutException:
+        summary.health = ProviderHealth.warning
+        summary.warning = f"Connection to {provider.value} timed out"
+    except Exception as e:
+        summary.health = ProviderHealth.error
+        summary.warning = str(e)
+
+    return summary

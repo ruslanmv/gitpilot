@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -103,6 +103,15 @@ class ModelsResponse(BaseModel):
     error: str | None = None
 
 
+class OllaBridgeNormalizedHealth(BaseModel):
+    status: str  # "ok" or "error"
+    base_url: str
+    effective_api_base: str
+    models_available: bool = False
+    auth_mode: str = "unknown"
+    warning: str | None = None
+
+
 @router.get("/models", response_model=ModelsResponse)
 async def proxy_models(base_url: str = "https://ruslanmv-ollabridge.hf.space", api_key: str = ""):
     """Proxy model listing request to an OllaBridge instance."""
@@ -142,3 +151,43 @@ async def proxy_health(base_url: str = "https://ruslanmv-ollabridge.hf.space"):
             return {"status": "error", "url": base, "http_status": resp.status_code}
     except Exception as exc:
         return {"status": "error", "url": base, "error": str(exc)}
+
+
+@router.get("/normalized-health")
+async def ollabridge_normalized_health(
+    base_url: str = Query(default="http://127.0.0.1:8000"),
+    api_key: str | None = Query(default=None),
+):
+    """Normalized health check with machine-friendly fields for the redesigned UI."""
+    effective_base = base_url.rstrip("/")
+    warning = None
+    if effective_base.endswith("/v1"):
+        effective_base = effective_base[:-3]
+        warning = "Do not include /v1; GitPilot adds it automatically."
+
+    effective_api_base = f"{effective_base}/v1"
+
+    auth_mode = "local"
+    if api_key:
+        auth_mode = "api_key"
+
+    try:
+        headers = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{effective_api_base}/models", headers=headers)
+            models_available = resp.status_code == 200
+            status = "ok" if resp.status_code == 200 else "error"
+    except Exception:
+        status = "error"
+        models_available = False
+
+    return OllaBridgeNormalizedHealth(
+        status=status,
+        base_url=base_url,
+        effective_api_base=effective_api_base,
+        models_available=models_available,
+        auth_mode=auth_mode,
+        warning=warning,
+    )

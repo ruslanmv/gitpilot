@@ -16,11 +16,18 @@ export default function ContextBar({
   onRemove,
   onAdd,
   onBranchChange,
+  mode, // workspace mode: "github", "local-git", "folder" (optional)
 }) {
   if (!contextRepos || contextRepos.length === 0) return null;
 
   return (
     <div className="ctxbar">
+      {/* Workspace mode indicator */}
+      {mode && (
+        <span className="ctxbar-mode" title={`Workspace mode: ${mode}`}>
+          {mode === "github" ? "GH" : mode === "local-git" ? "Git" : "Dir"}
+        </span>
+      )}
       <div className="ctxbar-scroll">
         {contextRepos.map((entry) => {
           const isActive = entry.repoKey === activeRepoKey;

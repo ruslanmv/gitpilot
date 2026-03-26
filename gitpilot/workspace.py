@@ -11,9 +11,11 @@ import asyncio
 import logging
 import os
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
+
+from gitpilot.models import WorkspaceSummary
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +32,7 @@ class WorkspaceInfo:
     branch: str
     remote_url: str
     is_dirty: bool = False
-    last_sync: Optional[str] = None
+    last_sync: str | None = None
 
 
 class WorkspaceManager:
@@ -44,10 +46,10 @@ class WorkspaceManager:
     - Create feature branches, commit, and push
     """
 
-    def __init__(self, root: Optional[Path] = None):
+    def __init__(self, root: Path | None = None):
         self.root = root or WORKSPACE_ROOT
         self.root.mkdir(parents=True, exist_ok=True)
-        self._active: Dict[str, WorkspaceInfo] = {}
+        self._active: dict[str, WorkspaceInfo] = {}
 
     def workspace_path(self, owner: str, repo: str) -> Path:
         return self.root / owner / repo
@@ -61,7 +63,7 @@ class WorkspaceManager:
         owner: str,
         repo: str,
         token: str,
-        branch: Optional[str] = None,
+        branch: str | None = None,
     ) -> WorkspaceInfo:
         """Clone if absent, fetch if present, checkout *branch*."""
         ws_path = self.workspace_path(owner, repo)
@@ -117,7 +119,7 @@ class WorkspaceManager:
 
     async def write_file(
         self, ws: WorkspaceInfo, file_path: str, content: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         full = self._safe_resolve(ws, file_path)
         full.parent.mkdir(parents=True, exist_ok=True)
         full.write_text(content, encoding="utf-8")
@@ -132,7 +134,7 @@ class WorkspaceManager:
 
     async def list_files(
         self, ws: WorkspaceInfo, directory: str = "."
-    ) -> List[str]:
+    ) -> list[str]:
         result = await self._run_git(
             ["git", "ls-files", "--cached", "--others",
              "--exclude-standard", directory],
@@ -142,7 +144,7 @@ class WorkspaceManager:
 
     async def search_files(
         self, ws: WorkspaceInfo, pattern: str, path: str = "."
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         try:
             result = await self._run_git(
                 ["git", "grep", "-n", "--no-color", "-I", pattern, "--", path],
@@ -176,8 +178,8 @@ class WorkspaceManager:
         return branch_name
 
     async def commit(
-        self, ws: WorkspaceInfo, message: str, files: Optional[List[str]] = None,
-    ) -> Dict[str, str]:
+        self, ws: WorkspaceInfo, message: str, files: list[str] | None = None,
+    ) -> dict[str, str]:
         if files:
             await self._run_git(["git", "add", "--"] + files, cwd=ws.path)
         else:
@@ -191,7 +193,7 @@ class WorkspaceManager:
 
     async def push(
         self, ws: WorkspaceInfo, force: bool = False,
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         cmd = ["git", "push", "-u", "origin", ws.branch]
         if force:
             cmd.insert(2, "--force-with-lease")
@@ -205,7 +207,7 @@ class WorkspaceManager:
         result = await self._run_git(cmd, cwd=ws.path)
         return result.stdout
 
-    async def status(self, ws: WorkspaceInfo) -> Dict[str, Any]:
+    async def status(self, ws: WorkspaceInfo) -> dict[str, Any]:
         result = await self._run_git(
             ["git", "status", "--porcelain=v2", "--branch"], cwd=ws.path,
         )
@@ -213,12 +215,12 @@ class WorkspaceManager:
 
     async def log(
         self, ws: WorkspaceInfo, count: int = 10,
-    ) -> List[Dict[str, str]]:
+    ) -> list[dict[str, str]]:
         result = await self._run_git(
             ["git", "log", f"-{count}", "--format=%H|%an|%ae|%s|%aI"],
             cwd=ws.path,
         )
-        commits: List[Dict[str, str]] = []
+        commits: list[dict[str, str]] = []
         for line in result.stdout.strip().split("\n"):
             if "|" in line:
                 parts = line.split("|", 4)
@@ -238,7 +240,7 @@ class WorkspaceManager:
 
     async def merge(
         self, ws: WorkspaceInfo, branch: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         result = await self._run_git(
             ["git", "merge", branch], cwd=ws.path, check=False,
         )
@@ -296,7 +298,7 @@ class WorkspaceManager:
             )
 
     @staticmethod
-    def _parse_status(raw: str) -> Dict[str, Any]:
+    def _parse_status(raw: str) -> dict[str, Any]:
         modified, added, deleted, untracked = [], [], [], []
         branch_name = "unknown"
         for line in raw.split("\n"):
@@ -322,3 +324,64 @@ class WorkspaceManager:
             "untracked": untracked,
             "clean": not any([modified, added, deleted, untracked]),
         }
+
+
+async def summarize_workspace(folder_path: str) -> WorkspaceSummary:
+    """Summarize workspace state for the redesigned UI status endpoint."""
+    folder_path = os.path.abspath(folder_path)
+    folder_name = os.path.basename(folder_path) if folder_path else None
+    folder_open = os.path.isdir(folder_path) if folder_path else False
+
+    summary = WorkspaceSummary(
+        folder_open=folder_open,
+        folder_path=folder_path,
+        folder_name=folder_name,
+    )
+
+    if not folder_open:
+        return summary
+
+    # Check for git repo
+    git_dir = os.path.join(folder_path, ".git")
+    if not os.path.exists(git_dir):
+        return summary
+
+    summary.git_detected = True
+    summary.repo_root = folder_path
+
+    # Get repo name from folder
+    summary.repo_name = folder_name
+
+    # Get branch and remotes via git CLI
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "rev-parse", "--abbrev-ref", "HEAD",
+            cwd=folder_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode == 0:
+            summary.branch = stdout.decode().strip()
+    except Exception:
+        logger.debug("Branch detection failed", exc_info=True)
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "remote", "-v",
+            cwd=folder_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode == 0:
+            remotes = set()
+            for line in stdout.decode().strip().splitlines():
+                parts = line.split()
+                if parts:
+                    remotes.add(parts[0])
+            summary.remotes = sorted(remotes)
+    except Exception:
+        logger.debug("Remote detection failed", exc_info=True)
+
+    return summary

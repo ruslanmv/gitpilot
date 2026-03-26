@@ -22,6 +22,8 @@ export default function ChatPanel({
   onSessionChatStateChange,
   sessionId,
   onEnsureSession,
+  canChat = true, // readiness gate: false disables composer and shows blocker
+  chatBlocker = null, // { message: string, cta?: string, onCta?: () => void }
 }) {
   // Initialize state from props or defaults
   const [messages, setMessages] = useState(sessionChatState?.messages || []);
@@ -567,6 +569,41 @@ export default function ChatPanel({
       )}
 
       <div className="chat-input-box">
+        {/* Readiness blocker banner */}
+        {!canChat && chatBlocker && (
+          <div style={{
+            fontSize: 12,
+            color: "#F59E0B",
+            background: "rgba(245, 158, 11, 0.08)",
+            border: "1px solid rgba(245, 158, 11, 0.2)",
+            borderRadius: 6,
+            padding: "8px 12px",
+            marginBottom: 8,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}>
+            <span>{chatBlocker.message || "Chat is not ready yet."}</span>
+            {chatBlocker.cta && chatBlocker.onCta && (
+              <button
+                type="button"
+                onClick={chatBlocker.onCta}
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: "#F59E0B",
+                  background: "transparent",
+                  border: "1px solid rgba(245, 158, 11, 0.3)",
+                  borderRadius: 4,
+                  padding: "2px 8px",
+                  cursor: "pointer",
+                }}
+              >
+                {chatBlocker.cta}
+              </button>
+            )}
+          </div>
+        )}
         {status && (
           <div style={{ fontSize: 11, color: "#ffb3b7", marginBottom: 8 }}>
             {status}
@@ -590,7 +627,7 @@ export default function ChatPanel({
                 if (!loadingPlan && !executing) send();
               }
             }}
-            disabled={loadingPlan || executing}
+            disabled={!canChat || loadingPlan || executing}
           />
 
           {/* Always show both buttons (old UX) */}
@@ -598,7 +635,7 @@ export default function ChatPanel({
             className="chat-btn primary"
             type="button"
             onClick={send}
-            disabled={loadingPlan || executing || !goal.trim()}
+            disabled={!canChat || loadingPlan || executing || !goal.trim()}
           >
             {loadingPlan ? "Planning..." : wsConnected ? "Send" : "Generate plan"}
           </button>

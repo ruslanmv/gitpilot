@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +26,9 @@ class Message:
     role: str          # user | assistant | system
     content: str
     timestamp: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        default_factory=lambda: datetime.now(UTC).isoformat(),
     )
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -36,43 +37,48 @@ class Checkpoint:
     message_index: int = 0
     description: str = ""
     timestamp: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        default_factory=lambda: datetime.now(UTC).isoformat(),
     )
-    snapshot_path: Optional[str] = None
+    snapshot_path: str | None = None
 
 
 @dataclass
 class Session:
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:16])
-    name: Optional[str] = None
-    repo_full_name: Optional[str] = None
-    branch: Optional[str] = None
-    messages: List[Message] = field(default_factory=list)
-    checkpoints: List[Checkpoint] = field(default_factory=list)
+    name: str | None = None
+    repo_full_name: str | None = None
+    branch: str | None = None
+    messages: list[Message] = field(default_factory=list)
+    checkpoints: list[Checkpoint] = field(default_factory=list)
     created_at: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        default_factory=lambda: datetime.now(UTC).isoformat(),
     )
     updated_at: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        default_factory=lambda: datetime.now(UTC).isoformat(),
     )
-    pr_number: Optional[int] = None
+    pr_number: int | None = None
     status: str = "active"  # active | paused | completed
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    # Session mode fields
+    mode: str | None = None        # "folder" | "local_git" | "github"
+    folder_path: str | None = None
+    repo_root: str | None = None
 
     # Multi-repo context support
     # Each entry: {"full_name": "owner/repo", "branch": "main", "mode": "read"|"write"}
-    repos: List[Dict[str, Any]] = field(default_factory=list)
-    active_repo: Optional[str] = None  # full_name of the write-target repo
+    repos: list[dict[str, Any]] = field(default_factory=list)
+    active_repo: str | None = None  # full_name of the write-target repo
 
     def add_message(self, role: str, content: str, **meta):
         self.messages.append(Message(role=role, content=content, metadata=meta))
-        self.updated_at = datetime.now(timezone.utc).isoformat()
+        self.updated_at = datetime.now(UTC).isoformat()
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> Session:
+    def from_dict(cls, data: dict[str, Any]) -> Session:
         data = dict(data)  # shallow copy
         data["messages"] = [Message(**m) for m in data.get("messages", [])]
         data["checkpoints"] = [Checkpoint(**c) for c in data.get("checkpoints", [])]
@@ -88,13 +94,18 @@ class Session:
         data.setdefault("repos", [])
         data.setdefault("active_repo", None)
 
+        # Session mode fields (backwards-compatible)
+        data.setdefault("mode", None)
+        data.setdefault("folder_path", None)
+        data.setdefault("repo_root", None)
+
         return cls(**data)
 
 
 class SessionManager:
     """Manage session lifecycle: create, save, load, list, fork, rewind."""
 
-    def __init__(self, root: Optional[Path] = None):
+    def __init__(self, root: Path | None = None):
         self.root = root or SESSION_ROOT
         self.root.mkdir(parents=True, exist_ok=True)
 
@@ -103,13 +114,57 @@ class SessionManager:
 
     def create(
         self,
-        repo_full_name: Optional[str] = None,
-        branch: Optional[str] = None,
-        name: Optional[str] = None,
+        repo_full_name: str | None = None,
+        branch: str | None = None,
+        name: str | None = None,
     ) -> Session:
         session = Session(
             repo_full_name=repo_full_name, branch=branch, name=name,
         )
+        self.save(session)
+        return session
+
+    def create_folder_session(
+        self, folder_path: str, name: str | None = None,
+    ) -> Session:
+        """Create a session for folder-only mode (no git required)."""
+        folder_name = os.path.basename(os.path.normpath(folder_path))
+        session_name = name or f"Folder: {folder_name}"
+        session = self.create(name=session_name)
+        session.mode = "folder"
+        session.folder_path = folder_path
+        self.save(session)
+        return session
+
+    def create_local_git_session(
+        self, repo_root: str, branch: str | None = None, name: str | None = None,
+    ) -> Session:
+        """Create a session for local git mode."""
+        repo_name = os.path.basename(os.path.normpath(repo_root))
+        session_name = name or f"Local Git: {repo_name}"
+        if branch:
+            session_name += f" ({branch})"
+        session = self.create(name=session_name)
+        session.mode = "local_git"
+        session.repo_root = repo_root
+        session.folder_path = repo_root
+        session.branch = branch
+        self.save(session)
+        return session
+
+    def create_github_session(
+        self, repo_full_name: str, branch: str | None = None, name: str | None = None,
+    ) -> Session:
+        """Create a session for GitHub mode."""
+        session_name = name or f"GitHub: {repo_full_name}"
+        if branch:
+            session_name += f" ({branch})"
+        session = self.create(
+            name=session_name,
+            repo_full_name=repo_full_name
+        )
+        session.mode = "github"
+        session.branch = branch
         self.save(session)
         return session
 
@@ -125,9 +180,9 @@ class SessionManager:
 
     def list_sessions(
         self,
-        repo_full_name: Optional[str] = None,
+        repo_full_name: str | None = None,
         limit: int = 50,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         sessions = []
         for path in sorted(self.root.glob("*.json"), reverse=True):
             try:
@@ -149,6 +204,7 @@ class SessionManager:
                 if len(sessions) >= limit:
                     break
             except Exception:
+                logger.debug("Failed to read session file %s", path, exc_info=True)
                 continue
         return sessions
 
@@ -159,7 +215,7 @@ class SessionManager:
             return True
         return False
 
-    def fork(self, session_id: str, at_message: Optional[int] = None) -> Session:
+    def fork(self, session_id: str, at_message: int | None = None) -> Session:
         original = self.load(session_id)
         messages = original.messages
         if at_message is not None:
@@ -178,7 +234,7 @@ class SessionManager:
     def create_checkpoint(
         self,
         session: Session,
-        workspace_path: Optional[Path] = None,
+        workspace_path: Path | None = None,
         description: str = "",
     ) -> Checkpoint:
         checkpoint = Checkpoint(
@@ -200,7 +256,7 @@ class SessionManager:
         self,
         session: Session,
         checkpoint_id: str,
-        workspace_path: Optional[Path] = None,
+        workspace_path: Path | None = None,
     ) -> Session:
         checkpoint = None
         for cp in session.checkpoints:

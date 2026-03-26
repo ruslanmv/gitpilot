@@ -10,15 +10,16 @@ Imported automatically via __init__.py or cli.py startup.
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
 
-from fastapi import Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from .settings import (
-    AppSettings, get_settings, set_provider, update_settings, LLMProvider,
+    AppSettings,
+    LLMProvider,
+    get_settings,
+    set_provider,
+    update_settings,
 )
-from .model_catalog import list_models_for_provider
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +27,13 @@ logger = logging.getLogger(__name__)
 # Extended SettingsResponse that includes ollabridge
 class SettingsResponseExt(BaseModel):
     provider: LLMProvider
-    providers: List[LLMProvider]
+    providers: list[LLMProvider]
     openai: dict
     claude: dict
     watsonx: dict
     ollama: dict
     ollabridge: dict = {}
+    ollabridge_connection_type: str | None = None
     langflow_url: str
     has_langflow_plan_flow: bool
 
@@ -46,6 +48,16 @@ ALL_PROVIDERS = [
 
 
 def _build_settings_response(s: AppSettings) -> SettingsResponseExt:
+    ollabridge_connection_type = "local"
+    if s.ollabridge.api_key:
+        ollabridge_connection_type = "api_key"
+
+    # Warn if user included /v1 in base_url
+    ob_base = s.ollabridge.base_url or ""
+    if ob_base.rstrip("/").endswith("/v1"):
+        # The response should carry a warning; we'll handle this in the settings response
+        pass
+
     return SettingsResponseExt(
         provider=s.provider,
         providers=ALL_PROVIDERS,
@@ -54,6 +66,7 @@ def _build_settings_response(s: AppSettings) -> SettingsResponseExt:
         watsonx=s.watsonx.model_dump(),
         ollama=s.ollama.model_dump(),
         ollabridge=s.ollabridge.model_dump(),
+        ollabridge_connection_type=ollabridge_connection_type,
         langflow_url=s.langflow_url,
         has_langflow_plan_flow=bool(s.langflow_plan_flow_id),
     )

@@ -23,8 +23,7 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Enums & data models
@@ -64,10 +63,10 @@ class Finding:
     line_number: int = 0
     snippet: str = ""
     recommendation: str = ""
-    cwe_id: Optional[str] = None
+    cwe_id: str | None = None
     confidence: float = 0.8  # 0.0 - 1.0
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "rule_id": self.rule_id,
             "title": self.title,
@@ -87,12 +86,12 @@ class Finding:
 class ScanResult:
     """Aggregate result of a security scan."""
 
-    findings: List[Finding] = field(default_factory=list)
+    findings: list[Finding] = field(default_factory=list)
     files_scanned: int = 0
     scan_duration_ms: float = 0.0
-    summary: Dict[str, int] = field(default_factory=dict)
+    summary: dict[str, int] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "findings": [f.to_dict() for f in self.findings],
             "files_scanned": self.files_scanned,
@@ -101,7 +100,7 @@ class ScanResult:
             "total_findings": len(self.findings),
         }
 
-    def by_severity(self, severity: Severity) -> List[Finding]:
+    def by_severity(self, severity: Severity) -> list[Finding]:
         return [f for f in self.findings if f.severity == severity]
 
 
@@ -109,7 +108,7 @@ class ScanResult:
 # Secret detection patterns
 # ---------------------------------------------------------------------------
 
-_SECRET_PATTERNS: List[Dict[str, Any]] = [
+_SECRET_PATTERNS: list[dict[str, Any]] = [
     {
         "rule_id": "SEC001",
         "title": "AWS Access Key",
@@ -165,7 +164,7 @@ _SECRET_PATTERNS: List[Dict[str, Any]] = [
 # Code vulnerability patterns
 # ---------------------------------------------------------------------------
 
-_CODE_PATTERNS: List[Dict[str, Any]] = [
+_CODE_PATTERNS: list[dict[str, Any]] = [
     {
         "rule_id": "SEC100",
         "title": "SQL Injection Risk",
@@ -290,8 +289,8 @@ class SecurityScanner:
 
     def __init__(
         self,
-        extra_secret_patterns: Optional[List[Dict[str, Any]]] = None,
-        extra_code_patterns: Optional[List[Dict[str, Any]]] = None,
+        extra_secret_patterns: list[dict[str, Any]] | None = None,
+        extra_code_patterns: list[dict[str, Any]] | None = None,
         min_confidence: float = 0.5,
     ) -> None:
         self.secret_patterns = _SECRET_PATTERNS + (extra_secret_patterns or [])
@@ -320,9 +319,9 @@ class SecurityScanner:
         result.summary = self._build_summary(result.findings)
         return result
 
-    def scan_file(self, file_path: str) -> List[Finding]:
+    def scan_file(self, file_path: str) -> list[Finding]:
         """Scan a single file for security issues."""
-        findings: List[Finding] = []
+        findings: list[Finding] = []
         path = Path(file_path)
         suffix = path.suffix.lower()
 
@@ -342,12 +341,12 @@ class SecurityScanner:
         # Filter by confidence threshold
         return [f for f in findings if f.confidence >= self.min_confidence]
 
-    def scan_diff(self, diff_text: str) -> List[Finding]:
+    def scan_diff(self, diff_text: str) -> list[Finding]:
         """Scan a git diff for security issues in added lines only.
 
         This is useful for CI/CD pipelines to check only new changes.
         """
-        findings: List[Finding] = []
+        findings: list[Finding] = []
         current_file = ""
         current_line = 0
 
@@ -419,9 +418,9 @@ class SecurityScanner:
             elif entry.is_file() and entry.suffix.lower() in _SCANNABLE_EXTENSIONS:
                 yield entry
 
-    def _check_secrets(self, lines: List[str], file_path: str) -> List[Finding]:
+    def _check_secrets(self, lines: list[str], file_path: str) -> list[Finding]:
         """Check all lines for secret patterns."""
-        findings: List[Finding] = []
+        findings: list[Finding] = []
         # Skip likely test/fixture files for lower confidence
         is_test = "test" in file_path.lower() or "fixture" in file_path.lower()
 
@@ -444,10 +443,10 @@ class SecurityScanner:
         return findings
 
     def _check_code_patterns(
-        self, lines: List[str], file_path: str, suffix: str,
-    ) -> List[Finding]:
+        self, lines: list[str], file_path: str, suffix: str,
+    ) -> list[Finding]:
         """Check lines against code vulnerability patterns."""
-        findings: List[Finding] = []
+        findings: list[Finding] = []
         for i, line in enumerate(lines, start=1):
             for cp in self.code_patterns:
                 file_types = cp.get("file_types", set())
@@ -480,10 +479,35 @@ class SecurityScanner:
         return re.sub(pattern, _mask, text)[:200]
 
     @staticmethod
-    def _build_summary(findings: List[Finding]) -> Dict[str, int]:
+    def _build_summary(findings: list[Finding]) -> dict[str, int]:
         """Build a severity summary dict."""
-        summary: Dict[str, int] = {}
+        summary: dict[str, int] = {}
         for f in findings:
             key = f.severity.value
             summary[key] = summary.get(key, 0) + 1
         return summary
+
+
+def scan_current_workspace(path: str) -> dict:
+    """Lightweight API-friendly entry point for quick action security scan.
+
+    Returns normalized diagnostics suitable for the extension quick action.
+    """
+
+    if not os.path.isdir(path):
+        return {
+            "success": False,
+            "error": f"Path is not a directory: {path}",
+            "findings": [],
+            "summary": {},
+        }
+
+    scanner = SecurityScanner()
+    result = scanner.scan_directory(path)
+    return {
+        "success": True,
+        "files_scanned": result.files_scanned,
+        "scan_duration_ms": result.scan_duration_ms,
+        "findings": [f.to_dict() for f in result.findings],
+        "summary": result.summary,
+    }

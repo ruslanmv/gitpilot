@@ -379,6 +379,30 @@ export class GitPilotApiClient {
         });
     }
 
+    // --- Convenience HTTP methods ---
+
+    async get<T = any>(path: string): Promise<T> {
+        return this.request<T>(path);
+    }
+
+    async post<T = any>(path: string, body?: any): Promise<T> {
+        return this.request<T>(path, {
+            method: 'POST',
+            body: body !== undefined ? JSON.stringify(body) : undefined,
+        });
+    }
+
+    async put<T = any>(path: string, body?: any): Promise<T> {
+        return this.request<T>(path, {
+            method: 'PUT',
+            body: body !== undefined ? JSON.stringify(body) : undefined,
+        });
+    }
+
+    async delete<T = void>(path: string): Promise<T> {
+        return this.request<T>(path, { method: 'DELETE' });
+    }
+
     // --- Generic request with retry ---
 
     async request<T = any>(path: string, options?: RequestInit, retries = 2): Promise<T> {

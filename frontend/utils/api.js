@@ -145,3 +145,68 @@ export async function authFetchJSON(url, options = {}) {
 
   return response.json();
 }
+
+// ─── Redesigned API Endpoints ────────────────────────────
+
+/**
+ * Get normalized server status
+ */
+export async function fetchStatus() {
+  return safeFetchJSON(apiUrl("/api/status"));
+}
+
+/**
+ * Get detailed provider status
+ */
+export async function fetchProviderStatus() {
+  return safeFetchJSON(apiUrl("/api/providers/status"));
+}
+
+/**
+ * Test a provider configuration
+ */
+export async function testProvider(providerConfig) {
+  return safeFetchJSON(apiUrl("/api/providers/test"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(providerConfig),
+  });
+}
+
+/**
+ * Start a session by mode
+ */
+export async function startSession(sessionConfig) {
+  return safeFetchJSON(apiUrl("/api/session/start"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(sessionConfig),
+  });
+}
+
+/**
+ * Send a chat message (redesigned endpoint)
+ */
+export async function sendChatMessage(messageConfig) {
+  return safeFetchJSON(apiUrl("/api/chat/send"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(messageConfig),
+  });
+}
+
+/**
+ * Get workspace summary
+ */
+export async function fetchWorkspaceSummary(folderPath) {
+  const query = folderPath ? `?folder_path=${encodeURIComponent(folderPath)}` : "";
+  return safeFetchJSON(apiUrl(`/api/workspace/summary${query}`));
+}
+
+/**
+ * Run security scan on workspace
+ */
+export async function scanWorkspace(path) {
+  const query = path ? `?path=${encodeURIComponent(path)}` : "";
+  return safeFetchJSON(apiUrl(`/api/security/scan-workspace${query}`));
+}
