@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { testProvider } from "../utils/api";
 
 const PROVIDERS = ["ollabridge", "openai", "claude", "watsonx", "ollama"];
 
@@ -25,6 +26,9 @@ export default function LlmSettings() {
   const [modelsByProvider, setModelsByProvider] = useState({});
   const [modelsError, setModelsError] = useState("");
   const [loadingModelsFor, setLoadingModelsFor] = useState("");
+
+  const [testResult, setTestResult] = useState(null);
+  const [testing, setTesting] = useState(false);
 
   // OllaBridge pairing state
   const [authMode, setAuthMode] = useState("local");
@@ -126,6 +130,55 @@ export default function LlmSettings() {
       setPairResult({ ok: false, message: e.message });
     } finally {
       setPairing(false);
+    }
+  };
+
+  const handleTestConnection = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const activeProvider = settings?.provider || "ollama";
+      const config = { provider: activeProvider };
+
+      // Add provider-specific config
+      if (activeProvider === "openai" && settings?.openai) {
+        config.openai = {
+          api_key: settings.openai.api_key,
+          base_url: settings.openai.base_url,
+          model: settings.openai.model,
+        };
+      } else if (activeProvider === "claude" && settings?.claude) {
+        config.claude = {
+          api_key: settings.claude.api_key,
+          base_url: settings.claude.base_url,
+          model: settings.claude.model,
+        };
+      } else if (activeProvider === "watsonx" && settings?.watsonx) {
+        config.watsonx = {
+          api_key: settings.watsonx.api_key,
+          project_id: settings.watsonx.project_id,
+          base_url: settings.watsonx.base_url,
+          model_id: settings.watsonx.model_id,
+        };
+      } else if (activeProvider === "ollama" && settings?.ollama) {
+        config.ollama = {
+          base_url: settings.ollama.base_url,
+          model: settings.ollama.model,
+        };
+      } else if (activeProvider === "ollabridge" && settings?.ollabridge) {
+        config.ollabridge = {
+          base_url: settings.ollabridge.base_url,
+          model: settings.ollabridge.model,
+          api_key: settings.ollabridge.api_key,
+        };
+      }
+
+      const result = await testProvider(config);
+      setTestResult(result);
+    } catch (err) {
+      setTestResult({ health: "error", warning: err.message || "Test failed" });
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -666,6 +719,22 @@ export default function LlmSettings() {
 
       <div className="settings-actions">
         <button
+          onClick={handleTestConnection}
+          disabled={testing}
+          style={{
+            padding: "8px 16px",
+            background: "#2563EB",
+            color: "#fff",
+            border: "none",
+            borderRadius: "6px",
+            cursor: testing ? "not-allowed" : "pointer",
+            opacity: testing ? 0.6 : 1,
+            marginRight: "8px",
+          }}
+        >
+          {testing ? "Testing..." : "Test Connection"}
+        </button>
+        <button
           className="settings-save-btn"
           type="button"
           onClick={handleSave}
@@ -675,6 +744,31 @@ export default function LlmSettings() {
         </button>
         {savedMsg && <span className="settings-success">{savedMsg}</span>}
         {error && <span className="settings-error">{error}</span>}
+        {testResult && (
+          <div style={{
+            marginTop: "12px",
+            padding: "10px 14px",
+            borderRadius: "6px",
+            background: testResult.health === "ok" ? "#0d3320" : "#3d1111",
+            border: `1px solid ${testResult.health === "ok" ? "#166534" : "#7f1d1d"}`,
+            fontSize: "13px",
+            width: "100%",
+          }}>
+            <span style={{ fontWeight: 600 }}>
+              {testResult.health === "ok" ? "\u2713 Connection successful" : "\u2717 Connection failed"}
+            </span>
+            {testResult.warning && (
+              <div style={{ marginTop: "4px", opacity: 0.8, fontSize: "12px" }}>
+                {testResult.warning}
+              </div>
+            )}
+            {testResult.model && (
+              <div style={{ marginTop: "4px", opacity: 0.7, fontSize: "12px" }}>
+                Model: {testResult.model}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

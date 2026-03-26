@@ -2,19 +2,22 @@
 from __future__ import annotations
 
 import contextvars
+import logging
 import os
 import re
 from base64 import b64decode, b64encode
 from contextlib import contextmanager
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 from fastapi import HTTPException
 
+from gitpilot.models import GithubStatusSummary
+
 GITHUB_API_BASE = "https://api.github.com"
 
 # Context variable to store the GitHub token for the current request/execution scope
-_request_token: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+_request_token: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "request_token", default=None
 )
 
@@ -22,13 +25,13 @@ _request_token: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 # add near _request_token
-_request_ref: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+_request_ref: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "request_ref", default=None
 )
 
 
 @contextmanager
-def execution_context(token: Optional[str], ref: Optional[str] = None):
+def execution_context(token: str | None, ref: str | None = None):
     token_var = _request_token.set(token)
     ref_var = _request_ref.set(ref)
     try:
@@ -38,13 +41,13 @@ def execution_context(token: Optional[str], ref: Optional[str] = None):
         _request_ref.reset(ref_var)
 
 
-def _github_ref(provided_ref: Optional[str] = None) -> Optional[str]:
+def _github_ref(provided_ref: str | None = None) -> str | None:
     if provided_ref:
         return provided_ref
     return _request_ref.get()
 
 
-def _github_token(provided_token: Optional[str] = None) -> str:
+def _github_token(provided_token: str | None = None) -> str:
     """
     Get GitHub token from:
     1. Explicit argument
@@ -74,9 +77,9 @@ async def github_request(
     path: str,
     *,
     method: str = "GET",
-    json: Optional[Dict[str, Any]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    token: Optional[str] = None,
+    json: dict[str, Any] | None = None,
+    params: dict[str, Any] | None = None,
+    token: str | None = None,
 ) -> Any:
     """
     Core GitHub request helper.
@@ -124,8 +127,8 @@ async def github_request(
 # -----------------------------------------------------------------------------
 
 async def list_user_repos(
-    query: str | None = None, token: Optional[str] = None
-) -> List[Dict[str, Any]]:
+    query: str | None = None, token: str | None = None
+) -> list[dict[str, Any]]:
     """
     Legacy function - fetches first 100 repos.
     (Retro-compatible with older GitPilot versions.)
@@ -160,8 +163,8 @@ async def list_user_repos(
 async def list_user_repos_paginated(
     page: int = 1,
     per_page: int = 100,
-    token: Optional[str] = None,
-) -> Dict[str, Any]:
+    token: str | None = None,
+) -> dict[str, Any]:
     """
     Fetch user repositories with pagination support.
     Returns:
@@ -228,8 +231,8 @@ async def search_user_repos(
     query: str,
     page: int = 1,
     per_page: int = 100,
-    token: Optional[str] = None,
-) -> Dict[str, Any]:
+    token: str | None = None,
+) -> dict[str, Any]:
     """
     Search across ALL user repositories, then return paginated results.
 
@@ -242,7 +245,7 @@ async def search_user_repos(
         "has_more": bool,
       }
     """
-    all_repos: List[Dict[str, Any]] = []
+    all_repos: list[dict[str, Any]] = []
     fetch_page = 1
     max_pages = 15  # safety (1500 repos)
 
@@ -282,14 +285,14 @@ async def search_user_repos(
 # Repo + Ref resolution helpers (fixes "No commit found for SHA: main")
 # -----------------------------------------------------------------------------
 
-async def get_repo(owner: str, repo: str, token: Optional[str] = None) -> Dict[str, Any]:
+async def get_repo(owner: str, repo: str, token: str | None = None) -> dict[str, Any]:
     """
     Get repository information including default_branch.
     """
     return await github_request(f"/repos/{owner}/{repo}", token=token)
 
 
-async def _resolve_head_ref(owner: str, repo: str, token: Optional[str]) -> str:
+async def _resolve_head_ref(owner: str, repo: str, token: str | None) -> str:
     repo_data = await get_repo(owner, repo, token=token)
     return repo_data.get("default_branch", "main")
 
@@ -297,8 +300,8 @@ async def _resolve_head_ref(owner: str, repo: str, token: Optional[str]) -> str:
 async def _resolve_ref_to_commit_sha(
     owner: str,
     repo: str,
-    ref: Optional[str],
-    token: Optional[str],
+    ref: str | None,
+    token: str | None,
 ) -> str:
     """
     Resolve a ref (branch/tag/commit SHA/"HEAD"/None) to a commit SHA.
@@ -369,7 +372,7 @@ async def _commit_sha_to_tree_sha(
     owner: str,
     repo: str,
     commit_sha: str,
-    token: Optional[str],
+    token: str | None,
 ) -> str:
     """
     Convert commit SHA -> tree SHA using /git/commits/{sha}.
@@ -394,7 +397,7 @@ async def create_branch(
     repo: str,
     new_branch: str,
     from_ref: str = "HEAD",
-    token: Optional[str] = None,
+    token: str | None = None,
 ) -> str:
     """
     Create a new branch from a ref (default: HEAD = default branch).
@@ -418,7 +421,7 @@ async def create_branch(
 async def get_repo_tree(
     owner: str,
     repo: str,
-    token: Optional[str] = None,
+    token: str | None = None,
     ref: str = "HEAD",
 ):
     # ✅ FIX: Only use context ref if caller did NOT provide a specific ref
@@ -447,8 +450,8 @@ async def get_file(
     owner: str,
     repo: str,
     path: str,
-    token: Optional[str] = None,
-    ref: Optional[str] = None,
+    token: str | None = None,
+    ref: str | None = None,
 ) -> str:
     # ✅ FIX: Only use context ref if ref is missing or "HEAD"
     ctx_ref = _github_ref(None)
@@ -471,14 +474,14 @@ async def put_file(
     path: str,
     content: str,
     message: str,
-    token: Optional[str] = None,
-    branch: Optional[str] = None,
-) -> Dict[str, Any]:
+    token: str | None = None,
+    branch: str | None = None,
+) -> dict[str, Any]:
     """
     Create or update a file in the repository on a specific branch.
     (Retro-compatible signature with older GitPilot versions.)
     """
-    sha: Optional[str] = None
+    sha: str | None = None
     try:
         params = {"ref": branch} if branch else None
         existing = await github_request(
@@ -490,7 +493,7 @@ async def put_file(
     except HTTPException:
         sha = None
 
-    body: Dict[str, Any] = {
+    body: dict[str, Any] = {
         "message": message,
         "content": b64encode(content.encode("utf-8")).decode("utf-8"),
     }
@@ -518,9 +521,9 @@ async def delete_file(
     repo: str,
     path: str,
     message: str,
-    token: Optional[str] = None,
-    branch: Optional[str] = None,
-) -> Dict[str, Any]:
+    token: str | None = None,
+    branch: str | None = None,
+) -> dict[str, Any]:
     """
     Delete a file from the repository on a specific branch.
     (Retro-compatible signature with older GitPilot versions.)
@@ -535,7 +538,7 @@ async def delete_file(
     if not sha:
         raise HTTPException(status_code=404, detail=f"File {path} not found or has no SHA")
 
-    body: Dict[str, Any] = {"message": message, "sha": sha}
+    body: dict[str, Any] = {"message": message, "sha": sha}
     if branch:
         body["branch"] = branch
 
@@ -551,3 +554,32 @@ async def delete_file(
         "commit_sha": commit.get("sha", ""),
         "commit_url": commit.get("html_url"),
     }
+
+
+async def get_github_status_summary() -> GithubStatusSummary:
+    """Return GitHub connection status for the redesigned UI."""
+    token = (
+        os.environ.get("GITPILOT_GITHUB_TOKEN")
+        or os.environ.get("GITHUB_TOKEN")
+        or None
+    )
+    token_configured = bool(token)
+
+    summary = GithubStatusSummary(
+        connected=False,
+        token_configured=token_configured,
+    )
+
+    if not token_configured:
+        return summary
+
+    # Try to get authenticated user
+    try:
+        data = await github_request("/user", token=token)
+        if data and "login" in data:
+            summary.connected = True
+            summary.username = data["login"]
+    except Exception:
+        logging.debug("GitHub connection check failed", exc_info=True)
+
+    return summary
