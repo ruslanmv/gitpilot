@@ -2324,6 +2324,264 @@ async def session_websocket(websocket: WebSocket, session_id: str):
             pass
 
 
+# ─── Redesigned API Endpoints (Phase 1–4) ────────────────────────────────
+
+from gitpilot.models import (
+    ProviderTestRequest as _ProviderTestRequest,
+    StartSessionRequest as _StartSessionRequest,
+    ChatMessageRequest as _ChatMessageRequest,
+)
+
+
+@app.get("/api/status")
+async def api_status():
+    """Normalized status endpoint for the redesigned extension/UI."""
+    from gitpilot.models import (
+        StatusResponse, ProviderStatusResponse, ProviderName,
+        WorkspaceCapabilitySummary, GithubStatusSummary, ProviderHealth,
+    )
+    from gitpilot.settings import get_settings
+    from gitpilot.github_api import get_github_status_summary
+
+    s = get_settings()
+    provider_summary = s.get_provider_summary()
+
+    # Build provider status
+    provider = ProviderStatusResponse(
+        configured=provider_summary.configured,
+        name=ProviderName(provider_summary.name.value if hasattr(provider_summary.name, 'value') else str(provider_summary.name)),
+        source=provider_summary.source,
+        model=provider_summary.model,
+        base_url=provider_summary.base_url,
+        connection_type=provider_summary.connection_type,
+        has_api_key=provider_summary.has_api_key,
+        health=provider_summary.health,
+        models_available=provider_summary.models_available,
+        warning=provider_summary.warning,
+    )
+
+    # Workspace capabilities
+    workspace = WorkspaceCapabilitySummary(
+        folder_mode_available=True,
+        local_git_available=True,
+        github_mode_available=False,
+    )
+
+    # GitHub status
+    try:
+        github = await get_github_status_summary()
+        workspace.github_mode_available = github.connected
+    except Exception:
+        github = GithubStatusSummary()
+
+    return StatusResponse(
+        server_ready=True,
+        provider=provider,
+        workspace=workspace,
+        github=github,
+    )
+
+
+@app.get("/api/providers/status")
+async def api_providers_status():
+    """Get detailed status for the active provider."""
+    from gitpilot.settings import get_settings
+    from gitpilot.llm_provider import test_provider_connection
+
+    s = get_settings()
+    summary = await test_provider_connection(s)
+    return summary
+
+
+@app.post("/api/providers/test")
+async def api_providers_test(req: _ProviderTestRequest):
+    """Test a specific provider configuration."""
+    from gitpilot.models import (
+        ProviderTestRequest, ProviderTestResponse, ProviderName,
+        ProviderHealth,
+    )
+    from gitpilot.settings import get_settings, AppSettings
+    from gitpilot.llm_provider import test_provider_connection
+    import copy
+
+    s = get_settings()
+    # Apply test overrides temporarily
+    test_settings = copy.deepcopy(s)
+
+    provider = req.provider
+    if provider == ProviderName.openai and req.openai:
+        if req.openai.api_key:
+            test_settings.openai.api_key = req.openai.api_key
+        if req.openai.base_url:
+            test_settings.openai.base_url = req.openai.base_url
+        if req.openai.model:
+            test_settings.openai.model = req.openai.model
+        test_settings.provider = test_settings.provider.__class__("openai")
+    elif provider == ProviderName.claude and req.claude:
+        if req.claude.api_key:
+            test_settings.claude.api_key = req.claude.api_key
+        if req.claude.base_url:
+            test_settings.claude.base_url = req.claude.base_url
+        if req.claude.model:
+            test_settings.claude.model = req.claude.model
+        test_settings.provider = test_settings.provider.__class__("claude")
+    elif provider == ProviderName.watsonx and req.watsonx:
+        if req.watsonx.api_key:
+            test_settings.watsonx.api_key = req.watsonx.api_key
+        if req.watsonx.project_id:
+            test_settings.watsonx.project_id = req.watsonx.project_id
+        if req.watsonx.base_url:
+            test_settings.watsonx.base_url = req.watsonx.base_url
+        if req.watsonx.model_id:
+            test_settings.watsonx.model_id = req.watsonx.model_id
+        test_settings.provider = test_settings.provider.__class__("watsonx")
+    elif provider == ProviderName.ollama and req.ollama:
+        if req.ollama.base_url:
+            test_settings.ollama.base_url = req.ollama.base_url
+        if req.ollama.model:
+            test_settings.ollama.model = req.ollama.model
+        test_settings.provider = test_settings.provider.__class__("ollama")
+    elif provider == ProviderName.ollabridge and req.ollabridge:
+        if req.ollabridge.base_url:
+            test_settings.ollabridge.base_url = req.ollabridge.base_url
+        if req.ollabridge.model:
+            test_settings.ollabridge.model = req.ollabridge.model
+        if req.ollabridge.api_key:
+            test_settings.ollabridge.api_key = req.ollabridge.api_key
+        test_settings.provider = test_settings.provider.__class__("ollabridge")
+
+    summary = await test_provider_connection(test_settings)
+    return ProviderTestResponse(
+        configured=summary.configured,
+        name=summary.name,
+        source=summary.source,
+        model=summary.model,
+        base_url=summary.base_url,
+        connection_type=summary.connection_type,
+        has_api_key=summary.has_api_key,
+        health=summary.health,
+        models_available=summary.models_available,
+        warning=summary.warning,
+        details=f"Provider {provider.value} test completed",
+    )
+
+
+@app.post("/api/session/start")
+async def api_session_start(req: _StartSessionRequest):
+    """Start a new session by mode (folder, local_git, github)."""
+    from gitpilot.models import (
+        StartSessionRequest, StartSessionResponse, WorkspaceMode,
+    )
+    from gitpilot.session import SessionManager
+
+    mgr = SessionManager()
+
+    if req.mode == WorkspaceMode.folder:
+        if not req.folder_path:
+            raise HTTPException(status_code=422, detail="folder_path is required for folder mode")
+        session = mgr.create_folder_session(req.folder_path)
+    elif req.mode == WorkspaceMode.local_git:
+        repo_root = req.repo_root or req.folder_path
+        if not repo_root:
+            raise HTTPException(status_code=422, detail="repo_root is required for local_git mode")
+        session = mgr.create_local_git_session(repo_root, req.branch)
+    elif req.mode == WorkspaceMode.github:
+        if not req.repo_full_name:
+            raise HTTPException(status_code=422, detail="repo_full_name is required for github mode")
+        session = mgr.create_github_session(req.repo_full_name, req.branch)
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown mode: {req.mode}")
+
+    return StartSessionResponse(
+        session_id=session.id,
+        mode=req.mode,
+        title=session.name,
+        folder_path=session.folder_path,
+        repo_root=session.repo_root,
+        repo_full_name=session.repo_full_name,
+        branch=session.branch,
+    )
+
+
+@app.post("/api/chat/send")
+async def api_chat_message_v2(req: _ChatMessageRequest):
+    """Normalized chat message endpoint for the redesigned extension."""
+    from gitpilot.models import ChatMessageRequest, ChatMessageResponse
+    from gitpilot.session import SessionManager
+    import uuid
+
+    mgr = SessionManager()
+
+    # Load session
+    try:
+        session = mgr.load(req.session_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"Session {req.session_id} not found")
+
+    # Use the canonical dispatcher for chat
+    answer = ""
+    plan = None
+    references = []
+
+    repo_full = session.repo_full_name or ""
+    try:
+        if repo_full:
+            result = await dispatch_request(
+                user_request=req.message,
+                repo_full_name=repo_full,
+                branch_name=session.branch,
+            )
+            if isinstance(result, dict):
+                answer = (
+                    result.get("result")
+                    or result.get("answer")
+                    or result.get("message")
+                    or result.get("summary")
+                    or str(result)
+                )
+                plan = result.get("plan")
+                references = result.get("references", [])
+            else:
+                answer = str(result)
+        else:
+            # Folder-mode: use LLM directly for simple chat
+            from gitpilot.llm_provider import build_llm
+            llm = build_llm()
+            answer = llm.call(
+                [{"role": "user", "content": req.message}]
+            )
+    except Exception as e:
+        answer = f"Error processing message: {str(e)}"
+
+    # Store message in session
+    from gitpilot.session import Message
+    session.messages.append(Message(role="user", content=req.message))
+    session.messages.append(Message(role="assistant", content=answer))
+    mgr.save(session)
+
+    return ChatMessageResponse(
+        session_id=req.session_id,
+        answer=answer,
+        message_id=str(uuid.uuid4()),
+        plan=plan,
+        references=references,
+    )
+
+
+@app.get("/api/workspace/summary")
+async def api_workspace_summary(folder_path: str = Query(default=".")):
+    """Get workspace summary for UI display."""
+    from gitpilot.workspace import summarize_workspace
+    return await summarize_workspace(folder_path)
+
+
+@app.get("/api/security/scan-workspace")
+async def api_security_scan_workspace(path: str = Query(default=".")):
+    """Quick action security scan for workspace."""
+    from gitpilot.security import scan_current_workspace
+    return scan_current_workspace(path)
+
+
 # ============================================================================
 # Static Files & Frontend Serving (SPA Support)
 # ============================================================================

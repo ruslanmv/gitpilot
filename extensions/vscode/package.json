@@ -368,7 +368,11 @@
         },
         "gitpilot.permissionMode": {
           "type": "string",
-          "enum": ["normal", "plan", "auto"],
+          "enum": [
+            "normal",
+            "plan",
+            "auto"
+          ],
           "default": "normal",
           "enumDescriptions": [
             "Ask before risky operations (recommended)",
@@ -511,37 +515,49 @@
             "id": "startServer",
             "title": "Start the GitPilot Server",
             "description": "Install GitPilot and start the API server:\n```bash\npip install gitcopilot\ngitpilot serve\n```\n[Open Terminal](command:workbench.action.terminal.new)",
-            "media": { "markdown": "" }
+            "media": {
+              "markdown": ""
+            }
           },
           {
             "id": "connectServer",
             "title": "Connect to Server",
             "description": "Configure the server URL (default: http://127.0.0.1:8000).\n[Set Server URL](command:gitpilot.setServer)",
-            "media": { "markdown": "" }
+            "media": {
+              "markdown": ""
+            }
           },
           {
             "id": "openChat",
             "title": "Open Chat Panel",
             "description": "Start chatting with GitPilot using the sidebar or keyboard shortcut.\n[Open Chat (Ctrl+Shift+G)](command:gitpilot.openChat)",
-            "media": { "markdown": "" }
+            "media": {
+              "markdown": ""
+            }
           },
           {
             "id": "tryReview",
             "title": "Try Code Review",
             "description": "Open any file, select code, right-click and choose 'GitPilot: Explain Selection'.\n[Review Current File](command:gitpilot.reviewFile)",
-            "media": { "markdown": "" }
+            "media": {
+              "markdown": ""
+            }
           },
           {
             "id": "trySecurity",
             "title": "Run a Security Scan",
             "description": "Scan your workspace for vulnerabilities using AI-powered analysis.\n[Scan Workspace](command:gitpilot.scanWorkspace)",
-            "media": { "markdown": "" }
+            "media": {
+              "markdown": ""
+            }
           },
           {
             "id": "exploreTopologies",
             "title": "Explore Agent Topologies",
             "description": "GitPilot uses multi-agent workflows. Explore and switch between them.\n[Show Agent Flow](command:gitpilot.showAgentFlow)",
-            "media": { "markdown": "" }
+            "media": {
+              "markdown": ""
+            }
           }
         ]
       }
@@ -556,9 +572,9 @@
     "publish": "vsce publish"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "@types/vscode": "^1.85.0",
-    "typescript": "^5.3.0",
-    "@vscode/vsce": "^2.22.0"
+    "@types/node": "^20.19.37",
+    "@types/vscode": "^1.110.0",
+    "@vscode/vsce": "^2.22.0",
+    "typescript": "^5.3.0"
   }
 }

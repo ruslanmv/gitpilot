@@ -37,6 +37,27 @@ import { registerSkillCommands } from './commands/skills';
 import { registerServerCommands } from './commands/server';
 import { registerGitCommands } from './commands/git';
 
+// ─── Redesigned Service Layer ────────────────────────────
+import { StateStore } from "./core/stateStore";
+import { GitPilotEvents } from "./core/events";
+import { StatusClient } from "./api/statusClient";
+import { SessionClient } from "./api/sessionClient";
+import { ChatClient } from "./api/chatClient";
+import { SettingsClient } from "./api/settingsClient";
+import { RepoClient } from "./api/repoClient";
+import { WorkspaceResolver } from "./services/workspace/workspaceResolver";
+import { GitContextService } from "./services/workspace/gitContextService";
+import { ModeResolver } from "./services/workspace/modeResolver";
+import { ReadinessEvaluator } from "./services/workspace/readinessEvaluator";
+import { SessionCoordinator } from "./services/workspace/sessionCoordinator";
+import { ErrorTranslator } from "./services/workspace/errorTranslator";
+import { GitPilotPanel } from "./ui/webview/GitPilotPanel";
+import { registerWorkspaceCommands } from "./commands/workspaceCommands";
+import { registerSetupCommands } from "./commands/setupCommands";
+import { registerProviderCommands } from "./commands/providerCommands";
+import { registerSessionCommands } from "./commands/sessionCommands";
+import { registerChatCommandsV2 } from "./commands/chatCommands";
+
 export function activate(context: vscode.ExtensionContext) {
     const config = getConfig();
 
@@ -157,6 +178,155 @@ export function activate(context: vscode.ExtensionContext) {
             channel.appendLine(`Workspace: ${wsCtx.workspaceRoot} (no git repo detected)`);
         }
     }
+
+    // ─── Redesigned Service Layer (Phase 1–4) ──────────────
+
+    // Core state
+    const stateStore = new StateStore();
+    const events = new GitPilotEvents();
+    context.subscriptions.push(stateStore, events);
+
+    // Split API clients
+    const statusClient = new StatusClient(client);
+    const sessionClient = new SessionClient(client);
+    const chatClientV2 = new ChatClient(client);
+    const settingsClient = new SettingsClient(client);
+    const repoClient = new RepoClient(client);
+
+    // Domain services
+    const workspaceResolver = new WorkspaceResolver();
+    const gitContextService = new GitContextService();
+    const modeResolver = new ModeResolver();
+    const readinessEvaluator = new ReadinessEvaluator();
+    const errorTranslator = new ErrorTranslator();
+    const sessionCoordinator = new SessionCoordinator(
+        sessionClient,
+        stateStore,
+        errorTranslator
+    );
+    context.subscriptions.push(workspaceResolver);
+
+    // Register redesigned webview panel
+    const gitpilotPanel = new GitPilotPanel(
+        context.extensionUri,
+        stateStore,
+        async (msg) => {
+            // Handle webview messages
+            switch (msg.type) {
+                case "START_SESSION":
+                    await sessionCoordinator.startSession(msg.payload.mode);
+                    break;
+                case "CHANGE_MODE":
+                    stateStore.updateWorkspace({ mode: msg.payload.mode });
+                    break;
+                case "SEND_CHAT":
+                    if (stateStore.state.session.sessionId) {
+                        try {
+                            const resp = await chatClientV2.sendMessage({
+                                session_id: stateStore.state.session.sessionId,
+                                message: msg.payload.text,
+                            });
+                            gitpilotPanel.postMessage({
+                                type: "CHAT_RESPONSE",
+                                payload: {
+                                    id: resp.message_id || Date.now().toString(),
+                                    role: "assistant",
+                                    content: resp.answer,
+                                    createdAt: new Date().toISOString(),
+                                    plan: resp.plan,
+                                },
+                            });
+                        } catch (err: any) {
+                            gitpilotPanel.postMessage({
+                                type: "ERROR",
+                                payload: {
+                                    code: "CHAT_ERROR",
+                                    title: "Chat Error",
+                                    message: errorTranslator.translate(err),
+                                    recoverable: true,
+                                },
+                            });
+                        }
+                    }
+                    break;
+                case "RUN_QUICK_ACTION":
+                    vscode.commands.executeCommand(
+                        `gitpilot.${msg.payload.action}`
+                    );
+                    break;
+                case "OPEN_SETTINGS":
+                    vscode.commands.executeCommand("workbench.action.openFolder");
+                    break;
+                case "OPEN_ADMIN_UI":
+                    vscode.commands.executeCommand("gitpilot.showServerInfo");
+                    break;
+                case "OPEN_PROVIDER_SETUP":
+                    vscode.commands.executeCommand("gitpilot.selectProvider");
+                    break;
+                case "REFRESH_STATUS":
+                    vscode.commands.executeCommand("gitpilot.refreshStatus");
+                    break;
+            }
+        }
+    );
+    context.subscriptions.push(gitpilotPanel);
+
+    // Register redesigned webview
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(
+            "gitpilot.redesignedView",
+            gitpilotPanel
+        )
+    );
+
+    // Register redesigned commands
+    registerWorkspaceCommands(
+        context,
+        stateStore,
+        workspaceResolver,
+        gitContextService,
+        modeResolver,
+        readinessEvaluator,
+        statusClient
+    );
+    registerSetupCommands(context, stateStore);
+    registerProviderCommands(context, stateStore, settingsClient);
+    registerSessionCommands(context, stateStore, sessionCoordinator);
+    registerChatCommandsV2(context, stateStore, chatClientV2);
+
+    // Sync state from existing client state changes
+    client.onStateChange((connectionState: string) => {
+        stateStore.updateServer({
+            connected: connectionState === "connected",
+        });
+        if (connectionState === "connected") {
+            vscode.commands.executeCommand("gitpilot.refreshStatus");
+        }
+    });
+
+    // Initial state sync
+    const wsInfo = workspaceResolver.resolve();
+    stateStore.updateWorkspace({
+        folderOpen: wsInfo.folderOpen,
+        folderPath: wsInfo.folderPath,
+        folderName: wsInfo.folderName,
+    });
+
+    // Workspace change listener
+    context.subscriptions.push(
+        workspaceResolver.onDidChange(async (info) => {
+            stateStore.updateWorkspace({
+                folderOpen: info.folderOpen,
+                folderPath: info.folderPath,
+                folderName: info.folderName,
+            });
+            if (info.folderPath) {
+                const gitCtx = await gitContextService.detect(info.folderPath);
+                stateStore.updateWorkspace({ git: gitCtx });
+            }
+            vscode.commands.executeCommand("gitpilot.refreshStatus");
+        })
+    );
 }
 
 export function deactivate() {}

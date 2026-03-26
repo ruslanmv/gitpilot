@@ -157,7 +157,9 @@ class TestBranchListingEndpoint:
                 query=None, authorization="Bearer ghp_test",
             )
 
-        assert result.has_more is True
+        # The implementation now fetches ALL pages internally and returns
+        # has_more=False. The loop breaks when len(page_data) < per_page (1 < 100).
+        assert result.has_more is False
 
     @pytest.mark.asyncio
     async def test_list_branches_repo_error_raises(self):
@@ -649,11 +651,10 @@ class TestWebSocketEndpoint:
         assert len(agent_msgs) == 1
         assert agent_msgs[0]["content"] == "Here is the explanation."
 
-        # Verify dispatch was called with correct args
+        # Verify dispatch was called with canonical signature
         mock_dispatch.assert_awaited_once_with(
-            repo_owner="owner",
-            repo_name="repo",
-            message="Explain the code",
+            user_request="Explain the code",
+            repo_full_name="owner/repo",
             branch_name="main",
         )
 

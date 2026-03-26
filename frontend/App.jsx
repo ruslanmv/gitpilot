@@ -11,7 +11,7 @@ import ProjectSettingsModal from "./components/ProjectSettingsModal.jsx";
 import SessionSidebar from "./components/SessionSidebar.jsx";
 import ContextBar from "./components/ContextBar.jsx";
 import AddRepoModal from "./components/AddRepoModal.jsx";
-import { apiUrl, safeFetchJSON } from "./utils/api.js";
+import { apiUrl, safeFetchJSON, fetchStatus } from "./utils/api.js";
 
 function makeRepoKey(repo) {
   if (!repo) return null;
@@ -38,6 +38,17 @@ export default function App() {
   const [repoStateByKey, setRepoStateByKey] = useState({});
   const [toast, setToast] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [adminTab, setAdminTab] = useState("overview");
+  const [adminStatus, setAdminStatus] = useState(null);
+
+  // Fetch admin status when overview tab is active
+  useEffect(() => {
+    if (activePage === "admin" && adminTab === "overview") {
+      fetchStatus()
+        .then(data => setAdminStatus(data))
+        .catch(() => setAdminStatus(null));
+    }
+  }, [activePage, adminTab]);
 
   // Claude-Code-on-Web: Session sidebar + Environment state
   const [activeSessionId, setActiveSessionId] = useState(null);
@@ -618,7 +629,7 @@ export default function App() {
               className={"nav-btn" + (activePage === "admin" ? " nav-btn-active" : "")}
               onClick={() => setActivePage("admin")}
             >
-              Settings
+              Admin
             </button>
           </div>
 
@@ -657,7 +668,141 @@ export default function App() {
         </aside>
 
         <main className="workspace">
-          {activePage === "admin" && <LlmSettings />}
+          {activePage === "admin" && (
+            <div style={{ padding: "24px", maxWidth: "960px", margin: "0 auto" }}>
+              {/* Admin Navigation */}
+              <div style={{ display: "flex", gap: "8px", marginBottom: "24px", flexWrap: "wrap" }}>
+                {["overview", "providers", "workspace-modes", "integrations", "sessions", "skills", "security", "advanced"].map(tab => (
+                  <button
+                    key={tab}
+                    onClick={() => setAdminTab(tab)}
+                    style={{
+                      padding: "8px 16px",
+                      borderRadius: "6px",
+                      border: adminTab === tab ? "1px solid #3B82F6" : "1px solid #333",
+                      background: adminTab === tab ? "#1e3a5f" : "#1a1b26",
+                      color: adminTab === tab ? "#93c5fd" : "#a0a0b0",
+                      cursor: "pointer",
+                      fontSize: "13px",
+                      textTransform: "capitalize",
+                    }}
+                  >
+                    {tab.replace("-", " ")}
+                  </button>
+                ))}
+              </div>
+
+              {/* Overview */}
+              {adminTab === "overview" && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "16px" }}>
+                  <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "16px", border: "1px solid #2a2b36" }}>
+                    <div style={{ fontSize: "12px", opacity: 0.6, marginBottom: "8px" }}>Server</div>
+                    <div style={{ fontSize: "16px", fontWeight: 600 }}>{adminStatus?.server_ready ? "Connected" : "Checking..."}</div>
+                    <div style={{ fontSize: "12px", opacity: 0.5 }}>127.0.0.1:8000</div>
+                  </div>
+                  <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "16px", border: "1px solid #2a2b36" }}>
+                    <div style={{ fontSize: "12px", opacity: 0.6, marginBottom: "8px" }}>Provider</div>
+                    <div style={{ fontSize: "16px", fontWeight: 600 }}>{adminStatus?.provider?.name || "Loading..."}</div>
+                    <div style={{ fontSize: "12px", opacity: 0.5 }}>{adminStatus?.provider?.configured ? `${adminStatus.provider.model || "Ready"}` : "Not configured"}</div>
+                  </div>
+                  <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "16px", border: "1px solid #2a2b36" }}>
+                    <div style={{ fontSize: "12px", opacity: 0.6, marginBottom: "8px" }}>Workspace Modes</div>
+                    <div style={{ fontSize: "12px" }}>Folder: {adminStatus?.workspace?.folder_mode_available ? "Yes" : "—"}</div>
+                    <div style={{ fontSize: "12px" }}>Local Git: {adminStatus?.workspace?.local_git_available ? "Yes" : "—"}</div>
+                    <div style={{ fontSize: "12px" }}>GitHub: {adminStatus?.workspace?.github_mode_available ? "Yes" : "Optional"}</div>
+                  </div>
+                  <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "16px", border: "1px solid #2a2b36" }}>
+                    <div style={{ fontSize: "12px", opacity: 0.6, marginBottom: "8px" }}>GitHub</div>
+                    <div style={{ fontSize: "14px" }}>{adminStatus?.github?.connected ? "Connected" : "Optional"}</div>
+                    <div style={{ fontSize: "12px", opacity: 0.5 }}>{adminStatus?.github?.username || "Not linked"}</div>
+                  </div>
+                  <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "16px", border: "1px solid #2a2b36" }}>
+                    <div style={{ fontSize: "12px", opacity: 0.6, marginBottom: "8px" }}>Sessions</div>
+                    <div style={{ fontSize: "14px" }}>—</div>
+                  </div>
+                  <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "16px", border: "1px solid #2a2b36" }}>
+                    <div style={{ fontSize: "12px", opacity: 0.6, marginBottom: "8px" }}>Get Started</div>
+                    <button onClick={() => setAdminTab("providers")} style={{ padding: "6px 12px", background: "#3B82F6", color: "#fff", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px", marginRight: "4px" }}>Configure Provider</button>
+                  </div>
+                </div>
+              )}
+
+              {/* Providers */}
+              {adminTab === "providers" && (
+                <div>
+                  <h3 style={{ marginBottom: "16px" }}>AI Providers</h3>
+                  <LlmSettings />
+                </div>
+              )}
+
+              {/* Workspace Modes */}
+              {adminTab === "workspace-modes" && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "16px" }}>
+                  <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "20px", border: "1px solid #2a2b36" }}>
+                    <h4 style={{ marginBottom: "8px" }}>Folder Mode</h4>
+                    <p style={{ fontSize: "12px", opacity: 0.7, marginBottom: "12px" }}>Work with any local folder. No Git required.</p>
+                    <div style={{ fontSize: "12px" }}>Requires: Open folder</div>
+                    <div style={{ fontSize: "12px" }}>Enables: Chat, explain, review</div>
+                  </div>
+                  <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "20px", border: "1px solid #2a2b36" }}>
+                    <h4 style={{ marginBottom: "8px" }}>Local Git Mode</h4>
+                    <p style={{ fontSize: "12px", opacity: 0.7, marginBottom: "12px" }}>Full repo + branch context for AI assistance.</p>
+                    <div style={{ fontSize: "12px" }}>Requires: Git repository</div>
+                    <div style={{ fontSize: "12px" }}>Enables: All local features</div>
+                  </div>
+                  <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "20px", border: "1px solid #2a2b36" }}>
+                    <h4 style={{ marginBottom: "8px" }}>GitHub Mode</h4>
+                    <p style={{ fontSize: "12px", opacity: 0.7, marginBottom: "12px" }}>PRs, issues, remote workflows via GitHub API.</p>
+                    <div style={{ fontSize: "12px" }}>Requires: GitHub token</div>
+                    <div style={{ fontSize: "12px" }}>Enables: Full platform features</div>
+                  </div>
+                </div>
+              )}
+
+              {/* Integrations */}
+              {adminTab === "integrations" && (
+                <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "20px", border: "1px solid #2a2b36" }}>
+                  <h4 style={{ marginBottom: "8px" }}>GitHub Integration</h4>
+                  <p style={{ fontSize: "12px", opacity: 0.7, marginBottom: "12px" }}>GitHub is optional. Connect to enable PRs, issues, and remote workflows.</p>
+                  <button style={{ padding: "8px 16px", background: "#3B82F6", color: "#fff", border: "none", borderRadius: "4px", cursor: "pointer" }}>Connect GitHub</button>
+                </div>
+              )}
+
+              {/* Security */}
+              {adminTab === "security" && (
+                <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "20px", border: "1px solid #2a2b36" }}>
+                  <h4 style={{ marginBottom: "8px" }}>Security Scanning</h4>
+                  <p style={{ fontSize: "12px", opacity: 0.7, marginBottom: "12px" }}>Run security scans on your workspace to detect vulnerabilities, secrets, and code issues.</p>
+                  <button style={{ padding: "8px 16px", background: "#3B82F6", color: "#fff", border: "none", borderRadius: "4px", cursor: "pointer" }}>Scan Workspace</button>
+                </div>
+              )}
+
+              {/* Sessions */}
+              {adminTab === "sessions" && (
+                <div>
+                  <h3 style={{ marginBottom: "16px" }}>Sessions</h3>
+                  <p style={{ fontSize: "12px", opacity: 0.7 }}>Session management is available in the main workspace view.</p>
+                </div>
+              )}
+
+              {/* Skills & Plugins */}
+              {adminTab === "skills" && (
+                <div>
+                  <h3 style={{ marginBottom: "16px" }}>Skills & Plugins</h3>
+                  <p style={{ fontSize: "12px", opacity: 0.7 }}>Skills and plugins extend GitPilot capabilities. View and manage them from the main workspace.</p>
+                </div>
+              )}
+
+              {/* Advanced */}
+              {adminTab === "advanced" && (
+                <div>
+                  <h3 style={{ marginBottom: "16px" }}>Advanced Settings</h3>
+                  <p style={{ fontSize: "12px", opacity: 0.7 }}>Advanced configuration options are available in the Settings modal.</p>
+                  <button onClick={() => setSettingsOpen(true)} style={{ padding: "8px 16px", background: "#3B82F6", color: "#fff", border: "none", borderRadius: "4px", cursor: "pointer", marginTop: "12px" }}>Open Settings</button>
+                </div>
+              )}
+            </div>
+          )}
           {activePage === "flow" && <FlowViewer />}
           {activePage === "workspace" &&
             (repo ? (

@@ -65,6 +65,15 @@ export default function SessionItem({ session, isActive, onSelect, onDelete }) {
         <div style={styles.title}>{title}</div>
         <div style={styles.meta}>
           {timeAgo}
+          {session.mode && (
+            <span style={{
+              ...styles.badge,
+              background: session.mode === "github" ? "#1e3a5f" : "#2d2d1f",
+              color: session.mode === "github" ? "#60a5fa" : "#d4d48a",
+            }}>
+              {session.mode === "github" ? "GH" : session.mode === "local-git" ? "Git" : "Dir"}
+            </span>
+          )}
           {session.message_count > 0 && (
             <span style={styles.badge}>{session.message_count} msgs</span>
           )}

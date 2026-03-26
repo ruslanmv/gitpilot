@@ -526,6 +526,9 @@ export default function ProjectContextPanel({
             <p style={{ ...styles.installText, margin: "8px 0" }}>
               Install the GitPilot App to enable AI agent operations.
             </p>
+            <p style={{ ...styles.installText, margin: "0 0 8px 0", fontSize: "11px", opacity: 0.7 }}>
+              Alternatively, use Folder or Local Git mode for local-first workflows without GitHub.
+            </p>
             <button
               type="button"
               style={{

@@ -128,6 +128,9 @@ export default function RepoSelector({ onSelect }) {
 
   return (
     <div className="repo-search-box">
+      <div style={{ fontSize: "11px", opacity: 0.6, padding: "4px 8px", marginBottom: "8px" }}>
+        GitHub repos are optional. Use Folder or Local Git mode for local-first workflows.
+      </div>
       {/* Search Header */}
       <div className="repo-search-header">
         <div className="repo-search-row">
