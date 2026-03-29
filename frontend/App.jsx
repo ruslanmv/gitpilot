@@ -55,6 +55,32 @@ export default function App() {
   const [activeEnvId, setActiveEnvId] = useState("default");
   const [sessionRefreshNonce, setSessionRefreshNonce] = useState(0);
 
+  // Sidebar collapse state (persisted in localStorage)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem("gitpilot_sidebar_collapsed") === "true"; }
+    catch { return false; }
+  });
+
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      try { localStorage.setItem("gitpilot_sidebar_collapsed", String(next)); } catch {}
+      return next;
+    });
+  }, []);
+
+  // Keyboard shortcut: Cmd/Ctrl + B to toggle sidebar
+  useEffect(() => {
+    const handler = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "b") {
+        e.preventDefault();
+        toggleSidebar();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [toggleSidebar]);
+
   // ---- Derived `repo` — keeps all downstream consumers unchanged ----
   const repo = useMemo(() => {
     const entry = contextRepos.find((r) => r.repoKey === activeRepoKey);
@@ -601,14 +627,30 @@ export default function App() {
   return (
     <div className="app-root">
       <div className="main-wrapper">
-        <aside className="sidebar">
-          {/* ---- Brand ---- */}
-          <div className="logo-row">
-            <div className="logo-square">GP</div>
-            <div>
-              <div className="logo-title">GitPilot</div>
-              <div className="logo-subtitle">Agentic GitHub Copilot</div>
+        <aside className={`sidebar${sidebarCollapsed ? " sidebar--collapsed" : ""}`}>
+          {/* ---- Brand + Toggle ---- */}
+          <div className="sidebar-top-row">
+            <div className="logo-row" onClick={sidebarCollapsed ? toggleSidebar : undefined}
+                 style={sidebarCollapsed ? { cursor: "pointer" } : undefined}>
+              <div className="logo-square">GP</div>
+              {!sidebarCollapsed && (
+                <div>
+                  <div className="logo-title">GitPilot</div>
+                  <div className="logo-subtitle">Agentic GitHub Copilot</div>
+                </div>
+              )}
             </div>
+            {!sidebarCollapsed && (
+              <button
+                className="sidebar-toggle-btn"
+                onClick={toggleSidebar}
+                title="Collapse sidebar (Ctrl+B)"
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M10 3L5 8L10 13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
+            )}
           </div>
 
           {/* ---- Navigation ---- */}
@@ -616,38 +658,49 @@ export default function App() {
             <button
               className={"nav-btn" + (activePage === "workspace" ? " nav-btn-active" : "")}
               onClick={() => setActivePage("workspace")}
+              title="Workspace"
             >
-              Workspace
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.3"/><rect x="9" y="2" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.3"/><rect x="2" y="9" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.3"/><rect x="9" y="9" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.3"/></svg>
+              {!sidebarCollapsed && <span>Workspace</span>}
             </button>
             <button
               className={"nav-btn" + (activePage === "flow" ? " nav-btn-active" : "")}
               onClick={() => setActivePage("flow")}
+              title="Agent Workflow"
             >
-              Agent Workflow
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="4" cy="4" r="2" stroke="currentColor" strokeWidth="1.3"/><circle cx="12" cy="4" r="2" stroke="currentColor" strokeWidth="1.3"/><circle cx="8" cy="12" r="2" stroke="currentColor" strokeWidth="1.3"/><path d="M5.5 5.5L7 10.5" stroke="currentColor" strokeWidth="1.3"/><path d="M10.5 5.5L9 10.5" stroke="currentColor" strokeWidth="1.3"/></svg>
+              {!sidebarCollapsed && <span>Agent Workflow</span>}
             </button>
             <button
               className={"nav-btn" + (activePage === "admin" ? " nav-btn-active" : "")}
               onClick={() => setActivePage("admin")}
+              title="Admin"
             >
-              Admin
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2C8 2 9.5 4 9.5 6C9.5 6.8 9.2 7.5 8.7 8L10 14H6L7.3 8C6.8 7.5 6.5 6.8 6.5 6C6.5 4 8 2 8 2Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><circle cx="8" cy="6" r="1.5" stroke="currentColor" strokeWidth="1.3"/></svg>
+              {!sidebarCollapsed && <span>Admin</span>}
             </button>
           </div>
 
-          {/* ---- Repository Switcher (shown when no context) ---- */}
-          {!hasContext && (
-            <RepoSelector onSelect={(r) => addRepoToContext(r)} />
-          )}
+          {/* ---- Content (hidden when collapsed) ---- */}
+          {!sidebarCollapsed && (
+            <>
+              {/* ---- Repository Switcher (shown when no context) ---- */}
+              {!hasContext && (
+                <RepoSelector onSelect={(r) => addRepoToContext(r)} />
+              )}
 
-          {/* ---- Sessions ---- */}
-          {repo && (
-            <SessionSidebar
-              repo={repo}
-              activeSessionId={activeSessionId}
-              onSelectSession={handleSelectSession}
-              onNewSession={handleNewSession}
-              onDeleteSession={handleDeleteSession}
-              refreshNonce={sessionRefreshNonce}
-            />
+              {/* ---- Sessions ---- */}
+              {repo && (
+                <SessionSidebar
+                  repo={repo}
+                  activeSessionId={activeSessionId}
+                  onSelectSession={handleSelectSession}
+                  onNewSession={handleNewSession}
+                  onDeleteSession={handleDeleteSession}
+                  refreshNonce={sessionRefreshNonce}
+                />
+              )}
+            </>
           )}
 
           {/* ---- User ---- */}
@@ -655,14 +708,18 @@ export default function App() {
             <div className="user-profile">
               <div className="user-profile-header">
                 <img src={userInfo.avatar_url} alt={userInfo.login} className="user-avatar" />
-                <div className="user-info">
-                  <div className="user-name">{userInfo.name || userInfo.login}</div>
-                  <div className="user-login">@{userInfo.login}</div>
-                </div>
+                {!sidebarCollapsed && (
+                  <div className="user-info">
+                    <div className="user-name">{userInfo.name || userInfo.login}</div>
+                    <div className="user-login">@{userInfo.login}</div>
+                  </div>
+                )}
               </div>
-              <button className="btn-logout" onClick={handleLogout}>
-                Logout
-              </button>
+              {!sidebarCollapsed && (
+                <button className="btn-logout" onClick={handleLogout}>
+                  Logout
+                </button>
+              )}
             </div>
           )}
         </aside>
