@@ -204,6 +204,11 @@
         "category": "GitPilot"
       },
       {
+        "command": "gitpilot.toggleLiteMode",
+        "title": "Toggle Lite Mode (Small LLM Optimization)",
+        "category": "GitPilot"
+      },
+      {
         "command": "gitpilot.setPermissionMode",
         "title": "Set Permission Mode",
         "category": "GitPilot"
@@ -415,6 +420,12 @@
           "maximum": 1000,
           "description": "Maximum number of chat messages to keep in memory",
           "order": 10
+        },
+        "gitpilot.liteMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Lite Mode: optimized for small LLMs (< 7B params). Uses simplified prompts and single-agent execution instead of multi-agent pipelines. Recommended for qwen2.5:1.5b, phi-3-mini, gemma-2b, tinyllama.",
+          "order": 11
         }
       }
     },

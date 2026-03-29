@@ -58,6 +58,7 @@ body {
 /* Sidebar */
 .sidebar {
   width: 320px;
+  min-width: 320px;
   padding: 16px 14px;
   border-right: 1px solid #272832;
   background: linear-gradient(180deg, #101117 0, #050608 100%);
@@ -66,6 +67,79 @@ body {
   gap: 16px;
   overflow-y: auto;
   overflow-x: hidden;
+  transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+              min-width 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+              padding 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sidebar--collapsed {
+  width: 52px;
+  min-width: 52px;
+  padding: 16px 8px;
+  gap: 8px;
+}
+
+/* ---- Sidebar top row: logo + toggle ---- */
+.sidebar-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 32px;
+}
+
+.sidebar--collapsed .sidebar-top-row {
+  justify-content: center;
+}
+
+.sidebar-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: #6b6d82;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+
+.sidebar-toggle-btn:hover {
+  background: #1e1f2e;
+  color: #e0e1eb;
+}
+
+.sidebar--collapsed .sidebar-toggle-btn {
+  display: none;
+}
+
+/* ---- Nav buttons: icon + label layout ---- */
+.sidebar .nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sidebar .nav-btn svg {
+  flex-shrink: 0;
+}
+
+.sidebar--collapsed .nav-btn {
+  justify-content: center;
+  padding: 8px;
+}
+
+/* ---- User profile in collapsed state ---- */
+.sidebar--collapsed .user-profile {
+  align-items: center;
+}
+
+.sidebar--collapsed .user-avatar {
+  width: 28px;
+  height: 28px;
 }
 
 /* User Profile Section */

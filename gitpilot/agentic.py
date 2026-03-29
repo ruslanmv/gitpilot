@@ -302,6 +302,418 @@ async def generate_plan(
     return result
 
 
+# ============================================================================
+# Lite Mode — Simplified single-agent for small LLMs (< 7B parameters)
+# ============================================================================
+
+# Regex-based intent classifier — no LLM needed, runs instantly.
+_QUESTION_PATTERNS = [
+    r"\b(what|which|where|how|why|who|when|does|is|are|can|could|tell|show|list|describe|explain|summarize|overview)\b",
+    r"\?$",
+]
+_ACTION_PATTERNS = [
+    r"\b(create|add|delete|remove|modify|change|update|rename|fix|write|implement|refactor|move|generate code)\b",
+]
+
+
+def _classify_lite_intent(goal: str) -> str:
+    """Classify user intent as 'question' or 'action' using regex only."""
+    import re as _re
+    goal_lower = goal.strip().lower()
+
+    action_score = sum(1 for p in _ACTION_PATTERNS if _re.search(p, goal_lower))
+    question_score = sum(1 for p in _QUESTION_PATTERNS if _re.search(p, goal_lower))
+
+    # Action words dominate — user wants to change something
+    if action_score > 0 and action_score >= question_score:
+        return "action"
+    return "question"
+
+
+async def _lite_prefetch_context(
+    owner: str,
+    repo: str,
+    token: str | None,
+    branch: str,
+    key_file_limit: int = 3,
+) -> str:
+    """Pre-fetch repo context programmatically and format as plain text.
+
+    Returns a string ready to inject into the LLM prompt.  No LLM
+    tool-calling involved — everything comes from the GitHub API.
+    """
+    from .github_api import get_file as _get_file
+
+    ctx = await get_repository_context_summary(owner, repo, token=token, branch=branch)
+
+    all_files = ctx.get("all_files", [])
+    extensions = ctx.get("extensions", {})
+    directories = ctx.get("directories", set())
+    key_files = ctx.get("key_files", [])
+
+    parts = []
+
+    # File listing (cap at 80 to stay within small-model context)
+    if all_files:
+        shown = all_files[:80]
+        file_lines = "\n".join(f"  {f}" for f in shown)
+        parts.append(f"Files ({len(all_files)} total):\n{file_lines}")
+        if len(all_files) > 80:
+            parts.append(f"  ... and {len(all_files) - 80} more")
+    else:
+        parts.append("Files: (none found)")
+
+    # Extensions summary
+    if extensions:
+        ext_str = ", ".join(f"{ext} ({n})" for ext, n in sorted(extensions.items(), key=lambda x: -x[1])[:10])
+        parts.append(f"File types: {ext_str}")
+
+    # Top-level directories
+    if directories:
+        dir_list = sorted(directories)[:15]
+        parts.append(f"Top directories: {', '.join(dir_list)}")
+
+    # Read content of key files (README, etc.) — give LLM real context
+    for kf in key_files[:key_file_limit]:
+        try:
+            content = await _get_file(owner, repo, kf, token=token, ref=branch)
+            # Truncate to keep prompt small for 1.5B models
+            snippet = content[:1500] if content else ""
+            if snippet:
+                parts.append(f"--- {kf} ---\n{snippet}")
+                if len(content) > 1500:
+                    parts.append(f"  [truncated, {len(content)} chars total]")
+        except Exception:
+            pass  # File unreadable — skip silently
+
+    return "\n\n".join(parts)
+
+
+async def generate_plan_lite(
+    goal: str,
+    repo_full_name: str,
+    token: str | None = None,
+    branch_name: str | None = None,
+) -> PlanResult:
+    """Lite Mode planning: smart intent detection + single agent + pre-fetched context.
+
+    The topology is:
+      1. Classify intent (regex — instant, no LLM)
+      2. Pre-fetch repo context from GitHub API (no LLM tool-calling)
+      3. Build a short, focused prompt based on intent type
+      4. Single LLM call → parse response
+
+    For QUESTION intents: LLM answers directly, plan has 0 file actions.
+    For ACTION intents: LLM lists file changes, plan has file actions.
+    """
+    llm = build_llm()
+
+    owner, repo = repo_full_name.split("/")
+    active_ref = branch_name or "HEAD"
+    set_repo_context(owner, repo, token=token, branch=active_ref)
+
+    intent = _classify_lite_intent(goal)
+    logger.info("[GitPilot Lite] Intent: %s | Goal: %s", intent, goal[:80])
+
+    # PRE-FETCH: real data from GitHub API
+    logger.info("[GitPilot Lite] Pre-fetching context for %s (ref=%s)...", repo_full_name, active_ref)
+    context_text = await _lite_prefetch_context(owner, repo, token, active_ref)
+
+    # BUILD PROMPT based on intent
+    if intent == "question":
+        lite_prompt = (
+            f"Repository: {repo_full_name} (branch: {active_ref})\n\n"
+            f"{context_text}\n\n"
+            f"Question: {goal}\n\n"
+            f"Answer the question based on the repository information above. "
+            f"Be specific — mention actual file names and directories you can see."
+        )
+        expected = "A direct answer to the user's question about the repository"
+    else:
+        lite_prompt = (
+            f"Repository: {repo_full_name} (branch: {active_ref})\n\n"
+            f"{context_text}\n\n"
+            f"Task: {goal}\n\n"
+            f"List the files that need to change. One per line:\n"
+            f"ACTION path/to/file - reason\n\n"
+            f"ACTION must be CREATE, MODIFY, or DELETE.\n"
+            f"Only list files that ACTUALLY EXIST in the repository for MODIFY/DELETE.\n"
+            f"For CREATE, use a new filename that does not exist yet."
+        )
+        expected = "A list of file actions (CREATE/MODIFY/DELETE path - reason)"
+
+    lite_agent = Agent(
+        role="GitPilot Lite",
+        goal="Help the user with their repository",
+        backstory="You are a helpful coding assistant. Be concise.",
+        llm=llm,
+        tools=[],
+        verbose=True,
+        allow_delegation=False,
+    )
+
+    lite_task = Task(
+        description=lite_prompt,
+        expected_output=expected,
+        agent=lite_agent,
+    )
+
+    lite_crew = Crew(
+        agents=[lite_agent],
+        tasks=[lite_task],
+        process=Process.sequential,
+        verbose=True,
+    )
+
+    def _run_lite():
+        return lite_crew.kickoff()
+
+    ctx = contextvars.copy_context()
+    result = await asyncio.to_thread(ctx.run, _run_lite)
+
+    raw_text = result.raw if hasattr(result, "raw") else str(result)
+    logger.info("[GitPilot Lite] Response (%d chars, intent=%s)", len(raw_text), intent)
+
+    # PARSE RESPONSE based on intent
+    if intent == "question":
+        # Pure Q&A — no file actions, just wrap the answer.
+        # summary = full answer text (shown in the "Answer" section of the chat)
+        return PlanResult(
+            goal=goal,
+            summary=raw_text,
+            steps=[PlanStep(
+                step_number=1,
+                title="Answer",
+                description=raw_text,
+                files=[],
+                risks=None,
+            )],
+        )
+
+    # Action intent — parse ACTION lines
+    import re as _re
+    action_pattern = _re.compile(r"^(CREATE|MODIFY|DELETE)\s+(\S+)", _re.MULTILINE)
+    matches = action_pattern.findall(raw_text)
+
+    # Strip raw ACTION lines from description to get the human-readable parts
+    clean_description = _re.sub(
+        r"^(CREATE|MODIFY|DELETE)\s+\S+.*$", "", raw_text, flags=_re.MULTILINE,
+    ).strip()
+
+    # Get actual repo files for validation
+    repo_ctx = await get_repository_context_summary(owner, repo, token=token, branch=active_ref)
+    real_files = set(repo_ctx.get("all_files", []))
+
+    valid_files = []
+    for action, path in matches:
+        path = path.strip().rstrip(",-:")
+        if action in ("MODIFY", "DELETE"):
+            if path in real_files:
+                valid_files.append(PlanFile(path=path, action=action))
+            else:
+                logger.warning("[GitPilot Lite] Skipping %s %s — file not in repo", action, path)
+        elif action == "CREATE":
+            if path not in real_files:
+                valid_files.append(PlanFile(path=path, action=action))
+
+    steps = []
+    if valid_files:
+        # Build a clean summary: "Create 2 files, modify 1 file"
+        counts = {}
+        for f in valid_files:
+            counts[f.action] = counts.get(f.action, 0) + 1
+        action_labels = {"CREATE": "create", "MODIFY": "modify", "DELETE": "delete"}
+        summary_parts = []
+        for act in ("CREATE", "MODIFY", "DELETE"):
+            n = counts.get(act, 0)
+            if n > 0:
+                label = action_labels[act]
+                summary_parts.append(f"{label} {n} file{'s' if n > 1 else ''}")
+        clean_summary = "Plan: " + ", ".join(summary_parts) + "."
+
+        # Use the clean description if available, otherwise a generic one
+        step_desc = clean_description if clean_description else f"Apply changes to {len(valid_files)} file(s) in {repo_full_name}."
+
+        steps.append(PlanStep(
+            step_number=1,
+            title="Execute changes",
+            description=step_desc,
+            files=valid_files,
+            risks=None,
+        ))
+        return PlanResult(goal=goal, summary=clean_summary, steps=steps)
+
+    # No valid files after validation — the LLM hallucinated paths.
+    # Return as a Q&A-style answer (no Action Plan section shown in UI).
+    fallback_text = clean_description if clean_description else raw_text
+    # Strip any remaining ACTION-like artifacts
+    fallback_text = _re.sub(r"\bACTION\b", "", fallback_text).strip()
+    if not fallback_text:
+        fallback_text = (
+            f"I analyzed {repo_full_name} but couldn't determine specific file "
+            f"changes for your request. The repository has {len(real_files)} file(s). "
+            f"Try being more specific about what you'd like to create or modify."
+        )
+
+    steps.append(PlanStep(
+        step_number=1,
+        title="Analysis",
+        description=fallback_text,
+        files=[],
+        risks=None,
+    ))
+    return PlanResult(goal=goal, summary=fallback_text, steps=steps)
+
+
+async def execute_plan_lite(
+    plan: PlanResult,
+    repo_full_name: str,
+    token: str | None = None,
+    branch_name: str | None = None,
+) -> dict:
+    """Lite Mode execution: single agent generates file content with simplified prompts.
+
+    Unlike the standard execute_plan, the Lite version:
+    - Uses a single short prompt per file (no CRITICAL INSTRUCTIONS blocks)
+    - Does not require the LLM to call tools
+    - Pre-reads existing file content and injects it into the prompt
+    """
+    from .github_api import get_file, put_file, create_branch, get_repo
+    import re
+    import time
+
+    owner, repo = repo_full_name.split("/")
+    execution_steps: list[dict] = []
+    llm = build_llm()
+
+    if branch_name is None:
+        sanitized = re.sub(r"[^a-z0-9-]+", "-", plan.goal.lower())
+        sanitized = sanitized[:40].strip("-")
+        timestamp = str(int(time.time()))[-6:]
+        branch_name = f"gitpilot-{sanitized}-{timestamp}"
+
+    try:
+        await create_branch(owner, repo, branch_name, from_ref="HEAD", token=token)
+    except HTTPException:
+        pass  # Branch may already exist
+
+    set_repo_context(owner, repo, token=token, branch=branch_name)
+
+    for step in plan.steps:
+        step_summary = f"Step {step.step_number}: {step.title}"
+
+        for file in step.files:
+            try:
+                if file.action == "CREATE":
+                    # SIMPLIFIED PROMPT for small LLMs
+                    create_prompt = (
+                        f"Write the content for a new file: {file.path}\n"
+                        f"Goal: {plan.goal}\n"
+                        f"Context: {step.description[:300]}\n\n"
+                        f"Return ONLY the file content, nothing else."
+                    )
+
+                    lite_agent = Agent(
+                        role="Code Writer",
+                        goal="Write file content",
+                        backstory="You write clean, working code.",
+                        llm=llm, tools=[], verbose=False, allow_delegation=False,
+                    )
+                    task = Task(
+                        description=create_prompt,
+                        expected_output=f"Content for {file.path}",
+                        agent=lite_agent,
+                    )
+                    crew = Crew(agents=[lite_agent], tasks=[task], process=Process.sequential, verbose=False)
+
+                    def _create():
+                        r = crew.kickoff()
+                        return r.raw if hasattr(r, "raw") else str(r)
+
+                    ctx = contextvars.copy_context()
+                    content = await asyncio.to_thread(ctx.run, _create)
+                    content = content.strip()
+                    if content.startswith("```"):
+                        lines = content.split("\n")
+                        if lines[-1].strip() == "```":
+                            content = "\n".join(lines[1:-1])
+                        else:
+                            content = "\n".join(lines[1:])
+
+                    await put_file(owner, repo, file.path, content,
+                                   f"GitPilot Lite: Create {file.path}", token=token, branch=branch_name)
+                    step_summary += f"\n  + Created {file.path}"
+
+                elif file.action == "MODIFY":
+                    try:
+                        existing = await get_file(owner, repo, file.path, token=token, ref=branch_name)
+                        modify_prompt = (
+                            f"Modify this file: {file.path}\n"
+                            f"Goal: {plan.goal}\n"
+                            f"What to change: {step.description[:300]}\n\n"
+                            f"Current content:\n{existing[:2000]}\n\n"
+                            f"Return the complete modified file content, nothing else."
+                        )
+
+                        lite_agent = Agent(
+                            role="Code Writer",
+                            goal="Modify file content",
+                            backstory="You write clean, working code.",
+                            llm=llm, tools=[], verbose=False, allow_delegation=False,
+                        )
+                        task = Task(description=modify_prompt, expected_output=f"Modified {file.path}", agent=lite_agent)
+                        crew = Crew(agents=[lite_agent], tasks=[task], process=Process.sequential, verbose=False)
+
+                        def _modify():
+                            r = crew.kickoff()
+                            return r.raw if hasattr(r, "raw") else str(r)
+
+                        ctx = contextvars.copy_context()
+                        modified = await asyncio.to_thread(ctx.run, _modify)
+                        modified = modified.strip()
+                        if modified.startswith("```"):
+                            lines = modified.split("\n")
+                            if lines[-1].strip() == "```":
+                                modified = "\n".join(lines[1:-1])
+                            else:
+                                modified = "\n".join(lines[1:])
+
+                        await put_file(owner, repo, file.path, modified,
+                                       f"GitPilot Lite: Modify {file.path}", token=token, branch=branch_name)
+                        step_summary += f"\n  ~ Modified {file.path}"
+                    except Exception as e:
+                        logger.exception("Lite: Failed to modify %s: %s", file.path, e)
+                        step_summary += f"\n  ! Failed to modify {file.path}: {e}"
+
+                elif file.action == "DELETE":
+                    from .github_api import delete_file
+                    try:
+                        await delete_file(owner, repo, file.path,
+                                          f"GitPilot Lite: Delete {file.path}", token=token, branch=branch_name)
+                        step_summary += f"\n  - Deleted {file.path}"
+                    except Exception as e:
+                        logger.exception("Lite: Failed to delete %s: %s", file.path, e)
+                        step_summary += f"\n  ! Failed to delete {file.path}: {e}"
+
+                elif file.action == "READ":
+                    step_summary += f"\n  i Inspected {file.path}"
+
+            except Exception as e:
+                logger.exception("Lite: Error processing %s: %s", file.path, e)
+                step_summary += f"\n  ! Error: {file.path}: {e}"
+
+        execution_steps.append({"step_number": step.step_number, "summary": step_summary})
+
+    return {
+        "status": "completed",
+        "message": f"Lite Mode: executed {len(plan.steps)} steps on {repo_full_name} (branch '{branch_name}')",
+        "branch": branch_name,
+        "branch_url": f"https://github.com/{repo_full_name}/tree/{branch_name}",
+        "executionLog": {"steps": execution_steps},
+        "lite_mode": True,
+    }
+
+
 async def execute_plan(
     plan: PlanResult,
     repo_full_name: str,
@@ -714,6 +1126,24 @@ async def dispatch_request(
         raise ValueError("dispatch_request: missing user_request (or legacy 'message')")
     if not repo_full_name:
         raise ValueError("dispatch_request: missing repo_full_name (or legacy repo_owner/repo_name)")
+
+    # ---------- Lite Mode check (additive, non-destructive) ----------
+    # Lite mode activates if EITHER the setting is on OR the topology is "lite_mode"
+    from .settings import get_settings as _get_settings
+    from .topology_registry import get_saved_topology_preference as _get_topo_pref
+    _current_settings = _get_settings()
+    _lite_active = _current_settings.lite_mode or _get_topo_pref() == "lite_mode"
+    if _lite_active:
+        logger.info("[GitPilot Lite] Lite Mode active — using simplified single-agent path")
+        plan = await generate_plan_lite(user_request, repo_full_name, token=token, branch_name=branch_name)
+        return {
+            "category": "plan_execute",
+            "workflow": "plan_execute",
+            "plan": plan.model_dump() if hasattr(plan, "model_dump") else plan,
+            "message": "Lite Mode: Plan generated. Review and approve to execute.",
+            "lite_mode": True,
+        }
+
     # ---------- Topology-aware routing (additive) ----------
     _active_topology = None
     _resolved_tid = topology_id or get_saved_topology_preference()

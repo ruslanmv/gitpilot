@@ -26,6 +26,8 @@ from .settings import AppSettings, get_settings, set_provider, update_settings, 
 from .agentic import (
     generate_plan,
     execute_plan,
+    generate_plan_lite,
+    execute_plan_lite,
     PlanResult,
     get_flow_definition,
     dispatch_request,
@@ -53,6 +55,14 @@ from .topology_registry import (
     save_topology_preference,
 )
 from .agent_teams import AgentTeam
+
+
+def _is_lite_mode_active() -> bool:
+    """Check if Lite Mode should be used (setting OR topology)."""
+    s = get_settings()
+    if s.lite_mode:
+        return True
+    return get_saved_topology_preference() == "lite_mode"
 from .learning import LearningEngine
 from .cross_repo import CrossRepoAnalyzer
 from .predictions import PredictiveEngine
@@ -213,6 +223,7 @@ class SettingsResponse(BaseModel):
     ollama: dict
     langflow_url: str
     has_langflow_plan_flow: bool
+    lite_mode: bool = False
 
 
 class ProviderModelsResponse(BaseModel):
@@ -533,6 +544,7 @@ async def api_get_settings():
         ollama=s.ollama.model_dump(),
         langflow_url=s.langflow_url,
         has_langflow_plan_flow=bool(s.langflow_plan_flow_id),
+        lite_mode=s.lite_mode,
     )
 
 
@@ -567,6 +579,7 @@ async def api_set_provider(update: ProviderUpdate):
         ollama=s.ollama.model_dump(),
         langflow_url=s.langflow_url,
         has_langflow_plan_flow=bool(s.langflow_plan_flow_id),
+        lite_mode=s.lite_mode,
     )
 
 
@@ -583,6 +596,7 @@ async def api_update_llm_settings(updates: dict):
         ollama=s.ollama.model_dump(),
         langflow_url=s.langflow_url,
         has_langflow_plan_flow=bool(s.langflow_plan_flow_id),
+        lite_mode=s.lite_mode,
     )
 
 
@@ -619,7 +633,9 @@ async def api_chat_execute(
     # never accidentally run on HEAD/default when branch_name is provided.
     with execution_context(token, ref=req.branch_name):
         full_name = f"{req.repo_owner}/{req.repo_name}"
-        result = await execute_plan(
+        # Use lite executor when Lite Mode is active
+        _executor = execute_plan_lite if _is_lite_mode_active() else execute_plan
+        result = await _executor(
             req.plan, full_name, token=token, branch_name=req.branch_name
         )
         if isinstance(result, dict):
@@ -696,6 +712,24 @@ async def api_set_topology_pref(req: TopologyPrefRequest):
     return {"status": "ok", "topology": req.topology}
 
 
+class LiteModeRequest(BaseModel):
+    lite_mode: bool
+
+
+@app.get("/api/settings/lite-mode")
+async def api_get_lite_mode():
+    """Return current Lite Mode status."""
+    s = get_settings()
+    return {"lite_mode": s.lite_mode}
+
+
+@app.post("/api/settings/lite-mode")
+async def api_set_lite_mode(req: LiteModeRequest):
+    """Toggle Lite Mode on or off."""
+    s = update_settings({"lite_mode": req.lite_mode})
+    return {"status": "ok", "lite_mode": s.lite_mode}
+
+
 # ============================================================================
 # Conversational Chat Endpoint (v2 upgrade)
 # ============================================================================
@@ -748,7 +782,8 @@ async def api_chat_execute_with_pr(
 
     with execution_context(token, ref=req.branch_name):
         full_name = f"{req.repo_owner}/{req.repo_name}"
-        result = await execute_plan(
+        _executor = execute_plan_lite if _is_lite_mode_active() else execute_plan
+        result = await _executor(
             req.plan, full_name, token=token, branch_name=req.branch_name,
         )
 

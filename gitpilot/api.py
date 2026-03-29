@@ -25,6 +25,8 @@ from .settings import AppSettings, get_settings, set_provider, update_settings, 
 from .agentic import (
     generate_plan,
     execute_plan,
+    generate_plan_lite,
+    execute_plan_lite,
     PlanResult,
     get_flow_definition,
     dispatch_request,
@@ -51,6 +53,20 @@ from .topology_registry import (
     get_saved_topology_preference,
     save_topology_preference,
 )
+
+
+def _is_lite_mode_active() -> bool:
+    """Check if Lite Mode should be used.
+
+    Returns True if EITHER:
+    - settings.lite_mode is True (explicit toggle), OR
+    - the saved topology preference is "lite_mode" (selected in flow viewer)
+    """
+    s = get_settings()
+    if s.lite_mode:
+        return True
+    pref = get_saved_topology_preference()
+    return pref == "lite_mode"
 from .agent_teams import AgentTeam
 from .learning import LearningEngine
 from .cross_repo import CrossRepoAnalyzer
@@ -589,11 +605,10 @@ async def api_update_llm_settings(updates: dict):
 # Chat Endpoints
 # ============================================================================
 
-@app.post("/api/chat/plan", response_model=PlanResult)
+@app.post("/api/chat/plan")
 async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Header(None)):
     token = get_github_token(authorization)
 
-    # ✅ Added logging for branch_name received
     logger.info(
         "PLAN REQUEST: %s/%s | branch_name=%r",
         req.repo_owner,
@@ -601,10 +616,52 @@ async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Hea
         req.branch_name,
     )
 
-    with execution_context(token, ref=req.branch_name):  # ✅ set ref context
+    with execution_context(token, ref=req.branch_name):
         full_name = f"{req.repo_owner}/{req.repo_name}"
-        plan = await generate_plan(req.goal, full_name, token=token, branch_name=req.branch_name)
-        return plan
+
+        # Use lite planner when Lite Mode is active (setting OR topology)
+        planner = generate_plan_lite if _is_lite_mode_active() else generate_plan
+
+        try:
+            plan = await planner(req.goal, full_name, token=token, branch_name=req.branch_name)
+            return plan
+        except Exception as exc:
+            error_msg = str(exc)
+
+            # ── Quota / rate-limit detection ────────────────
+            _quota_keywords = [
+                "insufficient_quota", "exceeded your current quota",
+                "rate_limit_exceeded", "429",
+                "billing", "plan and billing",
+            ]
+            _is_quota = any(kw in error_msg.lower() for kw in _quota_keywords)
+            if _is_quota:
+                logger.warning("[GitPilot] LLM quota/rate-limit error: %s", error_msg)
+                raise HTTPException(
+                    status_code=429,
+                    detail=(
+                        "Your LLM provider credits have been exhausted or you've hit "
+                        "a rate limit. Please check your plan and billing details at "
+                        "your provider's dashboard, or switch to a different provider "
+                        "in Settings (e.g. Ollama or OllaBridge for free local models)."
+                    ),
+                ) from exc
+
+            # ── Empty CrewAI output (small LLM returns nothing) ─
+            if "No valid task outputs" in error_msg:
+                logger.warning("[GitPilot] CrewAI empty output — model may be too small: %s", error_msg)
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "The LLM returned an empty response. This usually happens "
+                        "with very small models (< 3B parameters) that cannot follow "
+                        "complex multi-agent prompts. Try enabling Lite Mode in "
+                        "Settings for better results with small models."
+                    ),
+                ) from exc
+
+            # Re-raise anything else
+            raise
 
 
 @app.post("/api/chat/execute")
@@ -614,13 +671,37 @@ async def api_chat_execute(
 ):
     token = get_github_token(authorization)
 
-    # ✅ FIX: use execution_context(token, ref=req.branch_name) so tool calls that rely on context
-    # never accidentally run on HEAD/default when branch_name is provided.
     with execution_context(token, ref=req.branch_name):
         full_name = f"{req.repo_owner}/{req.repo_name}"
-        result = await execute_plan(
-            req.plan, full_name, token=token, branch_name=req.branch_name
-        )
+        executor = execute_plan_lite if _is_lite_mode_active() else execute_plan
+        try:
+            result = await executor(
+                req.plan, full_name, token=token, branch_name=req.branch_name
+            )
+        except Exception as exc:
+            error_msg = str(exc)
+            _quota_keywords = [
+                "insufficient_quota", "exceeded your current quota",
+                "rate_limit_exceeded", "429", "billing",
+            ]
+            if any(kw in error_msg.lower() for kw in _quota_keywords):
+                raise HTTPException(
+                    status_code=429,
+                    detail=(
+                        "Your LLM provider credits have been exhausted or you've hit "
+                        "a rate limit. Please check your plan and billing details, "
+                        "or switch to a free local provider in Settings."
+                    ),
+                ) from exc
+            if "No valid task outputs" in error_msg:
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "The LLM returned an empty response. Try enabling Lite Mode "
+                        "in Settings for better results with small models."
+                    ),
+                ) from exc
+            raise
         if isinstance(result, dict):
             result.setdefault(
                 "mode",
@@ -718,10 +799,35 @@ async def api_chat_message(req: ChatRequest, authorization: Optional[str] = Head
 
     with execution_context(token, ref=req.branch_name):
         full_name = f"{req.repo_owner}/{req.repo_name}"
-        result = await dispatch_request(
-            req.message, full_name, token=token, branch_name=req.branch_name,
-            topology_id=req.topology_id,
-        )
+        try:
+            result = await dispatch_request(
+                req.message, full_name, token=token, branch_name=req.branch_name,
+                topology_id=req.topology_id,
+            )
+        except Exception as exc:
+            error_msg = str(exc)
+            _quota_keywords = [
+                "insufficient_quota", "exceeded your current quota",
+                "rate_limit_exceeded", "429", "billing",
+            ]
+            if any(kw in error_msg.lower() for kw in _quota_keywords):
+                raise HTTPException(
+                    status_code=429,
+                    detail=(
+                        "Your LLM provider credits have been exhausted or you've hit "
+                        "a rate limit. Please check your plan and billing details, "
+                        "or switch to a free local provider in Settings."
+                    ),
+                ) from exc
+            if "No valid task outputs" in error_msg:
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "The LLM returned an empty response. Try enabling Lite Mode "
+                        "in Settings for better results with small models."
+                    ),
+                ) from exc
+            raise
 
         # If auto_pr is requested and execution completed, create PR
         if (
@@ -747,9 +853,34 @@ async def api_chat_execute_with_pr(
 
     with execution_context(token, ref=req.branch_name):
         full_name = f"{req.repo_owner}/{req.repo_name}"
-        result = await execute_plan(
-            req.plan, full_name, token=token, branch_name=req.branch_name,
-        )
+        executor = execute_plan_lite if _is_lite_mode_active() else execute_plan
+        try:
+            result = await executor(
+                req.plan, full_name, token=token, branch_name=req.branch_name,
+            )
+        except Exception as exc:
+            error_msg = str(exc)
+            _quota_keywords = [
+                "insufficient_quota", "exceeded your current quota",
+                "rate_limit_exceeded", "429", "billing",
+            ]
+            if any(kw in error_msg.lower() for kw in _quota_keywords):
+                raise HTTPException(
+                    status_code=429,
+                    detail=(
+                        "Your LLM provider credits have been exhausted. "
+                        "Check billing or switch to a free local provider."
+                    ),
+                ) from exc
+            if "No valid task outputs" in error_msg:
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "The LLM returned an empty response. Try enabling "
+                        "Lite Mode for better results with small models."
+                    ),
+                ) from exc
+            raise
 
         if isinstance(result, dict) and result.get("status") == "completed":
             branch = result.get("branch", req.branch_name)
@@ -2295,9 +2426,23 @@ async def session_websocket(websocket: WebSocket, session_id: str):
                         })
                 except Exception as agent_err:
                     logger.error(f"Agent error in WS session {session_id}: {agent_err}")
+                    err_str = str(agent_err)
+                    # Friendly messages for common LLM errors
+                    _q_kw = ["insufficient_quota", "exceeded your current quota", "rate_limit_exceeded", "429"]
+                    if any(kw in err_str.lower() for kw in _q_kw):
+                        err_str = (
+                            "Your LLM provider credits have been exhausted or you've "
+                            "hit a rate limit. Please check your billing details or "
+                            "switch to a free local provider (Ollama / OllaBridge) in Settings."
+                        )
+                    elif "No valid task outputs" in err_str:
+                        err_str = (
+                            "The LLM returned an empty response. This often happens "
+                            "with small models (< 3B). Try enabling Lite Mode in Settings."
+                        )
                     await websocket.send_json({
                         "type": "error",
-                        "message": str(agent_err),
+                        "message": err_str,
                     })
 
                 await websocket.send_json({
@@ -2551,7 +2696,21 @@ async def api_chat_message_v2(req: _ChatMessageRequest):
                 [{"role": "user", "content": req.message}]
             )
     except Exception as e:
-        answer = f"Error processing message: {str(e)}"
+        err_str = str(e)
+        _q_kw = ["insufficient_quota", "exceeded your current quota", "rate_limit_exceeded", "429"]
+        if any(kw in err_str.lower() for kw in _q_kw):
+            answer = (
+                "Your LLM provider credits have been exhausted or you've hit a "
+                "rate limit. Please check your billing details or switch to a "
+                "free local provider (Ollama / OllaBridge) in Settings."
+            )
+        elif "No valid task outputs" in err_str:
+            answer = (
+                "The LLM returned an empty response. This often happens with "
+                "small models. Try enabling Lite Mode in Settings."
+            )
+        else:
+            answer = f"Error processing message: {err_str}"
 
     # Store message in session
     from gitpilot.session import Message
