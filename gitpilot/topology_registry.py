@@ -727,6 +727,99 @@ T7_QUICK_FIX = Topology(
     flow_graph=_T7_FLOW_GRAPH,
 )
 
+# ---------------------------------------------------------------------------
+# T8 — Lite Mode (single-agent, optimized for small LLMs < 7B)
+# ---------------------------------------------------------------------------
+
+_T8_FLOW_GRAPH: Dict[str, Any] = {
+    "nodes": [
+        {
+            "id": "user_request",
+            "type": "user",
+            "data": {
+                "label": "User Request",
+                "description": "Incoming task or question",
+            },
+            "position": {"x": 300, "y": 0},
+        },
+        {
+            "id": "intent_classifier",
+            "type": "router",
+            "data": {
+                "label": "Intent Classifier",
+                "description": "Regex-based instant classification: QUESTION vs ACTION (no LLM call)",
+                "model": "regex",
+            },
+            "position": {"x": 300, "y": 100},
+        },
+        {
+            "id": "pre_fetch",
+            "type": "tool_group",
+            "data": {
+                "label": "Pre-Fetch Context",
+                "tools": ["GitHub API"],
+                "description": "Fetches file list, README content, and directory structure via API",
+            },
+            "position": {"x": 100, "y": 200},
+        },
+        {
+            "id": "lite_agent",
+            "type": "agent",
+            "data": {
+                "label": "GitPilot Lite",
+                "model": "Any (1.5B+)",
+                "mode": "read-write",
+                "tools": [],
+                "description": "Single LLM call with pre-injected context. Prompt adapts to intent type.",
+            },
+            "position": {"x": 300, "y": 200},
+        },
+        {
+            "id": "validator",
+            "type": "tool",
+            "data": {
+                "label": "File Validator",
+                "tools": ["regex"],
+                "description": "Validates MODIFY/DELETE targets exist in repo, strips hallucinated paths",
+            },
+            "position": {"x": 500, "y": 200},
+        },
+        {
+            "id": "output",
+            "type": "output",
+            "data": {
+                "label": "Result",
+                "description": "Answer (question) or validated plan (action)",
+            },
+            "position": {"x": 300, "y": 320},
+        },
+    ],
+    "edges": [
+        {"id": "e-user-classify",      "source": "user_request",      "target": "intent_classifier", "animated": True},
+        {"id": "e-classify-prefetch",   "source": "intent_classifier", "target": "pre_fetch",         "label": "always",   "animated": True},
+        {"id": "e-prefetch-lite",       "source": "pre_fetch",         "target": "lite_agent",        "label": "context",  "animated": True},
+        {"id": "e-lite-validator",      "source": "lite_agent",        "target": "validator",         "label": "action only", "animated": True},
+        {"id": "e-lite-output-q",       "source": "lite_agent",        "target": "output",            "label": "question → answer"},
+        {"id": "e-validator-output",    "source": "validator",         "target": "output",            "label": "validated plan", "animated": True},
+    ],
+}
+
+T8_LITE_MODE = Topology(
+    id="lite_mode",
+    name="Lite Mode (Small LLMs)",
+    description="Smart intent detection + single agent + file validation — optimized for models under 7B",
+    category=TopologyCategory.system,
+    icon="\U0001f4a1",   # light bulb
+    agents_used=["lite_agent"],
+    execution_style=ExecutionStyle.single_task,
+    routing_policy=RoutingPolicy(
+        strategy=RoutingStrategy.always_main_agent,
+        primary_agent="lite_agent",
+        classifier_hints=[],
+    ),
+    flow_graph=_T8_FLOW_GRAPH,
+)
+
 
 # ===========================================================================
 # Registry singleton
@@ -742,6 +835,7 @@ TOPOLOGY_REGISTRY: Dict[str, Topology] = {
         T5_CODE_INSPECTOR,
         T6_ARCHITECT_MODE,
         T7_QUICK_FIX,
+        T8_LITE_MODE,
     ]
 }
 

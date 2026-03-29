@@ -15,6 +15,7 @@ export interface GitPilotConfig {
     scanOnSave: boolean;
     chatFontSize: number;
     maxChatHistory: number;
+    liteMode: boolean;
 }
 
 const DEFAULTS: GitPilotConfig = {
@@ -27,6 +28,7 @@ const DEFAULTS: GitPilotConfig = {
     scanOnSave: false,
     chatFontSize: 13,
     maxChatHistory: 100,
+    liteMode: false,
 };
 
 export function getConfig(): GitPilotConfig {
@@ -42,6 +44,7 @@ export function getConfig(): GitPilotConfig {
         scanOnSave: cfg.get('scanOnSave', DEFAULTS.scanOnSave),
         chatFontSize: cfg.get('chatFontSize', DEFAULTS.chatFontSize),
         maxChatHistory: cfg.get('maxChatHistory', DEFAULTS.maxChatHistory),
+        liteMode: cfg.get('liteMode', DEFAULTS.liteMode),
     };
 }
 

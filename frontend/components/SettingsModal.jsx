@@ -129,6 +129,23 @@ export default function SettingsModal({ onClose }) {
     }
   };
 
+  const toggleLiteMode = async () => {
+    if (!settings) return;
+    const newValue = !settings.lite_mode;
+    try {
+      const res = await fetch("/api/settings/lite-mode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lite_mode: newValue }),
+      });
+      if (res.ok) {
+        setSettings((prev) => ({ ...prev, lite_mode: newValue }));
+      }
+    } catch (err) {
+      console.error("Failed to toggle lite mode:", err);
+    }
+  };
+
   if (!settings) return null;
 
   const activeModel = currentModelForActiveProvider();
@@ -263,6 +280,52 @@ export default function SettingsModal({ onClose }) {
               </select>
             </div>
           )}
+        </div>
+
+        {/* Lite Mode section */}
+        <div
+          style={{
+            marginTop: 16,
+            paddingTop: 12,
+            borderTop: "1px solid #2c2d46",
+            fontSize: 13,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginBottom: 6,
+            }}
+          >
+            <div style={{ color: "#c3c5dd", fontWeight: 600 }}>
+              Lite Mode
+            </div>
+            <button
+              type="button"
+              onClick={toggleLiteMode}
+              style={{
+                padding: "4px 14px",
+                fontSize: 11,
+                fontWeight: 600,
+                borderRadius: 12,
+                border: "none",
+                cursor: "pointer",
+                background: settings.lite_mode ? "#166534" : "#2c2d46",
+                color: settings.lite_mode ? "#86efac" : "#9092b5",
+                transition: "background 0.2s, color 0.2s",
+              }}
+            >
+              {settings.lite_mode ? "ON" : "OFF"}
+            </button>
+          </div>
+          <div style={{ fontSize: 11, color: "#9092b5", lineHeight: 1.5 }}>
+            Optimized for small models (under 7B parameters).
+            Uses simplified prompts and single-agent execution instead
+            of multi-agent pipelines. Recommended for: qwen2.5:1.5b,
+            phi-3-mini, gemma-2b, tinyllama, etc.
+          </div>
         </div>
       </div>
     </div>

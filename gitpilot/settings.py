@@ -70,6 +70,12 @@ class AppSettings(BaseModel):
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
     ollabridge: OllaBridgeConfig = Field(default_factory=OllaBridgeConfig)
 
+    # Lite Mode: optimized for small LLMs (< 7B parameters).
+    # Uses simplified prompts, single-agent execution, and pre-fetched context
+    # instead of multi-agent pipelines with tool-calling.
+    # Default is False — user must explicitly opt-in via settings or env var.
+    lite_mode: bool = Field(default=False)
+
     langflow_url: str = Field(default="http://localhost:7860")
     langflow_api_key: str | None = None
     langflow_plan_flow_id: str | None = None
@@ -136,6 +142,13 @@ class AppSettings(BaseModel):
             settings.ollabridge.model = os.getenv("GITPILOT_OLLABRIDGE_MODEL")
         if os.getenv("OLLABRIDGE_API_KEY"):
             settings.ollabridge.api_key = os.getenv("OLLABRIDGE_API_KEY")
+
+        # Lite Mode
+        env_lite = os.getenv("GITPILOT_LITE_MODE", "").lower()
+        if env_lite in ("1", "true", "yes", "on"):
+            settings.lite_mode = True
+        elif env_lite in ("0", "false", "no", "off"):
+            settings.lite_mode = False
 
         # LangFlow (optional)
         if os.getenv("GITPILOT_LANGFLOW_URL"):
@@ -281,6 +294,10 @@ def update_settings(updates: dict) -> AppSettings:
         _settings.ollama = OllamaConfig(**updates["ollama"])
     if "ollabridge" in updates:
         _settings.ollabridge = OllaBridgeConfig(**updates["ollabridge"])
+
+    # Lite mode toggle
+    if "lite_mode" in updates:
+        _settings.lite_mode = bool(updates["lite_mode"])
 
     _settings.save()
     return _settings

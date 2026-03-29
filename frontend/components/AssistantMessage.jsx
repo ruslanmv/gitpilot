@@ -69,6 +69,11 @@ export default function AssistantMessage({ answer, plan, executionLog }) {
     },
   };
 
+  // Only show Action Plan section when there are actual file actions.
+  // For Lite Mode Q&A responses (all steps have 0 files), the plan
+  // just duplicates the answer — hiding it avoids showing the same text 3x.
+  const hasFileActions = plan?.steps?.some(s => s.files?.length > 0);
+
   return (
     <div className="chat-message-ai" style={styles.container}>
       {/* Answer section */}
@@ -81,8 +86,8 @@ export default function AssistantMessage({ answer, plan, executionLog }) {
         </div>
       </section>
 
-      {/* Action Plan section */}
-      {plan && (
+      {/* Action Plan section — only when there are file changes */}
+      {plan && hasFileActions && (
         <section style={styles.section}>
           <header style={styles.header}>
             <h3 style={{ ...styles.title, color: "#D95C3D" }}>Action Plan</h3>

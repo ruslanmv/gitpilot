@@ -450,5 +450,39 @@ export function registerServerCommands(
                 vscode.window.showErrorMessage(`Failed to load topologies: ${err.message}`);
             }
         }),
+
+        vscode.commands.registerCommand('gitpilot.toggleLiteMode', async () => {
+            if (!client.isConnected) {
+                vscode.window.showWarningMessage('Not connected');
+                return;
+            }
+            try {
+                // Read current state from server
+                const data = await client.request<{ lite_mode: boolean }>('/api/settings/lite-mode');
+                const currentValue = data.lite_mode ?? false;
+                const newValue = !currentValue;
+
+                // Toggle on server
+                await client.request('/api/settings/lite-mode', {
+                    method: 'POST',
+                    body: JSON.stringify({ lite_mode: newValue }),
+                });
+
+                // Sync VS Code setting
+                await vscode.workspace.getConfiguration('gitpilot').update(
+                    'liteMode', newValue, vscode.ConfigurationTarget.Global,
+                );
+
+                const label = newValue ? 'ON' : 'OFF';
+                vscode.window.showInformationMessage(
+                    `Lite Mode: ${label}. ${newValue
+                        ? 'Using simplified prompts for small LLMs.'
+                        : 'Using standard multi-agent pipelines.'
+                    }`
+                );
+            } catch (err: any) {
+                vscode.window.showErrorMessage(`Failed to toggle Lite Mode: ${err.message}`);
+            }
+        }),
     );
 }
