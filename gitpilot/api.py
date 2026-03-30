@@ -110,10 +110,61 @@ _predictive_engine = PredictiveEngine()
 _security_scanner = SecurityScanner()
 _nl_engine = NLQueryEngine()
 
+import asyncio as _asyncio
+import signal
+from contextlib import asynccontextmanager
+
+_shutdown_event = _asyncio.Event()
+
+
+@asynccontextmanager
+async def _lifespan(application: FastAPI):
+    """Manage startup (pre-warm) and graceful shutdown."""
+
+    # -- Startup: pre-warm CrewAI in background ---
+    async def _warmup():
+        await _asyncio.sleep(2)  # let health-check pass first
+        try:
+            from .agentic import _crewai, _tools  # noqa: F811
+            _crewai()
+            _tools()
+            logger.info("CrewAI modules pre-warmed successfully")
+        except Exception as exc:
+            logger.warning("CrewAI pre-warm failed (will retry on first request): %s", exc)
+
+        # Log memory usage after warmup
+        try:
+            import resource
+            rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+            logger.info("Memory after warmup: %.1f MB RSS", rss_mb)
+        except Exception:
+            pass
+
+    _asyncio.create_task(_warmup())
+
+    # -- Graceful shutdown handler ---
+    def _handle_signal(sig, _frame):
+        logger.info("Received %s — initiating graceful shutdown", signal.Signals(sig).name)
+        _shutdown_event.set()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(sig, _handle_signal)
+        except (OSError, ValueError):
+            pass  # not main thread or unsupported
+
+    yield
+
+    # Cleanup on shutdown
+    logger.info("GitPilot shutting down gracefully")
+    _shutdown_event.set()
+
+
 app = FastAPI(
     title="GitPilot API",
     version=__version__,
     description="Agentic AI assistant for GitHub repositories.",
+    lifespan=_lifespan,
 )
 
 # ==========================================================================
@@ -701,6 +752,22 @@ async def api_chat_execute(
                         "in Settings for better results with small models."
                     ),
                 ) from exc
+            if isinstance(exc, TimeoutError) or "timed out" in error_msg.lower():
+                raise HTTPException(
+                    status_code=504,
+                    detail=(
+                        "The agent operation timed out. The LLM provider may be "
+                        "overloaded. Try again or switch to a faster provider."
+                    ),
+                ) from exc
+            if "circuit breaker" in error_msg.lower():
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "The LLM provider is temporarily unavailable after repeated "
+                        "failures. Please wait and try again shortly."
+                    ),
+                ) from exc
             raise
         if isinstance(result, dict):
             result.setdefault(
@@ -825,6 +892,22 @@ async def api_chat_message(req: ChatRequest, authorization: Optional[str] = Head
                     detail=(
                         "The LLM returned an empty response. Try enabling Lite Mode "
                         "in Settings for better results with small models."
+                    ),
+                ) from exc
+            if isinstance(exc, TimeoutError) or "timed out" in error_msg.lower():
+                raise HTTPException(
+                    status_code=504,
+                    detail=(
+                        "The agent operation timed out. The LLM provider may be "
+                        "overloaded. Try again or switch to a faster provider."
+                    ),
+                ) from exc
+            if "circuit breaker" in error_msg.lower():
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "The LLM provider is temporarily unavailable after repeated "
+                        "failures. Please wait and try again shortly."
                     ),
                 ) from exc
             raise
@@ -2757,8 +2840,17 @@ if STATIC_DIR.exists():
 
 @app.get("/api/health")
 async def health_check():
-    """Health check endpoint for monitoring and diagnostics."""
+    """Lightweight health check — always fast, used by HF Spaces HEALTHCHECK."""
     return {"status": "healthy", "service": "gitpilot-backend"}
+
+
+@app.get("/api/health/deep")
+async def deep_health():
+    """Deep health check — verifies LLM provider connectivity and system status."""
+    from .resilience import deep_health_check
+    result = await deep_health_check()
+    status_code = 200 if result["status"] == "healthy" else 503
+    return JSONResponse(content=result, status_code=status_code)
 
 
 @app.get("/healthz")
