@@ -11,8 +11,10 @@ set -e
 # Ensure Python output is not buffered (critical for HF Spaces log visibility)
 export PYTHONUNBUFFERED=1
 
+echo ""
 echo "=============================================="
 echo "  GitPilot — Hugging Face Spaces"
+echo "  Started at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 echo "=============================================="
 echo ""
 
@@ -30,7 +32,7 @@ echo ""
 
 # -- Check OllaBridge Cloud connectivity (non-blocking) ----------------------
 echo "[2/2] Checking LLM provider..."
-if curl -sf "${OLLABRIDGE_BASE_URL:-https://ruslanmv-ollabridge.hf.space}/health" > /dev/null 2>&1; then
+if curl -sf --connect-timeout 5 --max-time 10 "${OLLABRIDGE_BASE_URL:-https://ruslanmv-ollabridge.hf.space}/health" > /dev/null 2>&1; then
     echo "       OllaBridge Cloud is reachable"
 else
     echo "       OllaBridge Cloud not reachable (will retry on first request)"
