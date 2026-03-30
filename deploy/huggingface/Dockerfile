@@ -85,7 +85,10 @@ ENV PORT=7860 \
 USER appuser
 EXPOSE 7860
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:7860/api/health || exit 1
+# NOTE: Do NOT add a Docker HEALTHCHECK here.
+# HF Spaces has its own HTTP probe on app_port (7860) and ignores the Docker
+# HEALTHCHECK directive. Having both causes the container runtime to mark the
+# container "unhealthy" independently, which can trigger an endless
+# BUILD → START → restart → BUILD loop.
 
 CMD ["/app/start.sh"]
