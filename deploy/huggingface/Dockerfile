@@ -32,27 +32,27 @@ RUN useradd -m -u 1000 appuser && \
 
 WORKDIR /app
 
+# ── Install Python dependencies BEFORE copying source code ──────────
+# This ensures pip install layers are cached even when code changes.
+# Only pyproject.toml (for metadata) is needed; source comes later.
 COPY pyproject.toml README.md ./
-COPY gitpilot ./gitpilot
 
-# Copy built frontend into gitpilot/web/
-COPY --from=frontend-builder /build/dist/ ./gitpilot/web/
-
-# Install Python dependencies in a single pip-resolve pass.
-# Step 1: install the lightweight, fast-to-resolve deps (cached layer).
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir \
+# Step 1: upgrade pip, install lightweight deps (cached layer).
+RUN pip install --no-cache-dir --root-user-action=ignore --upgrade pip && \
+    pip install --no-cache-dir --root-user-action=ignore \
         "fastapi>=0.111.0" \
         "uvicorn[standard]>=0.30.0" \
         "httpx>=0.27.0" \
-        "python-dotenv>=1.1.0" \
-        "typer>=0.12.0" \
-        "pydantic>=2.7.0" \
+        "python-dotenv>=1.1.0,<1.2.0" \
+        "typer>=0.12.0,<0.24.0" \
+        "pydantic>=2.7.0,<2.12.0" \
         "rich>=13.0.0" \
         "pyjwt[crypto]>=2.8.0"
 
-# Step 2: install the heavy ML/agent deps (separate layer for better caching).
-RUN pip install --no-cache-dir \
+# Step 2: install heavy ML/agent deps (separate layer for better caching).
+# Version pins in Step 1 are aligned with crewai's requirements to avoid
+# costly uninstall/reinstall cycles.
+RUN pip install --no-cache-dir --root-user-action=ignore \
         "litellm" \
         "crewai[anthropic]>=0.76.9" \
         "crewai-tools>=0.13.4" \
@@ -60,8 +60,14 @@ RUN pip install --no-cache-dir \
         "ibm-watsonx-ai>=1.1.0" \
         "langchain-ibm>=0.3.0"
 
+# ── Now copy source code (cache-busting only affects layers below) ──
+COPY gitpilot ./gitpilot
+
+# Copy built frontend into gitpilot/web/
+COPY --from=frontend-builder /build/dist/ ./gitpilot/web/
+
 # Step 3: editable install of gitpilot itself (deps already satisfied).
-RUN pip install --no-cache-dir --no-deps -e .
+RUN pip install --no-cache-dir --root-user-action=ignore --no-deps -e .
 
 COPY deploy/huggingface/start.sh /app/start.sh
 RUN chmod +x /app/start.sh
