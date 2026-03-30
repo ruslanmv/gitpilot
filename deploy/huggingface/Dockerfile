@@ -38,7 +38,8 @@ COPY gitpilot ./gitpilot
 # Copy built frontend into gitpilot/web/
 COPY --from=frontend-builder /build/dist/ ./gitpilot/web/
 
-# Install Python dependencies (pip-only for reliability on HF Spaces)
+# Install Python dependencies in a single pip-resolve pass.
+# Step 1: install the lightweight, fast-to-resolve deps (cached layer).
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir \
         "fastapi>=0.111.0" \
@@ -48,12 +49,19 @@ RUN pip install --no-cache-dir --upgrade pip && \
         "typer>=0.12.0" \
         "pydantic>=2.7.0" \
         "rich>=13.0.0" \
-        "pyjwt[crypto]>=2.8.0" \
+        "pyjwt[crypto]>=2.8.0"
+
+# Step 2: install the heavy ML/agent deps (separate layer for better caching).
+RUN pip install --no-cache-dir \
         "litellm" \
-        "crewai>=0.76.9" \
+        "crewai[anthropic]>=0.76.9" \
         "crewai-tools>=0.13.4" \
-        "anthropic>=0.39.0" && \
-    pip install --no-cache-dir -e .
+        "anthropic>=0.39.0" \
+        "ibm-watsonx-ai>=1.1.0" \
+        "langchain-ibm>=0.3.0"
+
+# Step 3: editable install of gitpilot itself (deps already satisfied).
+RUN pip install --no-cache-dir --no-deps -e .
 
 COPY deploy/huggingface/start.sh /app/start.sh
 RUN chmod +x /app/start.sh
@@ -61,6 +69,7 @@ RUN chmod +x /app/start.sh
 ENV PORT=7860 \
     HOST=0.0.0.0 \
     HOME=/tmp \
+    PYTHONUNBUFFERED=1 \
     GITPILOT_PROVIDER=ollabridge \
     OLLABRIDGE_BASE_URL=https://ruslanmv-ollabridge.hf.space \
     GITPILOT_OLLABRIDGE_MODEL=qwen2.5:1.5b \

@@ -187,5 +187,77 @@ def get_repository_summary() -> str:
         return f"Error: {str(e)}"
 
 
+# ---------------------------------------------------------------------------
+# Write tools — allow agents to create, update, and delete files via GitHub API
+# ---------------------------------------------------------------------------
+
+@tool("Write or update a file in the repository")
+def write_file(file_path: str, content: str, commit_message: str) -> str:
+    """Creates or updates a file in the repository. Provide the full file content."""
+    try:
+        owner, repo, token, branch = get_repo_context()
+        from .github_api import put_file
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(
+                put_file(owner, repo, file_path, content, commit_message, token=token, branch=branch)
+            )
+        finally:
+            loop.close()
+
+        sha = result.get("commit_sha", "")
+        return f"File '{file_path}' written successfully. Commit: {sha[:8]}"
+    except Exception as e:
+        return f"Error writing file {file_path}: {str(e)}"
+
+
+@tool("Delete a file from the repository")
+def delete_repo_file(file_path: str, commit_message: str) -> str:
+    """Deletes a file from the repository."""
+    try:
+        owner, repo, token, branch = get_repo_context()
+        from .github_api import delete_file
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(
+                delete_file(owner, repo, file_path, commit_message, token=token, branch=branch)
+            )
+        finally:
+            loop.close()
+
+        sha = result.get("commit_sha", "")
+        return f"File '{file_path}' deleted. Commit: {sha[:8]}"
+    except Exception as e:
+        return f"Error deleting file {file_path}: {str(e)}"
+
+
+@tool("Create a new branch in the repository")
+def create_repo_branch(branch_name: str) -> str:
+    """Creates a new branch from the current HEAD."""
+    try:
+        owner, repo, token, _branch = get_repo_context()
+        from .github_api import create_branch
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(
+                create_branch(owner, repo, branch_name, from_ref="HEAD", token=token)
+            )
+        finally:
+            loop.close()
+
+        return f"Branch '{branch_name}' created successfully."
+    except Exception as e:
+        if "already exists" in str(e).lower() or "422" in str(e):
+            return f"Branch '{branch_name}' already exists (OK to use)."
+        return f"Error creating branch: {str(e)}"
+
+
 # Export tools
 REPOSITORY_TOOLS = [list_repository_files, get_directory_structure, read_file, get_repository_summary]
+WRITE_TOOLS = [write_file, delete_repo_file, create_repo_branch]
