@@ -6,15 +6,7 @@ import logging
 from textwrap import dedent
 from typing import Any, Dict, List, Literal, Optional
 
-from crewai import Agent, Crew, Process, Task
 from pydantic import BaseModel, Field
-
-from .llm_provider import build_llm
-from .agent_tools import REPOSITORY_TOOLS, set_repo_context, get_repository_context_summary
-from .issue_tools import ISSUE_TOOLS
-from .pr_tools import PR_TOOLS
-from .search_tools import SEARCH_TOOLS
-from .local_tools import LOCAL_TOOLS, LOCAL_FILE_TOOLS, LOCAL_GIT_TOOLS, LOCAL_SHELL_TOOLS
 from .agent_router import AgentType, RequestCategory, WorkflowPlan, route as route_request
 from .context_pack import build_context_pack
 from .topology_registry import (
@@ -28,6 +20,89 @@ from .topology_registry import (
 from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Resilient agent execution: timeout + circuit breaker
+# ---------------------------------------------------------------------------
+async def _guarded_agent_call(ctx, func, *, label: str = "agent"):
+    """Run a CrewAI kickoff in a thread with timeout and circuit breaker.
+
+    - Checks circuit breaker before starting.
+    - Applies a hard timeout (default 5 min, configurable via GITPILOT_AGENT_TIMEOUT).
+    - Records success/failure in the circuit breaker.
+    """
+    from .resilience import llm_circuit, run_with_timeout
+
+    if not llm_circuit.allow_request():
+        raise RuntimeError(
+            f"LLM provider circuit breaker is OPEN after repeated failures. "
+            f"Requests are temporarily rejected. Try again in "
+            f"{int(llm_circuit.recovery_timeout)}s."
+        )
+
+    try:
+        result = await run_with_timeout(
+            asyncio.to_thread(ctx.run, func),
+            label=label,
+        )
+        llm_circuit.record_success()
+        return result
+    except (TimeoutError, RuntimeError):
+        llm_circuit.record_failure()
+        raise
+    except Exception:
+        llm_circuit.record_failure()
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Lazy-load heavy dependencies (CrewAI, tool modules, LLM provider)
+# so that importing this module does NOT block FastAPI startup on HF Spaces.
+# The actual import happens on first call to any agent function.
+# ---------------------------------------------------------------------------
+_crewai_cache: dict = {}
+
+
+def _crewai():
+    """Return cached CrewAI classes (Agent, Crew, Process, Task)."""
+    if not _crewai_cache:
+        from crewai import Agent, Crew, Process, Task  # noqa: F811
+        _crewai_cache.update(Agent=Agent, Crew=Crew, Process=Process, Task=Task)
+    return _crewai_cache
+
+
+_tools_cache: dict = {}
+
+
+def _tools():
+    """Return cached tool collections (lazy-loaded on first use)."""
+    if not _tools_cache:
+        from .agent_tools import REPOSITORY_TOOLS, WRITE_TOOLS, set_repo_context, get_repository_context_summary
+        from .issue_tools import ISSUE_TOOLS
+        from .pr_tools import PR_TOOLS
+        from .search_tools import SEARCH_TOOLS
+        from .local_tools import LOCAL_TOOLS, LOCAL_FILE_TOOLS, LOCAL_GIT_TOOLS, LOCAL_SHELL_TOOLS
+        _tools_cache.update(
+            REPOSITORY_TOOLS=REPOSITORY_TOOLS,
+            WRITE_TOOLS=WRITE_TOOLS,
+            set_repo_context=set_repo_context,
+            get_repository_context_summary=get_repository_context_summary,
+            ISSUE_TOOLS=ISSUE_TOOLS,
+            PR_TOOLS=PR_TOOLS,
+            SEARCH_TOOLS=SEARCH_TOOLS,
+            LOCAL_TOOLS=LOCAL_TOOLS,
+            LOCAL_FILE_TOOLS=LOCAL_FILE_TOOLS,
+            LOCAL_GIT_TOOLS=LOCAL_GIT_TOOLS,
+            LOCAL_SHELL_TOOLS=LOCAL_SHELL_TOOLS,
+        )
+    return _tools_cache
+
+
+def _build_llm():
+    """Lazy-import and call build_llm."""
+    from .llm_provider import build_llm as _build
+    return _build()
 
 
 class PlanFile(BaseModel):
@@ -65,13 +140,13 @@ async def generate_plan(
     1) Explore and understand the repository (on the correct branch)
     2) Create a plan based on actual repository state
     """
-    llm = build_llm()
+    llm = _build_llm()
 
     owner, repo = repo_full_name.split("/")
 
     # CRITICAL: Set context INCLUDING branch so tools never fall back to HEAD/main
     active_ref = branch_name or "HEAD"
-    set_repo_context(owner, repo, token=token, branch=active_ref)
+    _tools()["set_repo_context"](owner, repo, token=token, branch=active_ref)
 
     # CONTEXT PACK: Load project context (conventions, active use case, asset chunks)
     # This is additive — if nothing exists, context_pack is empty and agents behave as before.
@@ -84,14 +159,14 @@ async def generate_plan(
     # PHASE 1: Explore repository (correct branch)
     logger.info("[GitPilot] Phase 1: Exploring repository %s (ref=%s)...", repo_full_name, active_ref)
 
-    repo_context_data = await get_repository_context_summary(owner, repo, token=token, branch=active_ref)
+    repo_context_data = await _tools()["get_repository_context_summary"](owner, repo, token=token, branch=active_ref)
     logger.info(
         "[GitPilot] Repository context gathered: %s files found (ref=%s)",
         repo_context_data.get("total_files", 0),
         active_ref,
     )
 
-    explorer = Agent(
+    explorer = _crewai()["Agent"](
         role="Repository Explorer",
         goal="Thoroughly explore and document the current state of the repository",
         backstory=(
@@ -100,12 +175,12 @@ async def generate_plan(
             "You use all available tools to build a comprehensive picture."
         ),
         llm=llm,
-        tools=REPOSITORY_TOOLS,
+        tools=_tools()["REPOSITORY_TOOLS"],
         verbose=True,
         allow_delegation=False,
     )
 
-    explore_task = Task(
+    explore_task = _crewai()["Task"](
         description=dedent(f"""
             Repository: {repo_full_name}
             Active Ref (branch/tag/SHA): {active_ref}
@@ -139,10 +214,10 @@ async def generate_plan(
         agent=explorer,
     )
 
-    explore_crew = Crew(
+    explore_crew = _crewai()["Crew"](
         agents=[explorer],
         tasks=[explore_task],
-        process=Process.sequential,
+        process=_crewai()["Process"].sequential,
         verbose=True,
     )
 
@@ -151,7 +226,7 @@ async def generate_plan(
 
     # Propagate context to thread for CrewAI execution
     ctx = contextvars.copy_context()
-    exploration_result = await asyncio.to_thread(ctx.run, _explore)
+    exploration_result = await _guarded_agent_call(ctx, _explore, label="explore_repo")
 
     exploration_report = exploration_result.raw if hasattr(exploration_result, "raw") else str(exploration_result)
     logger.info("[GitPilot] Exploration complete. Report length: %s chars", len(exploration_report))
@@ -175,7 +250,7 @@ async def generate_plan(
     if context_pack:
         _planner_backstory += "\n\n" + context_pack
 
-    planner = Agent(
+    planner = _crewai()["Agent"](
         role="Repository Refactor Planner",
         goal=(
             "Design safe, step-by-step refactor plans based on ACTUAL repository state "
@@ -183,12 +258,12 @@ async def generate_plan(
         ),
         backstory=_planner_backstory,
         llm=llm,
-        tools=REPOSITORY_TOOLS,
+        tools=_tools()["REPOSITORY_TOOLS"],
         verbose=True,
         allow_delegation=False,
     )
 
-    plan_task = Task(
+    plan_task = _crewai()["Task"](
         description=dedent(f"""
             User goal: {{goal}}
             Repository: {repo_full_name}
@@ -280,10 +355,10 @@ async def generate_plan(
         output_pydantic=PlanResult,
     )
 
-    plan_crew = Crew(
+    plan_crew = _crewai()["Crew"](
         agents=[planner],
         tasks=[plan_task],
-        process=Process.sequential,
+        process=_crewai()["Process"].sequential,
         verbose=True,
     )
 
@@ -291,7 +366,7 @@ async def generate_plan(
         return plan_crew.kickoff(inputs={"goal": goal})
 
     ctx = contextvars.copy_context()
-    result = await asyncio.to_thread(ctx.run, _plan)
+    result = await _guarded_agent_call(ctx, _plan, label="generate_plan")
 
     if hasattr(result, "pydantic") and result.pydantic:
         plan = result.pydantic
@@ -344,7 +419,7 @@ async def _lite_prefetch_context(
     """
     from .github_api import get_file as _get_file
 
-    ctx = await get_repository_context_summary(owner, repo, token=token, branch=branch)
+    ctx = await _tools()["get_repository_context_summary"](owner, repo, token=token, branch=branch)
 
     all_files = ctx.get("all_files", [])
     extensions = ctx.get("extensions", {})
@@ -406,11 +481,11 @@ async def generate_plan_lite(
     For QUESTION intents: LLM answers directly, plan has 0 file actions.
     For ACTION intents: LLM lists file changes, plan has file actions.
     """
-    llm = build_llm()
+    llm = _build_llm()
 
     owner, repo = repo_full_name.split("/")
     active_ref = branch_name or "HEAD"
-    set_repo_context(owner, repo, token=token, branch=active_ref)
+    _tools()["set_repo_context"](owner, repo, token=token, branch=active_ref)
 
     intent = _classify_lite_intent(goal)
     logger.info("[GitPilot Lite] Intent: %s | Goal: %s", intent, goal[:80])
@@ -434,15 +509,23 @@ async def generate_plan_lite(
             f"Repository: {repo_full_name} (branch: {active_ref})\n\n"
             f"{context_text}\n\n"
             f"Task: {goal}\n\n"
-            f"List the files that need to change. One per line:\n"
-            f"ACTION path/to/file - reason\n\n"
-            f"ACTION must be CREATE, MODIFY, or DELETE.\n"
-            f"Only list files that ACTUALLY EXIST in the repository for MODIFY/DELETE.\n"
-            f"For CREATE, use a new filename that does not exist yet."
+            f"You MUST respond with ONLY a list of file actions. One per line.\n"
+            f"Format: ACTION filepath\n"
+            f"ACTION is one of: CREATE, MODIFY, DELETE\n\n"
+            f"Examples:\n"
+            f"DELETE demo.py\n"
+            f"DELETE example.py\n"
+            f"CREATE src/main.py\n"
+            f"MODIFY README.md\n\n"
+            f"Rules:\n"
+            f"- Only use MODIFY or DELETE for files that EXIST in the repository.\n"
+            f"- Only use CREATE for NEW files that do not exist yet.\n"
+            f"- Do NOT add explanations. ONLY output ACTION lines.\n"
+            f"- Output NOTHING else — no comments, no code, no explanations."
         )
-        expected = "A list of file actions (CREATE/MODIFY/DELETE path - reason)"
+        expected = "ONLY action lines like: DELETE demo.py"
 
-    lite_agent = Agent(
+    lite_agent = _crewai()["Agent"](
         role="GitPilot Lite",
         goal="Help the user with their repository",
         backstory="You are a helpful coding assistant. Be concise.",
@@ -452,16 +535,16 @@ async def generate_plan_lite(
         allow_delegation=False,
     )
 
-    lite_task = Task(
+    lite_task = _crewai()["Task"](
         description=lite_prompt,
         expected_output=expected,
         agent=lite_agent,
     )
 
-    lite_crew = Crew(
+    lite_crew = _crewai()["Crew"](
         agents=[lite_agent],
         tasks=[lite_task],
-        process=Process.sequential,
+        process=_crewai()["Process"].sequential,
         verbose=True,
     )
 
@@ -469,7 +552,7 @@ async def generate_plan_lite(
         return lite_crew.kickoff()
 
     ctx = contextvars.copy_context()
-    result = await asyncio.to_thread(ctx.run, _run_lite)
+    result = await _guarded_agent_call(ctx, _run_lite, label="lite_mode")
 
     raw_text = result.raw if hasattr(result, "raw") else str(result)
     logger.info("[GitPilot Lite] Response (%d chars, intent=%s)", len(raw_text), intent)
@@ -501,8 +584,44 @@ async def generate_plan_lite(
     ).strip()
 
     # Get actual repo files for validation
-    repo_ctx = await get_repository_context_summary(owner, repo, token=token, branch=active_ref)
+    repo_ctx = await _tools()["get_repository_context_summary"](owner, repo, token=token, branch=active_ref)
     real_files = set(repo_ctx.get("all_files", []))
+
+    # ── Fuzzy fallback: if the LLM didn't use ACTION format, try to infer ──
+    if not matches and real_files:
+        logger.info("[GitPilot Lite] No ACTION lines found — trying fuzzy extraction")
+        goal_lower = goal.strip().lower()
+        response_lower = raw_text.lower()
+
+        # Pattern: "delete all files except X"
+        except_match = _re.search(
+            r"(?:delete|remove)\s+(?:all\s+)?(?:files?\s+)?(?:except|but|besides|other\s+than)\s+(.+)",
+            goal_lower,
+        )
+        if except_match:
+            keep_raw = except_match.group(1).strip()
+            keep_files = {f.strip().rstrip(",.") for f in _re.split(r"[,\s]+and\s+|,\s*|\s+", keep_raw) if f.strip()}
+            for f in real_files:
+                fname = f.rsplit("/", 1)[-1] if "/" in f else f
+                if f not in keep_files and fname not in keep_files:
+                    matches.append(("DELETE", f))
+            if matches:
+                logger.info("[GitPilot Lite] Fuzzy: keep=%s, delete=%d files", keep_files, len(matches))
+
+        # Pattern: LLM mentions specific filenames with delete/remove verbs
+        if not matches:
+            for verb in ("delete", "remove", "rm", "git rm"):
+                for f in real_files:
+                    if f in response_lower or f in goal_lower:
+                        if verb in response_lower or verb in goal_lower:
+                            matches.append(("DELETE", f))
+
+        # Pattern: LLM mentions files with create/add verbs
+        if not matches:
+            create_match = _re.findall(r"(?:create|add|write|generate)\s+(\S+\.(?:py|js|ts|md|txt|yaml|json|sh))", goal_lower)
+            for path in create_match:
+                if path not in real_files:
+                    matches.append(("CREATE", path))
 
     valid_files = []
     for action, path in matches:
@@ -584,7 +703,7 @@ async def execute_plan_lite(
 
     owner, repo = repo_full_name.split("/")
     execution_steps: list[dict] = []
-    llm = build_llm()
+    llm = _build_llm()
 
     if branch_name is None:
         sanitized = re.sub(r"[^a-z0-9-]+", "-", plan.goal.lower())
@@ -597,7 +716,7 @@ async def execute_plan_lite(
     except HTTPException:
         pass  # Branch may already exist
 
-    set_repo_context(owner, repo, token=token, branch=branch_name)
+    _tools()["set_repo_context"](owner, repo, token=token, branch=branch_name)
 
     for step in plan.steps:
         step_summary = f"Step {step.step_number}: {step.title}"
@@ -613,25 +732,25 @@ async def execute_plan_lite(
                         f"Return ONLY the file content, nothing else."
                     )
 
-                    lite_agent = Agent(
+                    lite_agent = _crewai()["Agent"](
                         role="Code Writer",
                         goal="Write file content",
                         backstory="You write clean, working code.",
                         llm=llm, tools=[], verbose=False, allow_delegation=False,
                     )
-                    task = Task(
+                    task = _crewai()["Task"](
                         description=create_prompt,
                         expected_output=f"Content for {file.path}",
                         agent=lite_agent,
                     )
-                    crew = Crew(agents=[lite_agent], tasks=[task], process=Process.sequential, verbose=False)
+                    crew = _crewai()["Crew"](agents=[lite_agent], tasks=[task], process=_crewai()["Process"].sequential, verbose=False)
 
                     def _create():
                         r = crew.kickoff()
                         return r.raw if hasattr(r, "raw") else str(r)
 
                     ctx = contextvars.copy_context()
-                    content = await asyncio.to_thread(ctx.run, _create)
+                    content = await _guarded_agent_call(ctx, _create, label="create_file")
                     content = content.strip()
                     if content.startswith("```"):
                         lines = content.split("\n")
@@ -655,21 +774,21 @@ async def execute_plan_lite(
                             f"Return the complete modified file content, nothing else."
                         )
 
-                        lite_agent = Agent(
+                        lite_agent = _crewai()["Agent"](
                             role="Code Writer",
                             goal="Modify file content",
                             backstory="You write clean, working code.",
                             llm=llm, tools=[], verbose=False, allow_delegation=False,
                         )
-                        task = Task(description=modify_prompt, expected_output=f"Modified {file.path}", agent=lite_agent)
-                        crew = Crew(agents=[lite_agent], tasks=[task], process=Process.sequential, verbose=False)
+                        task = _crewai()["Task"](description=modify_prompt, expected_output=f"Modified {file.path}", agent=lite_agent)
+                        crew = _crewai()["Crew"](agents=[lite_agent], tasks=[task], process=_crewai()["Process"].sequential, verbose=False)
 
                         def _modify():
                             r = crew.kickoff()
                             return r.raw if hasattr(r, "raw") else str(r)
 
                         ctx = contextvars.copy_context()
-                        modified = await asyncio.to_thread(ctx.run, _modify)
+                        modified = await _guarded_agent_call(ctx, _modify, label="modify_file")
                         modified = modified.strip()
                         if modified.startswith("```"):
                             lines = modified.split("\n")
@@ -727,7 +846,7 @@ async def execute_plan(
 
     owner, repo = repo_full_name.split("/")
     execution_steps: list[dict] = []
-    llm = build_llm()
+    llm = _build_llm()
 
     if branch_name is None:
         sanitized = re.sub(r"[^a-z0-9-]+", "-", plan.goal.lower())
@@ -747,9 +866,9 @@ async def execute_plan(
         )
 
     # CRITICAL: ensure tools read from the ACTIVE execution branch
-    set_repo_context(owner, repo, token=token, branch=branch_name)
+    _tools()["set_repo_context"](owner, repo, token=token, branch=branch_name)
 
-    code_writer = Agent(
+    code_writer = _crewai()["Agent"](
         role="Expert Code Writer",
         goal="Generate high-quality, production-ready code and documentation based on requirements.",
         backstory=(
@@ -764,7 +883,7 @@ async def execute_plan(
             "You never create generic examples - you create content specific to THIS repository."
         ),
         llm=llm,
-        tools=REPOSITORY_TOOLS,
+        tools=_tools()["REPOSITORY_TOOLS"],
         verbose=True,
         allow_delegation=False,
     )
@@ -775,7 +894,7 @@ async def execute_plan(
         for file in step.files:
             try:
                 if file.action == "CREATE":
-                    create_task = Task(
+                    create_task = _crewai()["Task"](
                         description=(
                             f"Generate complete content for a new file: {file.path}\n\n"
                             f"Overall Goal: {plan.goal}\n"
@@ -803,10 +922,10 @@ async def execute_plan(
                     )
 
                     def _create():
-                        crew = Crew(
+                        crew = _crewai()["Crew"](
                             agents=[code_writer],
                             tasks=[create_task],
-                            process=Process.sequential,
+                            process=_crewai()["Process"].sequential,
                             verbose=False,
                         )
                         result = crew.kickoff()
@@ -815,7 +934,7 @@ async def execute_plan(
                         return str(result)
 
                     ctx = contextvars.copy_context()
-                    content = await asyncio.to_thread(ctx.run, _create)
+                    content = await _guarded_agent_call(ctx, _create, label="exec_create_file")
 
                     content = content.strip()
                     if content.startswith("```"):
@@ -842,7 +961,7 @@ async def execute_plan(
                             owner, repo, file.path, token=token, ref=branch_name
                         )
 
-                        modify_task = Task(
+                        modify_task = _crewai()["Task"](
                             description=(
                                 f"Modify the existing file: {file.path}\n\n"
                                 f"Overall Goal: {plan.goal}\n"
@@ -863,10 +982,10 @@ async def execute_plan(
                         )
 
                         def _modify():
-                            crew = Crew(
+                            crew = _crewai()["Crew"](
                                 agents=[code_writer],
                                 tasks=[modify_task],
-                                process=Process.sequential,
+                                process=_crewai()["Process"].sequential,
                                 verbose=False,
                             )
                             result = crew.kickoff()
@@ -875,7 +994,7 @@ async def execute_plan(
                             return str(result)
 
                         ctx = contextvars.copy_context()
-                        modified_content = await asyncio.to_thread(ctx.run, _modify)
+                        modified_content = await _guarded_agent_call(ctx, _modify, label="exec_modify_file")
 
                         modified_content = modified_content.strip()
                         if modified_content.startswith("```"):
@@ -954,7 +1073,7 @@ async def execute_plan(
 # ============================================================================
 
 def _build_issue_agent(llm) -> Agent:
-    return Agent(
+    return _crewai()["Agent"](
         role="GitHub Issue Management Specialist",
         goal="Create, modify, and manage GitHub issues with proper metadata and relationships",
         backstory=(
@@ -965,31 +1084,31 @@ def _build_issue_agent(llm) -> Agent:
             "When creating issues you always include a concise title and a structured body."
         ),
         llm=llm,
-        tools=ISSUE_TOOLS,
+        tools=_tools()["ISSUE_TOOLS"],
         verbose=True,
         allow_delegation=False,
     )
 
 
 def _build_pr_agent(llm) -> Agent:
-    return Agent(
+    return _crewai()["Agent"](
         role="Pull Request Management Specialist",
-        goal="Create, list, review, and merge pull requests",
+        goal="Create branches, commit changes, and manage pull requests",
         backstory=(
-            "You are skilled in pull request workflows. You can create PRs from "
-            "feature branches, list open PRs, inspect changed files, add reviews, "
-            "and merge PRs using the appropriate strategy (merge, squash, rebase). "
+            "You are skilled in pull request workflows. You can create branches, "
+            "create PRs from feature branches, list open PRs, inspect changed files, "
+            "add reviews, and merge PRs using the appropriate strategy. "
             "You always verify the source and target branches before acting."
         ),
         llm=llm,
-        tools=PR_TOOLS,
+        tools=_tools()["PR_TOOLS"] + _tools()["WRITE_TOOLS"],
         verbose=True,
         allow_delegation=False,
     )
 
 
 def _build_search_agent(llm) -> Agent:
-    return Agent(
+    return _crewai()["Agent"](
         role="Search & Discovery Specialist",
         goal="Find code, repositories, issues, and users across GitHub",
         backstory=(
@@ -1000,14 +1119,14 @@ def _build_search_agent(llm) -> Agent:
             "You present results in a clear, structured format."
         ),
         llm=llm,
-        tools=SEARCH_TOOLS + REPOSITORY_TOOLS,
+        tools=_tools()["SEARCH_TOOLS"] + _tools()["REPOSITORY_TOOLS"],
         verbose=True,
         allow_delegation=False,
     )
 
 
 def _build_code_review_agent(llm) -> Agent:
-    return Agent(
+    return _crewai()["Agent"](
         role="Code Review & Analysis Specialist",
         goal="Review code quality, identify patterns, and suggest improvements",
         backstory=(
@@ -1018,14 +1137,14 @@ def _build_code_review_agent(llm) -> Agent:
             "review with actionable suggestions."
         ),
         llm=llm,
-        tools=REPOSITORY_TOOLS + PR_TOOLS + SEARCH_TOOLS,
+        tools=_tools()["REPOSITORY_TOOLS"] + _tools()["PR_TOOLS"] + _tools()["SEARCH_TOOLS"],
         verbose=True,
         allow_delegation=False,
     )
 
 
 def _build_learning_agent(llm) -> Agent:
-    return Agent(
+    return _crewai()["Agent"](
         role="GitHub Learning & Guidance Specialist",
         goal="Provide expert guidance on GitHub features, best practices, and workflows",
         backstory=(
@@ -1036,7 +1155,7 @@ def _build_learning_agent(llm) -> Agent:
             "with examples. You can also read the repository to give contextualised advice."
         ),
         llm=llm,
-        tools=REPOSITORY_TOOLS + SEARCH_TOOLS,
+        tools=_tools()["REPOSITORY_TOOLS"] + _tools()["SEARCH_TOOLS"],
         verbose=True,
         allow_delegation=False,
     )
@@ -1044,7 +1163,7 @@ def _build_learning_agent(llm) -> Agent:
 
 def _build_local_editor_agent(llm) -> Agent:
     """Phase 1: Agent for direct local file editing with verification."""
-    return Agent(
+    return _crewai()["Agent"](
         role="Local File Editor",
         goal="Read, write, and modify files in the local workspace with verification",
         backstory=(
@@ -1055,7 +1174,7 @@ def _build_local_editor_agent(llm) -> Agent:
             "conventions and never introduce breaking changes."
         ),
         llm=llm,
-        tools=LOCAL_FILE_TOOLS + LOCAL_GIT_TOOLS,
+        tools=_tools()["LOCAL_FILE_TOOLS"] + _tools()["LOCAL_GIT_TOOLS"],
         verbose=True,
         allow_delegation=False,
     )
@@ -1063,7 +1182,7 @@ def _build_local_editor_agent(llm) -> Agent:
 
 def _build_terminal_agent(llm) -> Agent:
     """Phase 1: Agent for sandboxed shell command execution."""
-    return Agent(
+    return _crewai()["Agent"](
         role="Terminal & Shell Executor",
         goal="Execute shell commands safely in the workspace and report results",
         backstory=(
@@ -1074,7 +1193,7 @@ def _build_terminal_agent(llm) -> Agent:
             "You explain command output clearly to the user."
         ),
         llm=llm,
-        tools=LOCAL_SHELL_TOOLS + LOCAL_GIT_TOOLS,
+        tools=_tools()["LOCAL_SHELL_TOOLS"] + _tools()["LOCAL_GIT_TOOLS"],
         verbose=True,
         allow_delegation=False,
     )
@@ -1186,9 +1305,9 @@ async def dispatch_request(
     if workflow.requires_repo_context and repo_full_name:
         owner, repo = repo_full_name.split("/")
         active_ref = branch_name or "HEAD"
-        set_repo_context(owner, repo, token=token, branch=active_ref)
+        _tools()["set_repo_context"](owner, repo, token=token, branch=active_ref)
 
-    llm = build_llm()
+    llm = _build_llm()
 
     # If it's the existing plan+execute workflow, delegate there
     if workflow.category == RequestCategory.PLAN_EXECUTE:
@@ -1223,16 +1342,16 @@ async def dispatch_request(
 
     # Use the first agent as the primary executor
     primary_agent = agents[0]
-    task = Task(
+    task = _crewai()["Task"](
         description=task_description,
         expected_output="A clear, structured response addressing the user request",
         agent=primary_agent,
     )
 
-    crew = Crew(
+    crew = _crewai()["Crew"](
         agents=agents,
         tasks=[task],
-        process=Process.sequential,
+        process=_crewai()["Process"].sequential,
         verbose=True,
     )
 
@@ -1243,7 +1362,7 @@ async def dispatch_request(
         return str(result)
 
     ctx = contextvars.copy_context()
-    result_text = await asyncio.to_thread(ctx.run, _run)
+    result_text = await _guarded_agent_call(ctx, _run, label="dispatch")
 
     return {
         "category": workflow.category.value,
@@ -1295,13 +1414,33 @@ async def _dispatch_pipeline(
     if not sequence:
         return {"error": "Topology has no agent sequence defined"}
 
-    # Set repo context
+    # Determine if this pipeline has write-capable agents
+    _write_agents = {"developer", "git_agent"}
+    _has_writers = bool(set(sequence) & _write_agents)
+
+    # Create a working branch for pipelines that modify files
+    pipeline_branch = branch_name
+    if repo_full_name and _has_writers and not branch_name:
+        import re as _re
+        import time as _time
+        owner, repo = repo_full_name.split("/")
+        sanitized = _re.sub(r"[^a-z0-9-]+", "-", user_request.lower())[:35].strip("-")
+        timestamp = str(int(_time.time()))[-6:]
+        pipeline_branch = f"gitpilot-{topology.id}-{sanitized}-{timestamp}"
+        try:
+            from .github_api import create_branch
+            await create_branch(owner, repo, pipeline_branch, from_ref="HEAD", token=token)
+            logger.info("[Pipeline] Created branch: %s", pipeline_branch)
+        except Exception:
+            pass  # branch may already exist
+
+    # Set repo context (on the working branch)
     if repo_full_name:
         owner, repo = repo_full_name.split("/")
-        active_ref = branch_name or "HEAD"
-        set_repo_context(owner, repo, token=token, branch=active_ref)
+        active_ref = pipeline_branch or "HEAD"
+        _tools()["set_repo_context"](owner, repo, token=token, branch=active_ref)
 
-    llm = build_llm()
+    llm = _build_llm()
 
     # Build agents and tasks
     agents = []
@@ -1320,14 +1459,22 @@ async def _dispatch_pipeline(
             f"User request: {user_request}\n"
             f"Repository: {repo_full_name}\n"
         )
-        if branch_name:
-            task_desc += f"Branch: {branch_name}\n"
+        if pipeline_branch:
+            task_desc += f"Branch: {pipeline_branch}\n"
         task_desc += f"\nYour role in this pipeline: {base_description}"
+
+        # Tell write-capable agents to actually use their tools
+        if agent_id in _write_agents and pipeline_branch:
+            task_desc += (
+                f"\n\nIMPORTANT: You have tools to write and delete files. "
+                f"USE THEM to make real changes on branch '{pipeline_branch}'. "
+                f"Do NOT just describe changes — actually write/delete files using your tools."
+            )
 
         # Context chaining: each task after the first receives prior tasks
         context = tasks[:] if tasks else []
 
-        task = Task(
+        task = _crewai()["Task"](
             description=task_desc,
             expected_output=f"Structured output from the {agent_id} phase",
             agent=agent,
@@ -1352,10 +1499,10 @@ async def _dispatch_pipeline(
         # Append context pack to the first task's description
         tasks[0].description += "\n\n" + _ctx_pack
 
-    crew = Crew(
+    crew = _crewai()["Crew"](
         agents=agents,
         tasks=tasks,
-        process=Process.sequential,
+        process=_crewai()["Process"].sequential,
         verbose=True,
     )
 
@@ -1366,9 +1513,9 @@ async def _dispatch_pipeline(
         return str(result)
 
     ctx = contextvars.copy_context()
-    result_text = await asyncio.to_thread(ctx.run, _run)
+    result_text = await _guarded_agent_call(ctx, _run, label="topology_pipeline")
 
-    return {
+    response = {
         "category": "topology_pipeline",
         "topology_id": topology.id,
         "topology_name": topology.name,
@@ -1377,34 +1524,45 @@ async def _dispatch_pipeline(
         "result": result_text,
     }
 
+    # Add branch info for pipelines that created a working branch
+    if pipeline_branch and _has_writers:
+        response["branch"] = pipeline_branch
+        response["branch_url"] = f"https://github.com/{repo_full_name}/tree/{pipeline_branch}"
+
+    return response
+
 
 def _get_agent(agent_type: AgentType, llm) -> Agent:
     """Instantiate an agent by type."""
     builders = {
-        AgentType.EXPLORER: lambda: Agent(
+        AgentType.EXPLORER: lambda: _crewai()["Agent"](
             role="Repository Explorer",
             goal="Thoroughly explore and document the current state of the repository",
             backstory="You are a meticulous code archaeologist who explores repositories.",
             llm=llm,
-            tools=REPOSITORY_TOOLS,
+            tools=_tools()["REPOSITORY_TOOLS"],
             verbose=True,
             allow_delegation=False,
         ),
-        AgentType.PLANNER: lambda: Agent(
+        AgentType.PLANNER: lambda: _crewai()["Agent"](
             role="Repository Refactor Planner",
             goal="Design safe, step-by-step refactor plans",
             backstory="You are an experienced staff engineer who creates plans based on facts.",
             llm=llm,
-            tools=REPOSITORY_TOOLS,
+            tools=_tools()["REPOSITORY_TOOLS"],
             verbose=True,
             allow_delegation=False,
         ),
-        AgentType.CODE_WRITER: lambda: Agent(
+        AgentType.CODE_WRITER: lambda: _crewai()["Agent"](
             role="Expert Code Writer",
-            goal="Generate high-quality, production-ready code",
-            backstory="You are a senior software engineer with multi-language expertise.",
+            goal="Generate high-quality, production-ready code and write it to the repository",
+            backstory=(
+                "You are a senior software engineer with multi-language expertise. "
+                "You read existing files, write new code, and update files directly "
+                "in the repository using your tools. Always read a file before modifying it."
+            ),
             llm=llm,
-            tools=REPOSITORY_TOOLS,
+            tools=_tools()["REPOSITORY_TOOLS"] + _tools()["WRITE_TOOLS"],
             verbose=True,
             allow_delegation=False,
         ),

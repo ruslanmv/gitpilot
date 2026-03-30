@@ -8,6 +8,9 @@
 
 set -e
 
+# Ensure Python output is not buffered (critical for HF Spaces log visibility)
+export PYTHONUNBUFFERED=1
+
 echo "=============================================="
 echo "  GitPilot — Hugging Face Spaces"
 echo "=============================================="
@@ -38,7 +41,7 @@ echo ""
 echo "=============================================="
 echo "  Ready! Endpoints:"
 echo "  - UI:        / (React frontend)"
-echo "  - API:       /api/health"
+echo "  - API:       /api/health (+ /api/health/deep)"
 echo "  - API Docs:  /docs"
 echo "  - Chat:      /api/chat/message"
 echo "  - Settings:  /api/settings"
@@ -46,9 +49,13 @@ echo "=============================================="
 echo ""
 
 # -- Start GitPilot (foreground) ----------------------------------------------
+# --workers 2: prevent one stuck request from blocking the entire app
+# --limit-concurrency 10: reject excess requests instead of queueing forever
+# --timeout-keep-alive 120: keep connections alive for streaming responses
 exec python -m uvicorn gitpilot.api:app \
     --host "${HOST:-0.0.0.0}" \
     --port "${PORT:-7860}" \
-    --workers 1 \
+    --workers 2 \
+    --limit-concurrency 10 \
     --timeout-keep-alive 120 \
     --no-access-log

@@ -1,35 +1,16 @@
 """Tests for gitpilot.headless module.
 
-The headless module imports agentic and agent_tools, which pull in the full
-CrewAI tool-decoration chain.  To keep tests fast and isolated we mock those
-heavy transitive imports via sys.modules before importing headless.
+Now that agentic.py uses lazy-loading, headless can be imported directly
+without stubbing sys.modules.  All LLM/agent calls are mocked per-test.
 """
 from __future__ import annotations
 
 import json
-import sys
-from types import ModuleType
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Build lightweight stubs for the heavy transitive imports so that
-# ``from gitpilot.headless import ...`` does not trigger the full CrewAI
-# tool-decoration pipeline (which can fail in constrained CI environments).
-# ---------------------------------------------------------------------------
-
-_fake_agentic = ModuleType("gitpilot.agentic")
-_fake_agentic.dispatch_request = AsyncMock(return_value={"result": "stub"})
-
-_fake_agent_tools = ModuleType("gitpilot.agent_tools")
-_fake_agent_tools.set_repo_context = MagicMock()
-
-# Ensure the stubs are registered *before* headless is imported
-sys.modules.setdefault("gitpilot.agentic", _fake_agentic)
-sys.modules.setdefault("gitpilot.agent_tools", _fake_agent_tools)
-
-from gitpilot.headless import HeadlessResult, run_headless  # noqa: E402
+from gitpilot.headless import HeadlessResult, run_headless
 
 
 # ---------------------------------------------------------------------------

@@ -26,8 +26,28 @@ export class ErrorTranslator {
       message: "Resource not found. The session or endpoint may have expired.",
     },
     {
+      match: (err) => err?.status === 429 || err?.statusCode === 429,
+      message:
+        "LLM provider rate limit or quota exceeded. Check your plan and billing, or switch to a different provider in Settings.",
+    },
+    {
       match: (err) => err?.status === 500 || err?.statusCode === 500,
       message: "Server error. Please check that the GitPilot backend is running correctly.",
+    },
+    {
+      match: (err) => err?.status === 502 || err?.statusCode === 502,
+      message:
+        "The LLM returned an empty response. Try enabling Lite Mode in Settings for better results with small models.",
+    },
+    {
+      match: (err) => err?.status === 503 || err?.statusCode === 503,
+      message:
+        "The LLM provider is temporarily unavailable (circuit breaker active). Please wait a moment and try again.",
+    },
+    {
+      match: (err) => err?.status === 504 || err?.statusCode === 504,
+      message:
+        "The agent operation timed out. The LLM provider may be overloaded — try again or switch to a faster provider in Settings.",
     },
     {
       match: (err) =>

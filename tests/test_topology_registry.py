@@ -66,14 +66,14 @@ needs_crewai = pytest.mark.skipif(
 class TestRegistryIntegrity:
     """Verify the registry itself is well-formed."""
 
-    def test_registry_has_seven_topologies(self):
-        assert len(TOPOLOGY_REGISTRY) == 7
+    def test_registry_has_expected_topologies(self):
+        assert len(TOPOLOGY_REGISTRY) == 8
 
     def test_all_expected_ids_present(self):
         expected = {
             "default", "gitpilot_code",
             "feature_builder", "bug_hunter", "code_inspector",
-            "architect_mode", "quick_fix",
+            "architect_mode", "quick_fix", "lite_mode",
         }
         assert set(TOPOLOGY_REGISTRY.keys()) == expected
 
@@ -103,9 +103,9 @@ class TestRegistryIntegrity:
 
     def test_system_topologies(self):
         systems = [t for t in TOPOLOGY_REGISTRY.values() if t.category == TopologyCategory.system]
-        assert len(systems) == 2
+        assert len(systems) == 3
         ids = {t.id for t in systems}
-        assert ids == {"default", "gitpilot_code"}
+        assert ids == {"default", "gitpilot_code", "lite_mode"}
 
     def test_pipeline_topologies(self):
         pipelines = [t for t in TOPOLOGY_REGISTRY.values() if t.category == TopologyCategory.pipeline]
@@ -264,7 +264,7 @@ class TestClassifier:
 class TestListAndGet:
     def test_list_topologies_returns_all(self):
         result = list_topologies()
-        assert len(result) == 7
+        assert len(result) == 8
         for item in result:
             assert "id" in item
             assert "name" in item
@@ -411,28 +411,44 @@ class TestDispatchPipeline:
         with patch("crewai.agent.core.create_llm", return_value=MagicMock()):
             yield
 
-    @pytest.mark.asyncio
-    @patch("gitpilot.agentic.build_llm", return_value="ollama/qwen2:0.5b")
-    @patch("gitpilot.agentic.set_repo_context")
-    async def test_pipeline_builds_correct_agent_count(self, mock_ctx, mock_llm):
-        """Verify _dispatch_pipeline creates the right number of agents/tasks."""
-        from gitpilot.agentic import _dispatch_pipeline
+    @pytest.fixture(autouse=True)
+    def _ensure_tools_cache(self):
+        """Pre-populate the lazy caches so tests can mock through them."""
+        from gitpilot.agentic import _tools, _crewai
+        _tools()  # force load
+        _crewai()  # force load
 
+    @pytest.mark.asyncio
+    @patch("gitpilot.agentic._build_llm", return_value="ollama/qwen2:0.5b")
+    async def test_pipeline_builds_correct_agent_count(self, mock_llm):
+        """Verify _dispatch_pipeline creates the right number of agents/tasks."""
+        from gitpilot.agentic import _dispatch_pipeline, _tools_cache
+
+        _tools_cache["set_repo_context"] = MagicMock()
         topo = TOPOLOGY_REGISTRY["feature_builder"]
 
         # Mock Crew.kickoff to avoid running any actual LLM
         mock_result = MagicMock()
         mock_result.raw = "Pipeline completed successfully"
 
-        with patch("gitpilot.agentic.Crew") as MockCrew:
+        with patch("crewai.Crew") as MockCrew:
             mock_crew_instance = MagicMock()
             mock_crew_instance.kickoff.return_value = mock_result
             MockCrew.return_value = mock_crew_instance
 
-            result = await _dispatch_pipeline(
-                topo, "Add a new feature", "owner/repo",
-                token="fake", branch_name="main",
-            )
+            # Also patch _crewai cache to use our mock Crew
+            from gitpilot.agentic import _crewai_cache
+            orig_crew = _crewai_cache.get("Crew")
+            _crewai_cache["Crew"] = MockCrew
+
+            try:
+                result = await _dispatch_pipeline(
+                    topo, "Add a new feature", "owner/repo",
+                    token="fake", branch_name="main",
+                )
+            finally:
+                if orig_crew:
+                    _crewai_cache["Crew"] = orig_crew
 
         # Verify Crew was called with correct number of agents and tasks
         call_kwargs = MockCrew.call_args.kwargs
@@ -447,24 +463,30 @@ class TestDispatchPipeline:
         assert result["result"] == "Pipeline completed successfully"
 
     @pytest.mark.asyncio
-    @patch("gitpilot.agentic.build_llm", return_value="ollama/qwen2:0.5b")
-    @patch("gitpilot.agentic.set_repo_context")
-    async def test_pipeline_tasks_have_context_chaining(self, mock_ctx, mock_llm):
+    @patch("gitpilot.agentic._build_llm", return_value="ollama/qwen2:0.5b")
+    async def test_pipeline_tasks_have_context_chaining(self, mock_llm):
         """Verify each task receives all prior tasks as context."""
-        from gitpilot.agentic import _dispatch_pipeline
+        from gitpilot.agentic import _dispatch_pipeline, _tools_cache, _crewai_cache
 
+        _tools_cache["set_repo_context"] = MagicMock()
         topo = TOPOLOGY_REGISTRY["bug_hunter"]  # 4 agents
 
-        with patch("gitpilot.agentic.Crew") as MockCrew:
-            mock_crew_instance = MagicMock()
-            mock_result = MagicMock()
-            mock_result.raw = "Bug fixed"
-            mock_crew_instance.kickoff.return_value = mock_result
-            MockCrew.return_value = mock_crew_instance
+        mock_crew_instance = MagicMock()
+        mock_result = MagicMock()
+        mock_result.raw = "Bug fixed"
+        mock_crew_instance.kickoff.return_value = mock_result
+        MockCrew = MagicMock(return_value=mock_crew_instance)
 
+        orig_crew = _crewai_cache.get("Crew")
+        _crewai_cache["Crew"] = MockCrew
+
+        try:
             await _dispatch_pipeline(
                 topo, "Fix error", "o/r", token="fake",
             )
+        finally:
+            if orig_crew:
+                _crewai_cache["Crew"] = orig_crew
 
         tasks = MockCrew.call_args.kwargs["tasks"]
         # First task has no context (or empty)
@@ -477,23 +499,29 @@ class TestDispatchPipeline:
         assert len(tasks[3].context) == 3
 
     @pytest.mark.asyncio
-    @patch("gitpilot.agentic.build_llm", return_value="ollama/qwen2:0.5b")
-    @patch("gitpilot.agentic.set_repo_context")
-    async def test_quick_fix_pipeline_has_2_agents(self, mock_ctx, mock_llm):
-        from gitpilot.agentic import _dispatch_pipeline
+    @patch("gitpilot.agentic._build_llm", return_value="ollama/qwen2:0.5b")
+    async def test_quick_fix_pipeline_has_2_agents(self, mock_llm):
+        from gitpilot.agentic import _dispatch_pipeline, _tools_cache, _crewai_cache
 
+        _tools_cache["set_repo_context"] = MagicMock()
         topo = TOPOLOGY_REGISTRY["quick_fix"]
 
-        with patch("gitpilot.agentic.Crew") as MockCrew:
-            mock_crew_instance = MagicMock()
-            mock_result = MagicMock()
-            mock_result.raw = "Done"
-            mock_crew_instance.kickoff.return_value = mock_result
-            MockCrew.return_value = mock_crew_instance
+        mock_crew_instance = MagicMock()
+        mock_result = MagicMock()
+        mock_result.raw = "Done"
+        mock_crew_instance.kickoff.return_value = mock_result
+        MockCrew = MagicMock(return_value=mock_crew_instance)
 
+        orig_crew = _crewai_cache.get("Crew")
+        _crewai_cache["Crew"] = MockCrew
+
+        try:
             result = await _dispatch_pipeline(
                 topo, "Fix typo", "o/r",
             )
+        finally:
+            if orig_crew:
+                _crewai_cache["Crew"] = orig_crew
 
         assert len(MockCrew.call_args.kwargs["agents"]) == 2
         assert result["agents_used"] == ["developer", "git_agent"]
@@ -538,7 +566,7 @@ class TestDispatchRequestTopologyRouting:
         assert result["topology_id"] == "feature_builder"
 
     @pytest.mark.asyncio
-    @patch("gitpilot.agentic.build_llm", return_value="ollama/qwen2:0.5b")
+    @patch("gitpilot.agentic._build_llm", return_value="ollama/qwen2:0.5b")
     @patch("gitpilot.agentic.route_request")
     @patch("gitpilot.agentic.get_saved_topology_preference", return_value=None)
     async def test_no_topology_falls_through_to_legacy(self, mock_pref, mock_route, mock_llm):
@@ -627,7 +655,7 @@ class TestAPIEndpoints:
         assert resp.status_code == 200
         data = resp.json()
         assert isinstance(data, list)
-        assert len(data) == 7
+        assert len(data) == 8
         ids = {t["id"] for t in data}
         assert "default" in ids
         assert "gitpilot_code" in ids

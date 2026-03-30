@@ -405,6 +405,9 @@ export class GitPilotApiClient {
 
     // --- Generic request with retry ---
 
+    /** Status codes that should NOT be retried (non-transient errors). */
+    private static readonly _noRetryStatuses = new Set([400, 401, 403, 404, 422, 429, 502, 503]);
+
     async request<T = any>(path: string, options?: RequestInit, retries = 2): Promise<T> {
         const url = `${this._serverUrl}${path}`;
         const headers: Record<string, string> = {
@@ -418,13 +421,29 @@ export class GitPilotApiClient {
                 const resp = await fetch(url, { ...options, headers: { ...headers, ...(options?.headers as Record<string, string> || {}) } });
                 if (!resp.ok) {
                     const body = await resp.text().catch(() => '');
-                    const err: ApiError = { status: resp.status, message: resp.statusText, detail: body };
+                    // Try to extract structured detail from JSON error body
+                    let detail = body;
+                    try {
+                        const parsed = JSON.parse(body);
+                        if (parsed.detail) { detail = parsed.detail; }
+                    } catch { /* body is not JSON */ }
+                    const err: ApiError = { status: resp.status, message: resp.statusText, detail };
                     this._onError.fire(err);
-                    throw new Error(`HTTP ${resp.status}: ${resp.statusText} — ${body}`);
+                    const error = new Error(`HTTP ${resp.status}: ${detail || resp.statusText}`);
+                    (error as any).status = resp.status;
+                    // Don't retry non-transient errors (circuit breaker, auth, rate limit)
+                    if (GitPilotApiClient._noRetryStatuses.has(resp.status)) {
+                        throw error;
+                    }
+                    throw error;
                 }
                 return await resp.json() as T;
             } catch (err: any) {
                 lastError = err;
+                // Skip retries for non-transient HTTP errors
+                if (err.status && GitPilotApiClient._noRetryStatuses.has(err.status)) {
+                    break;
+                }
                 if (attempt < retries) {
                     await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
                 }
