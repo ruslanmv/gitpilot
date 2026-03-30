@@ -5,6 +5,7 @@ colorFrom: blue
 colorTo: indigo
 sdk: docker
 app_port: 7860
+startup_duration_timeout: 5m
 pinned: true
 license: mit
 short_description: Enterprise AI Coding Assistant for GitHub Repositories
