@@ -57,6 +57,7 @@ import { registerSetupCommands } from "./commands/setupCommands";
 import { registerProviderCommands } from "./commands/providerCommands";
 import { registerSessionCommands } from "./commands/sessionCommands";
 import { registerChatCommandsV2 } from "./commands/chatCommands";
+import { detectIntent, buildIntentPrefix } from "./services/chat/intentDetector";
 
 export function activate(context: vscode.ExtensionContext) {
     const config = getConfig();
@@ -81,8 +82,10 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     // ── Register views ─────────────────────────────────────────
+    // Note: The primary chat webview (gitpilot.chatView) is now registered
+    // below via GitPilotPanel. The old ChatViewProvider is kept alive only
+    // for legacy command handlers during migration.
     context.subscriptions.push(
-        vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, chatProvider),
         vscode.window.registerTreeDataProvider('gitpilot.sessionsView', sessionsTree),
         vscode.window.registerTreeDataProvider('gitpilot.skillsView', skillsTree),
     );
@@ -222,9 +225,23 @@ export function activate(context: vscode.ExtensionContext) {
                 case "SEND_CHAT":
                     if (stateStore.state.session.sessionId) {
                         try {
+                            // Intent detection: infer task from natural language
+                            const { intent, cleanMessage } = detectIntent(msg.payload.text);
+                            const intentPrefix = buildIntentPrefix(intent);
+
+                            // Build the message the LLM sees: intent context + user text
+                            const enrichedMessage = intentPrefix
+                                ? `[${intentPrefix}]\n\n${cleanMessage || msg.payload.text}`
+                                : msg.payload.text;
+
+                            // Resolve topology: explicit user selection, or let backend auto-detect
+                            const workflowMode = stateStore.state.workflow.selectedMode;
+                            const topologyId = workflowMode !== "auto" ? workflowMode : undefined;
+
                             const resp = await chatClientV2.sendMessage({
                                 session_id: stateStore.state.session.sessionId,
-                                message: msg.payload.text,
+                                message: enrichedMessage,
+                                topology_id: topologyId,
                             });
                             gitpilotPanel.postMessage({
                                 type: "CHAT_RESPONSE",
@@ -255,13 +272,37 @@ export function activate(context: vscode.ExtensionContext) {
                     );
                     break;
                 case "OPEN_SETTINGS":
+                    // Legacy: keep for backwards compat, maps to workspace open
+                    vscode.commands.executeCommand("workbench.action.openFolder");
+                    break;
+                case "OPEN_WORKSPACE":
                     vscode.commands.executeCommand("workbench.action.openFolder");
                     break;
                 case "OPEN_ADMIN_UI":
                     vscode.commands.executeCommand("gitpilot.showServerInfo");
                     break;
                 case "OPEN_PROVIDER_SETUP":
-                    vscode.commands.executeCommand("gitpilot.selectProvider");
+                    vscode.commands.executeCommand("gitpilot.selectProviderV2");
+                    break;
+                case "OPEN_MODEL_SETUP":
+                    vscode.commands.executeCommand("gitpilot.selectModelV2");
+                    break;
+                case "OPEN_LLM_SETTINGS":
+                    vscode.commands.executeCommand("gitpilot.openLlmSettings");
+                    break;
+                case "SET_WORKFLOW_MODE":
+                    stateStore.updateWorkflow({
+                        selectedMode: msg.payload.mode,
+                        source: msg.payload.mode === "auto" ? "auto" : "user",
+                    });
+                    // Persist to backend topology preference
+                    if (msg.payload.mode !== "auto") {
+                        try {
+                            await client.setTopology(msg.payload.mode);
+                        } catch {
+                            // Non-critical — preference persists locally even if backend is down
+                        }
+                    }
                     break;
                 case "REFRESH_STATUS":
                     vscode.commands.executeCommand("gitpilot.refreshStatus");
@@ -271,10 +312,10 @@ export function activate(context: vscode.ExtensionContext) {
     );
     context.subscriptions.push(gitpilotPanel);
 
-    // Register redesigned webview
+    // Register redesigned webview as the real sidebar chat view.
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(
-            "gitpilot.redesignedView",
+            GitPilotPanel.viewType,
             gitpilotPanel
         )
     );

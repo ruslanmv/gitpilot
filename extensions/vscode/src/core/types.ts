@@ -18,6 +18,26 @@ export type ProviderConnectionType =
   | "cloud"
   | "managed";
 
+// ─── Workflow / Topology ────────────────────────────────
+
+export type WorkflowMode =
+  | "auto"
+  | "default"         // T1 Dispatch (CrewAI Routing)
+  | "gitpilot_code"   // T2 ReAct Loop
+  | "lite_mode"       // T3 Lite Mode
+  | "feature_builder" // T4 Feature Builder
+  | "bug_hunter"      // T5 Bug Hunter
+  | "code_inspector"  // T6 Code Inspector
+  | "architect_mode"  // T7 Architect Mode
+  | "quick_fix";      // T8 Quick Fix
+
+export interface WorkflowState {
+  selectedMode: WorkflowMode;
+  effectiveMode?: WorkflowMode;
+  source: "user" | "auto";
+  reason?: string;
+}
+
 // ─── State Models ────────────────────────────────────────
 
 export interface GitContext {
@@ -94,6 +114,7 @@ export interface GitPilotState {
   workspace: WorkspaceState;
   session: SessionState;
   readiness: ReadinessState;
+  workflow: WorkflowState;
 }
 
 // ─── Message Contract ────────────────────────────────────
@@ -163,6 +184,10 @@ export type WebviewToExtensionMessage =
   | { type: "OPEN_SETTINGS" }
   | { type: "OPEN_ADMIN_UI" }
   | { type: "OPEN_PROVIDER_SETUP" }
+  | { type: "OPEN_MODEL_SETUP" }
+  | { type: "OPEN_LLM_SETTINGS" }
+  | { type: "OPEN_WORKSPACE" }
+  | { type: "SET_WORKFLOW_MODE"; payload: { mode: WorkflowMode } }
   | { type: "REFRESH_STATUS" };
 
 // ─── Backend API Types ───────────────────────────────────
@@ -218,6 +243,7 @@ export interface ChatMessageRequest {
   session_id: string;
   message: string;
   scope?: "workspace" | "selection" | "file";
+  topology_id?: string;
 }
 
 export interface ChatMessageResponse {

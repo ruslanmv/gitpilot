@@ -24,6 +24,14 @@ export interface SettingsData {
   ollabridge: { base_url?: string; model?: string; api_key?: string };
 }
 
+type ProviderConfigMap = {
+  openai: SettingsData["openai"];
+  claude: SettingsData["claude"];
+  watsonx: SettingsData["watsonx"];
+  ollama: SettingsData["ollama"];
+  ollabridge: SettingsData["ollabridge"];
+};
+
 export class SettingsClient {
   constructor(private client: GitPilotApiClient) {}
 
@@ -50,5 +58,50 @@ export class SettingsClient {
   ): Promise<{ models: string[]; error?: string }> {
     const query = provider ? `?provider=${provider}` : "";
     return this.client.get(`/api/settings/models${query}`);
+  }
+
+  async getActiveProvider(): Promise<ProviderName> {
+    const settings = await this.getSettings();
+    return settings.provider as ProviderName;
+  }
+
+  async getActiveProviderConfig(): Promise<{
+    provider: ProviderName;
+    config: ProviderConfigMap[ProviderName];
+  }> {
+    const settings = await this.getSettings();
+    const provider = settings.provider as ProviderName;
+    return {
+      provider,
+      config: settings[provider] as ProviderConfigMap[ProviderName],
+    };
+  }
+
+  async updateProviderConfig<T extends ProviderName>(
+    provider: T,
+    updates: Partial<ProviderConfigMap[T]>
+  ): Promise<SettingsData> {
+    return this.updateSettings({
+      [provider]: updates,
+    } as Partial<SettingsData>);
+  }
+
+  async updateProviderModel(
+    provider: ProviderName,
+    model: string
+  ): Promise<SettingsData> {
+    if (provider === "watsonx") {
+      return this.updateProviderConfig("watsonx", { model_id: model });
+    }
+    return this.updateProviderConfig(provider, { model } as any);
+  }
+
+  async updateProviderBaseUrl(
+    provider: ProviderName,
+    baseUrl: string
+  ): Promise<SettingsData> {
+    return this.updateProviderConfig(provider, {
+      base_url: baseUrl,
+    } as any);
   }
 }
