@@ -612,9 +612,56 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         .ob-dot.ok { background: var(--vscode-testing-iconPassed); }
 
         /* ── Welcome ────────────────────────────────────── */
-        .welcome { text-align: center; padding: 32px 16px; opacity: 0.6; }
-        .welcome h3 { margin-bottom: 8px; font-size: 14px; }
-        .welcome p { font-size: 12px; line-height: 1.6; }
+        .welcome { text-align: center; padding: 28px 16px; }
+        .welcome-avatar {
+            width: 80px; height: 80px; margin: 0 auto 12px;
+            background: linear-gradient(135deg, #4FC3F7 0%, #0288D1 100%);
+            border-radius: 50%; display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 4px 16px rgba(79,195,247,0.25);
+        }
+        .welcome-avatar svg { width: 44px; height: 44px; }
+        .welcome h2 {
+            font-size: 18px; font-weight: 700; margin-bottom: 4px;
+            color: var(--vscode-foreground);
+        }
+        .welcome h2 .accent { color: #4FC3F7; }
+        .welcome .tagline {
+            font-size: 12px; opacity: 0.65; margin-bottom: 18px; line-height: 1.5;
+        }
+        .welcome .doc-link {
+            display: inline-flex; align-items: center; gap: 6px;
+            background: var(--vscode-button-secondaryBackground, rgba(255,255,255,0.06));
+            color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+            border: 1px solid var(--vscode-panel-border);
+            border-radius: 6px; padding: 6px 14px; font-size: 12px;
+            cursor: pointer; text-decoration: none; margin-bottom: 14px;
+            transition: background 0.15s;
+        }
+        .welcome .doc-link:hover {
+            background: var(--vscode-toolbar-hoverBackground);
+        }
+        .welcome .quick-actions {
+            display: flex; flex-direction: column; gap: 6px;
+            margin-top: 14px; text-align: left;
+        }
+        .welcome .quick-action-btn {
+            display: flex; align-items: center; gap: 8px;
+            background: var(--vscode-editor-background);
+            border: 1px solid var(--vscode-panel-border);
+            border-radius: 8px; padding: 8px 12px;
+            color: var(--vscode-foreground); cursor: pointer;
+            font-size: 12px; transition: all 0.15s; width: 100%;
+        }
+        .welcome .quick-action-btn:hover {
+            background: var(--vscode-list-hoverBackground);
+            border-color: var(--vscode-focusBorder);
+        }
+        .welcome .quick-action-btn .qa-icon {
+            font-size: 14px; flex-shrink: 0; width: 20px; text-align: center;
+        }
+        .welcome .disclaimer {
+            font-size: 10px; opacity: 0.4; margin-top: 16px; line-height: 1.4;
+        }
         .welcome kbd {
             background: var(--vscode-textCodeBlock-background);
             padding: 2px 6px; border-radius: 3px; font-size: 11px;
@@ -646,16 +693,41 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     <div id="messages">
         <div class="welcome" id="welcome">
-            <h3>GitPilot Enterprise AI Assistant</h3>
-            <p>
-                Connected to your GitPilot server for<br>
-                multi-agent AI code generation, review, and Git operations.<br>
-                Powered by CrewAI agentic workflows.<br><br>
-                Try: <kbd>Explain this project</kbd><br>
-                <kbd>Create a REST API endpoint</kbd><br>
-                <kbd>Fix the bug in the auth module</kbd><br>
-                <kbd>/skill to invoke a skill</kbd>
-            </p>
+            <div class="welcome-avatar">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="4" y="3" width="16" height="14" rx="3" fill="white" opacity="0.9"/>
+                    <circle cx="9" cy="10" r="1.5" fill="#0288D1"/>
+                    <circle cx="15" cy="10" r="1.5" fill="#0288D1"/>
+                    <path d="M9 13.5 C9 13.5 10.5 15 12 15 C13.5 15 15 13.5 15 13.5" stroke="#0288D1" stroke-width="1.2" stroke-linecap="round" fill="none"/>
+                    <rect x="7" y="1" width="3" height="3" rx="1" fill="white" opacity="0.7"/>
+                    <rect x="14" y="1" width="3" height="3" rx="1" fill="white" opacity="0.7"/>
+                    <path d="M8 17 L6 21" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.7"/>
+                    <path d="M16 17 L18 21" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.7"/>
+                </svg>
+            </div>
+            <h2>Hi, I'm <span class="accent">GitPilot</span></h2>
+            <p class="tagline">Ask me questions or let me code for you.</p>
+            <a class="doc-link" onclick="vscode.postMessage({type:'openDocs'})" title="Open documentation">
+                &#128214; Documentation
+            </a>
+            <div class="quick-actions">
+                <button class="quick-action-btn" onclick="insertPrompt('Explain this project')">
+                    <span class="qa-icon">&#128214;</span> Explain this project
+                </button>
+                <button class="quick-action-btn" onclick="insertPrompt('Review current file')">
+                    <span class="qa-icon">&#128065;</span> Review current file
+                </button>
+                <button class="quick-action-btn" onclick="insertPrompt('Fix the selected code')">
+                    <span class="qa-icon">&#128295;</span> Fix selected code
+                </button>
+                <button class="quick-action-btn" onclick="insertPrompt('Generate tests')">
+                    <span class="qa-icon">&#129514;</span> Generate tests
+                </button>
+                <button class="quick-action-btn" onclick="insertPrompt('Run security scan')">
+                    <span class="qa-icon">&#128737;</span> Security scan
+                </button>
+            </div>
+            <p class="disclaimer">Users should independently verify accuracy of AI-generated content.</p>
         </div>
     </div>
 
@@ -725,6 +797,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         function selectProvider() { vscode.postMessage({ type: 'selectProvider' }); }
         function selectModel() { vscode.postMessage({ type: 'selectModel' }); }
         function exportChat() { vscode.postMessage({ type: 'exportChat' }); }
+        function insertPrompt(text) {
+            inputEl.value = text;
+            inputEl.focus();
+            sendMessage();
+        }
         function copyCode(btn) {
             const pre = btn.closest('.code-wrap').querySelector('code');
             if (pre) {
