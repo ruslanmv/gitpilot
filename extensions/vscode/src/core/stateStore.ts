@@ -12,6 +12,7 @@ import {
   WorkspaceState,
   SessionState,
   ReadinessState,
+  WorkflowState,
   GitContext,
 } from "./types";
 
@@ -48,6 +49,10 @@ const DEFAULT_STATE: GitPilotState = {
     canUseGithub: false,
     blockers: [],
     warnings: [],
+  },
+  workflow: {
+    selectedMode: "auto",
+    source: "auto",
   },
 };
 
@@ -109,6 +114,9 @@ export class StateStore {
       readiness: partial.readiness
         ? { ...this._state.readiness, ...partial.readiness }
         : this._state.readiness,
+      workflow: partial.workflow
+        ? { ...this._state.workflow, ...partial.workflow }
+        : this._state.workflow,
     };
     this._notify();
   }
@@ -144,6 +152,13 @@ export class StateStore {
   updateReadiness(readiness: Partial<ReadinessState>): void {
     this.update({
       readiness: { ...this._state.readiness, ...readiness },
+    });
+  }
+
+  /** Update workflow state */
+  updateWorkflow(workflow: Partial<WorkflowState>): void {
+    this.update({
+      workflow: { ...this._state.workflow, ...workflow },
     });
   }
 

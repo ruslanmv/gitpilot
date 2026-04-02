@@ -733,11 +733,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     <div id="input-area">
         <div id="input-wrap">
-            <textarea id="input" placeholder="Ask GitPilot anything..." rows="1"></textarea>
+            <textarea id="input" placeholder="Describe what you want GitPilot to do..." rows="1"></textarea>
             <button class="input-btn" id="send-btn" onclick="sendMessage()" title="Send (Enter)">&#9654;</button>
             <button class="input-btn" id="stop-btn" onclick="stopGeneration()" title="Stop">&#9632;</button>
         </div>
-        <div class="hint">Enter to send &middot; Shift+Enter for newline &middot; /skill to invoke</div>
+        <div class="hint">Enter to send &middot; Shift+Enter for newline</div>
     </div>
 
     <script nonce="${nonce}">
