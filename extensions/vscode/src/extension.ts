@@ -1,22 +1,18 @@
 /**
  * GitPilot VS Code Extension — Main Entry Point
  *
- * Enterprise-grade agentic AI assistant for repositories.
- *
- * Responsibilities:
- * - boot core API/client services
- * - register the primary GitPilot sidebar UI
- * - register tree views, providers, commands, and diagnostics
- * - synchronize backend/server state into the redesigned state store
- * - route webview actions into commands and service calls
- *
- * Notes:
- * - The redesigned GitPilotPanel is the primary visible chat UI.
- * - The legacy ChatViewProvider is retained only for compatibility with
- *   older command handlers during migration.
- * - All AI/provider/orchestration logic remains server-side.
+ * Production-ready activation flow with:
+ * - stable command registration for Quick Actions
+ * - workspace/repo-aware chat context
+ * - setup wizard for first-run UX
+ * - automatic local provider bootstrap
+ * - automatic session creation
+ * - deterministic "Explain project" behavior
+ * - safer message handling and diagnostics
  */
 
+import * as fs from "fs";
+import * as path from "path";
 import * as vscode from "vscode";
 
 import { GitPilotApiClient } from "./api/client";
@@ -41,7 +37,6 @@ import { registerSkillCommands } from "./commands/skills";
 import { registerServerCommands } from "./commands/server";
 import { registerGitCommands } from "./commands/git";
 
-// Redesigned service layer
 import { StateStore } from "./core/stateStore";
 import { GitPilotEvents } from "./core/events";
 import { StatusClient } from "./api/statusClient";
@@ -65,22 +60,62 @@ import {
   detectIntent,
   buildIntentPrefix,
 } from "./services/chat/intentDetector";
+import type {
+  ExtensionToWebviewMessage,
+  WorkspaceMode,
+} from "./core/types";
 
 type DisposableLike = { dispose(): void };
 
+type QuickActionId =
+  | "explain_project"
+  | "review_file"
+  | "fix_selection"
+  | "generate_tests"
+  | "security_scan";
+
+type FileSummary = {
+  path: string;
+  type: "file" | "dir";
+};
+
+type ProjectSnapshot = {
+  repoName: string;
+  branch?: string;
+  repoRoot?: string;
+  workspaceFolder?: string;
+  languages: string[];
+  manifests: string[];
+  keyFiles: string[];
+  readmePreview?: string;
+  tree: FileSummary[];
+};
+
+const OUTPUT_CHANNEL_NAME = "GitPilot";
+const PROJECT_TREE_LIMIT = 250;
+const README_PREVIEW_MAX_CHARS = 4000;
+const FILE_READ_MAX_CHARS = 12000;
+
+const QUICK_ACTION_COMMANDS: ReadonlyArray<{
+  id: string;
+  action: QuickActionId;
+}> = [
+  { id: "gitpilot.explain_project", action: "explain_project" },
+  { id: "gitpilot.review_file", action: "review_file" },
+  { id: "gitpilot.fix_selection", action: "fix_selection" },
+  { id: "gitpilot.generate_tests", action: "generate_tests" },
+  { id: "gitpilot.security_scan", action: "security_scan" },
+];
+
 export function activate(context: vscode.ExtensionContext): void {
   const config = getConfig();
-  const output = vscode.window.createOutputChannel("GitPilot");
+  const output = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
 
   output.appendLine("[GitPilot] Activating extension...");
 
-  // ─────────────────────────────────────────────────────────────
-  // Core API + legacy UI support
-  // ─────────────────────────────────────────────────────────────
   const client = new GitPilotApiClient(config.serverUrl, config.githubToken);
   const statusBar = new StatusBarManager();
 
-  // Legacy provider retained for older command handlers during migration.
   const legacyChatProvider = new ChatViewProvider(context.extensionUri, client);
 
   const sessionsTree = new SessionsTreeProvider(client);
@@ -88,9 +123,6 @@ export function activate(context: vscode.ExtensionContext): void {
   const securityProvider = new SecurityDiagnosticsProvider(client);
   const codeLensProvider = new GitPilotCodeLensProvider(config.showInlineHints);
 
-  // ─────────────────────────────────────────────────────────────
-  // Redesigned state + service layer
-  // ─────────────────────────────────────────────────────────────
   const stateStore = new StateStore();
   const events = new GitPilotEvents();
 
@@ -112,8 +144,8 @@ export function activate(context: vscode.ExtensionContext): void {
     errorTranslator
   );
 
-  void repoClient; // reserved for upcoming repo-aware actions
-  void events; // currently retained for planned event-driven flows
+  void repoClient;
+  void events;
 
   context.subscriptions.push(
     output,
@@ -133,9 +165,789 @@ export function activate(context: vscode.ExtensionContext): void {
     } satisfies DisposableLike
   );
 
-  // ─────────────────────────────────────────────────────────────
-  // Connection state → legacy UI + redesigned UI sync
-  // ─────────────────────────────────────────────────────────────
+  let autoBootstrapInFlight = false;
+  let projectSnapshotCache: ProjectSnapshot | undefined;
+  let projectSnapshotCacheKey: string | undefined;
+
+  let gitpilotPanel!: GitPilotPanel;
+
+  const postMessageToPanel = (message: ExtensionToWebviewMessage): void => {
+    gitpilotPanel.postMessage(message);
+  };
+
+  const postErrorToPanel = (payload: {
+    code: string;
+    title: string;
+    message: string;
+    recoverable?: boolean;
+  }): void => {
+    postMessageToPanel({
+      type: "ERROR",
+      payload: {
+        recoverable: true,
+        ...payload,
+      },
+    });
+  };
+
+  const appendOutputError = (prefix: string, error: unknown): void => {
+    output.appendLine(`${prefix}: ${String(error)}`);
+  };
+
+  const currentWorkspaceRoot = (): string | undefined => {
+    const editorPath = vscode.window.activeTextEditor?.document?.uri?.fsPath;
+    if (editorPath) {
+      const folder = vscode.workspace.getWorkspaceFolder(
+        vscode.Uri.file(editorPath)
+      );
+      if (folder?.uri.fsPath) {
+        return folder.uri.fsPath;
+      }
+    }
+
+    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  };
+
+  const isWorkspaceTrusted = (): boolean => {
+    try {
+      return vscode.workspace.isTrusted;
+    } catch {
+      return true;
+    }
+  };
+
+  const findGitRoot = (startPath?: string): string | undefined => {
+    if (!startPath || !fs.existsSync(startPath)) {
+      return undefined;
+    }
+
+    let current: string;
+    try {
+      current = fs.statSync(startPath).isDirectory()
+        ? startPath
+        : path.dirname(startPath);
+    } catch {
+      return undefined;
+    }
+
+    while (true) {
+      const dotGit = path.join(current, ".git");
+      if (fs.existsSync(dotGit)) {
+        return current;
+      }
+
+      const parent = path.dirname(current);
+      if (parent === current) {
+        return undefined;
+      }
+      current = parent;
+    }
+  };
+
+  const safeReadTextFile = (
+    filePath: string,
+    maxChars: number
+  ): string | undefined => {
+    try {
+      if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+        return undefined;
+      }
+
+      const raw = fs.readFileSync(filePath, "utf8");
+      if (raw.length <= maxChars) {
+        return raw;
+      }
+
+      return `${raw.slice(0, maxChars)}\n\n...[truncated]`;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const listProjectTree = (
+    root: string,
+    limit = PROJECT_TREE_LIMIT
+  ): FileSummary[] => {
+    const results: FileSummary[] = [];
+    const ignoredNames = new Set([
+      ".git",
+      "node_modules",
+      ".next",
+      ".turbo",
+      ".venv",
+      "venv",
+      "__pycache__",
+      "dist",
+      "build",
+      ".idea",
+      ".vscode-test",
+      ".pytest_cache",
+      ".mypy_cache",
+      ".ruff_cache",
+      ".cache",
+      "coverage",
+      ".DS_Store",
+    ]);
+
+    const walk = (dir: string): void => {
+      if (results.length >= limit) {
+        return;
+      }
+
+      let entries: fs.Dirent[] = [];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+
+      entries.sort((a, b) => {
+        if (a.isDirectory() && !b.isDirectory()) {
+          return -1;
+        }
+        if (!a.isDirectory() && b.isDirectory()) {
+          return 1;
+        }
+        return a.name.localeCompare(b.name);
+      });
+
+      for (const entry of entries) {
+        if (results.length >= limit) {
+          return;
+        }
+
+        if (ignoredNames.has(entry.name)) {
+          continue;
+        }
+
+        const abs = path.join(dir, entry.name);
+        const rel = path.relative(root, abs).replace(/\\/g, "/");
+
+        if (!rel) {
+          continue;
+        }
+
+        if (entry.isDirectory()) {
+          results.push({ path: `${rel}/`, type: "dir" });
+          walk(abs);
+        } else if (entry.isFile()) {
+          results.push({ path: rel, type: "file" });
+        }
+      }
+    };
+
+    walk(root);
+    return results;
+  };
+
+  const detectProjectLanguages = (tree: FileSummary[]): string[] => {
+    const exts = new Set<string>();
+
+    for (const entry of tree) {
+      if (entry.type !== "file") {
+        continue;
+      }
+
+      const ext = path.extname(entry.path).toLowerCase();
+      if (ext) {
+        exts.add(ext);
+      }
+    }
+
+    const map: Record<string, string> = {
+      ".ts": "TypeScript",
+      ".tsx": "TypeScript React",
+      ".js": "JavaScript",
+      ".jsx": "JavaScript React",
+      ".py": "Python",
+      ".go": "Go",
+      ".rs": "Rust",
+      ".java": "Java",
+      ".kt": "Kotlin",
+      ".php": "PHP",
+      ".rb": "Ruby",
+      ".cs": "C#",
+      ".cpp": "C++",
+      ".c": "C",
+      ".h": "C/C++ Header",
+      ".swift": "Swift",
+      ".scala": "Scala",
+      ".r": "R",
+      ".lua": "Lua",
+      ".sql": "SQL",
+      ".sh": "Shell",
+      ".yaml": "YAML",
+      ".yml": "YAML",
+      ".json": "JSON",
+      ".md": "Markdown",
+    };
+
+    const langs = new Set<string>();
+    for (const ext of exts) {
+      const language = map[ext];
+      if (language) {
+        langs.add(language);
+      }
+    }
+
+    return [...langs].sort((a, b) => a.localeCompare(b));
+  };
+
+  const findManifestFiles = (tree: FileSummary[]): string[] => {
+    const known = new Set([
+      "package.json",
+      "package-lock.json",
+      "pnpm-lock.yaml",
+      "yarn.lock",
+      "tsconfig.json",
+      "pyproject.toml",
+      "requirements.txt",
+      "poetry.lock",
+      "Pipfile",
+      "Cargo.toml",
+      "Cargo.lock",
+      "go.mod",
+      "go.sum",
+      "pom.xml",
+      "build.gradle",
+      "build.gradle.kts",
+      "composer.json",
+      "Gemfile",
+      "Dockerfile",
+      "docker-compose.yml",
+      "docker-compose.yaml",
+      "README.md",
+      "README.rst",
+      ".env.example",
+      ".github/workflows",
+    ]);
+
+    return tree
+      .map((entry) => entry.path.replace(/\/$/, ""))
+      .filter((p) => known.has(p) || p.startsWith(".github/workflows/"))
+      .slice(0, 40);
+  };
+
+  const findKeyFiles = (tree: FileSummary[]): string[] => {
+    const priority = [
+      "README.md",
+      "README.rst",
+      "src/",
+      "app/",
+      "server/",
+      "backend/",
+      "frontend/",
+      "api/",
+      "tests/",
+      "__tests__/",
+      "docs/",
+      ".github/workflows/",
+      "package.json",
+      "pyproject.toml",
+      "Cargo.toml",
+      "go.mod",
+      "pom.xml",
+      "Dockerfile",
+    ];
+
+    const paths = tree.map((entry) => entry.path);
+    const selected: string[] = [];
+
+    for (const wanted of priority) {
+      const match = paths.find((p) => p === wanted || p.startsWith(wanted));
+      if (match && !selected.includes(match)) {
+        selected.push(match);
+      }
+    }
+
+    for (const p of paths) {
+      if (selected.length >= 30) {
+        break;
+      }
+      if (!selected.includes(p)) {
+        selected.push(p);
+      }
+    }
+
+    return selected;
+  };
+
+  const getProjectSnapshot = async (
+    forceRefresh = false
+  ): Promise<ProjectSnapshot | undefined> => {
+    const workspaceRoot = currentWorkspaceRoot();
+    const repoRoot = findGitRoot(workspaceRoot);
+    const cacheKey = `${workspaceRoot || ""}::${repoRoot || ""}`;
+
+    if (
+      !forceRefresh &&
+      projectSnapshotCache &&
+      projectSnapshotCacheKey === cacheKey
+    ) {
+      return projectSnapshotCache;
+    }
+
+    const baseRoot = repoRoot || workspaceRoot;
+    if (!baseRoot) {
+      projectSnapshotCache = undefined;
+      projectSnapshotCacheKey = undefined;
+      return undefined;
+    }
+
+    const tree = listProjectTree(baseRoot, PROJECT_TREE_LIMIT);
+    const readmePathCandidates = [
+      path.join(baseRoot, "README.md"),
+      path.join(baseRoot, "README.rst"),
+      path.join(baseRoot, "readme.md"),
+    ];
+
+    const readmePath = readmePathCandidates.find((candidate) =>
+      fs.existsSync(candidate)
+    );
+
+    const readmePreview = readmePath
+      ? safeReadTextFile(readmePath, README_PREVIEW_MAX_CHARS)
+      : undefined;
+
+    const snapshot: ProjectSnapshot = {
+      repoName:
+        stateStore.state.workspace.git.repoName ||
+        path.basename(baseRoot) ||
+        "current-project",
+      branch: stateStore.state.workspace.git.branch || undefined,
+      repoRoot,
+      workspaceFolder: workspaceRoot,
+      languages: detectProjectLanguages(tree),
+      manifests: findManifestFiles(tree),
+      keyFiles: findKeyFiles(tree),
+      readmePreview,
+      tree,
+    };
+
+    projectSnapshotCache = snapshot;
+    projectSnapshotCacheKey = cacheKey;
+    return snapshot;
+  };
+
+  const summarizeProjectSnapshot = (snapshot?: ProjectSnapshot): string => {
+    if (!snapshot) {
+      return "No repository snapshot is available yet.";
+    }
+
+    const topTree = snapshot.tree.slice(0, 80).map((entry) => entry.path);
+    const parts = [
+      `Repository: ${snapshot.repoName}`,
+      snapshot.branch ? `Branch: ${snapshot.branch}` : undefined,
+      snapshot.repoRoot ? `Repo root: ${snapshot.repoRoot}` : undefined,
+      snapshot.languages.length
+        ? `Languages: ${snapshot.languages.join(", ")}`
+        : "Languages: unknown",
+      snapshot.manifests.length
+        ? `Manifest files: ${snapshot.manifests.join(", ")}`
+        : "Manifest files: none detected",
+      snapshot.keyFiles.length
+        ? `Key files and folders: ${snapshot.keyFiles.join(", ")}`
+        : undefined,
+      "Project tree snapshot:",
+      topTree.length ? topTree.join("\n") : "(empty tree)",
+      snapshot.readmePreview
+        ? `README preview:\n${snapshot.readmePreview}`
+        : "README preview: none detected",
+    ].filter(Boolean);
+
+    return parts.join("\n\n");
+  };
+
+  const getCurrentFileContext = (): {
+    fileName?: string;
+    languageId?: string;
+    selectionText?: string;
+    fullText?: string;
+  } => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+      return {};
+    }
+
+    const document = editor.document;
+    const selectionText = editor.selection?.isEmpty
+      ? ""
+      : document.getText(editor.selection);
+
+    return {
+      fileName: document.fileName,
+      languageId: document.languageId,
+      selectionText: selectionText || undefined,
+      fullText: document.getText(),
+    };
+  };
+
+  const buildProjectAwareMessage = async (
+    userText: string
+  ): Promise<string> => {
+    const snapshot = await getProjectSnapshot(false);
+    const fileCtx = getCurrentFileContext();
+
+    const sections: string[] = [];
+
+    if (snapshot) {
+      sections.push(`Project context:\n${summarizeProjectSnapshot(snapshot)}`);
+    }
+
+    if (fileCtx.fileName) {
+      sections.push(
+        [
+          "Current editor context:",
+          `File: ${fileCtx.fileName}`,
+          fileCtx.languageId ? `Language: ${fileCtx.languageId}` : undefined,
+          fileCtx.selectionText
+            ? `Selected code:\n\`\`\`${fileCtx.languageId || ""}\n${fileCtx.selectionText}\n\`\`\``
+            : undefined,
+        ]
+          .filter(Boolean)
+          .join("\n")
+      );
+    }
+
+    sections.push(`User request:\n${userText}`);
+
+    return sections.join("\n\n---\n\n");
+  };
+
+  const registerCommand = (
+    commandId: string,
+    handler: (...args: unknown[]) => unknown | Promise<unknown>
+  ): void => {
+    context.subscriptions.push(
+      vscode.commands.registerCommand(commandId, async (...args: unknown[]) => {
+        output.appendLine(`[GitPilot] Command invoked: ${commandId}`);
+        await handler(...args);
+      })
+    );
+  };
+
+  const logCommandAvailability = async (): Promise<void> => {
+    try {
+      const commands = await vscode.commands.getCommands(true);
+      for (const cmd of QUICK_ACTION_COMMANDS) {
+        if (!commands.includes(cmd.id)) {
+          output.appendLine(
+            `[GitPilot] Missing command registration: ${cmd.id}`
+          );
+        }
+      }
+    } catch (error: unknown) {
+      appendOutputError(
+        "[GitPilot] Failed to inspect command registry",
+        error
+      );
+    }
+  };
+
+  const refreshStatusAndBootstrap = async (reason: string): Promise<void> => {
+    if (autoBootstrapInFlight) {
+      return;
+    }
+
+    autoBootstrapInFlight = true;
+
+    try {
+      output.appendLine(`[GitPilot] Bootstrap check: ${reason}`);
+
+      await vscode.commands.executeCommand("gitpilot.refreshStatus");
+
+      let state = stateStore.state;
+      if (!state.workspace.folderOpen) {
+        return;
+      }
+
+      const autoProvider =
+        await settingsClient.bootstrapLocalProviderDefaults();
+      if (autoProvider.changed) {
+        output.appendLine(
+          `[GitPilot] Auto-configured provider=${autoProvider.provider} model=${autoProvider.model}`
+        );
+        await vscode.commands.executeCommand("gitpilot.refreshStatus");
+      }
+
+      state = stateStore.state;
+
+      if (
+        state.readiness.canChat &&
+        !state.session.active &&
+        state.session.status !== "creating"
+      ) {
+        output.appendLine("[GitPilot] Auto-starting session...");
+        await sessionCoordinator.ensureActiveSession();
+        await vscode.commands.executeCommand("gitpilot.refreshStatus");
+      }
+
+      await getProjectSnapshot(true);
+    } catch (error: unknown) {
+      appendOutputError(`[GitPilot] Bootstrap error (${reason})`, error);
+    } finally {
+      autoBootstrapInFlight = false;
+    }
+  };
+
+  const ensureSessionReady = async (): Promise<string | undefined> => {
+    if (
+      !stateStore.state.session.sessionId &&
+      stateStore.state.readiness.canChat
+    ) {
+      await sessionCoordinator.ensureActiveSession();
+      await vscode.commands.executeCommand("gitpilot.refreshStatus");
+    }
+    return stateStore.state.session.sessionId;
+  };
+
+  const runSetupWizard = async (): Promise<void> => {
+    const workspaceRoot = currentWorkspaceRoot();
+    const repoRoot = findGitRoot(workspaceRoot);
+    const trusted = isWorkspaceTrusted();
+
+    const choices: Array<
+      vscode.QuickPickItem & { run: () => Promise<void> }
+    > = [];
+
+    if (!trusted) {
+      choices.push({
+        label: "Trust this workspace",
+        description: "Required for full repo-aware features",
+        run: async () => {
+          await vscode.commands.executeCommand("workbench.trust.manage");
+        },
+      });
+    }
+
+    if (!workspaceRoot) {
+      choices.push({
+        label: "Open a folder",
+        description: "Select the project folder to use with GitPilot",
+        run: async () => {
+          await vscode.commands.executeCommand(
+            "workbench.action.files.openFolder"
+          );
+        },
+      });
+    }
+
+    if (workspaceRoot && !repoRoot) {
+      choices.push({
+        label: "Initialize Git repository",
+        description: "Set up this folder as a Git repository",
+        run: async () => {
+          await ensureGitRepo();
+        },
+      });
+    }
+
+    choices.push(
+      {
+        label: "Select provider",
+        description:
+          "Choose Ollama, OpenAI, Claude-compatible, or another provider",
+        run: async () => {
+          await vscode.commands.executeCommand("gitpilot.selectProviderV2");
+        },
+      },
+      {
+        label: "Select model",
+        description: "Choose the model used for chat and quick actions",
+        run: async () => {
+          await vscode.commands.executeCommand("gitpilot.selectModelV2");
+        },
+      },
+      {
+        label: "Refresh project scan",
+        description: "Rebuild repo-aware context for the current workspace",
+        run: async () => {
+          await getProjectSnapshot(true);
+          vscode.window.showInformationMessage(
+            "GitPilot project scan refreshed."
+          );
+        },
+      }
+    );
+
+    const picked = await vscode.window.showQuickPick(choices, {
+      placeHolder: "GitPilot Setup Wizard — choose the next step",
+      title: "GitPilot Setup Wizard",
+      matchOnDescription: true,
+    });
+
+    if (!picked) {
+      return;
+    }
+
+    try {
+      await picked.run();
+      await refreshStatusAndBootstrap("setup-wizard");
+      vscode.window.showInformationMessage("GitPilot setup step completed.");
+    } catch (error: unknown) {
+      appendOutputError("[GitPilot] Setup wizard action failed", error);
+      vscode.window.showErrorMessage(errorTranslator.translate(error));
+    }
+  };
+
+  const sendChatToBackend = async (rawText: string): Promise<void> => {
+    const text = rawText.trim();
+    if (!text) {
+      return;
+    }
+
+    const sessionId = await ensureSessionReady();
+
+    if (!sessionId) {
+      postErrorToPanel({
+        code: "SESSION_NOT_READY",
+        title: "GitPilot is finishing setup",
+        message: "A session is being prepared. Please try again in a moment.",
+      });
+      return;
+    }
+
+    try {
+      const { intent, cleanMessage } = detectIntent(text);
+      const intentPrefix = buildIntentPrefix(intent);
+
+      const projectAwareInput = await buildProjectAwareMessage(
+        cleanMessage || text
+      );
+
+      const enrichedMessage = intentPrefix
+        ? `[${intentPrefix}]\n\n${projectAwareInput}`
+        : projectAwareInput;
+
+      const workflowMode = stateStore.state.workflow.selectedMode;
+      const topologyId =
+        workflowMode && workflowMode !== "auto" ? workflowMode : undefined;
+
+      const response = await chatClientV2.sendMessage({
+        session_id: sessionId,
+        message: enrichedMessage,
+        topology_id: topologyId,
+      });
+
+      postMessageToPanel({
+        type: "CHAT_RESPONSE",
+        payload: {
+          id: response.message_id || Date.now().toString(),
+          role: "assistant",
+          content: response.answer,
+          createdAt: new Date().toISOString(),
+          plan: response.plan,
+        },
+      });
+    } catch (error: unknown) {
+      postErrorToPanel({
+        code: "CHAT_ERROR",
+        title: "Chat Error",
+        message: errorTranslator.translate(error),
+      });
+    }
+  };
+
+  const buildQuickActionPrompt = async (
+    action: QuickActionId
+  ): Promise<string | undefined> => {
+    const ctx = getCurrentFileContext();
+    const snapshot = await getProjectSnapshot(false);
+    const repoName =
+      snapshot?.repoName ||
+      stateStore.state.workspace.git.repoName ||
+      stateStore.state.workspace.folderName ||
+      "current repository";
+
+    switch (action) {
+      case "explain_project":
+        return [
+          `Explain the current project "${repoName}".`,
+          "Use the repository tree, README, manifests, and current workspace context.",
+          "Describe:",
+          "1. the project purpose",
+          "2. the main modules and folders",
+          "3. the architecture and runtime flow",
+          "4. the developer workflow",
+          "5. how a new developer should get started quickly",
+          "Do not say that project context is missing unless the repo snapshot is genuinely empty.",
+        ].join("\n");
+
+      case "review_file": {
+        if (!ctx.fileName) {
+          vscode.window.showWarningMessage("Open a file first.");
+          return undefined;
+        }
+
+        const fullText = ctx.fullText
+          ? ctx.fullText.slice(0, FILE_READ_MAX_CHARS)
+          : undefined;
+
+        return [
+          "Review the current file for bugs, maintainability issues, risky code paths, and refactoring opportunities.",
+          `File: ${ctx.fileName}`,
+          ctx.selectionText
+            ? `Focus especially on this selected code:\n\`\`\`${ctx.languageId || ""}\n${ctx.selectionText}\n\`\`\``
+            : fullText
+              ? `Review the full file content:\n\`\`\`${ctx.languageId || ""}\n${fullText}\n\`\`\``
+              : "Review the full file using available workspace context.",
+          "Be concrete and prioritize the most important issues first.",
+        ].join("\n\n");
+      }
+
+      case "fix_selection": {
+        if (!ctx.fileName) {
+          vscode.window.showWarningMessage("Open a file first.");
+          return undefined;
+        }
+        if (!ctx.selectionText?.trim()) {
+          vscode.window.showWarningMessage("Select some code first.");
+          return undefined;
+        }
+
+        return [
+          `Fix the selected code in ${ctx.fileName}.`,
+          "Explain the issue briefly, then provide the corrected version.",
+          `Selected code:\n\`\`\`${ctx.languageId || ""}\n${ctx.selectionText}\n\`\`\``,
+        ].join("\n\n");
+      }
+
+      case "generate_tests": {
+        if (!ctx.fileName) {
+          return [
+            "Generate useful automated tests for the current project.",
+            "Focus on realistic edge cases, failure paths, and key business logic.",
+            "Infer the likely testing framework from the repository manifests and structure.",
+          ].join("\n\n");
+        }
+
+        const fullText = ctx.fullText
+          ? ctx.fullText.slice(0, FILE_READ_MAX_CHARS)
+          : undefined;
+
+        return [
+          `Generate useful automated tests for ${ctx.fileName}.`,
+          "Focus on realistic edge cases, failure paths, and core business logic.",
+          ctx.selectionText
+            ? `Prioritize this selected code:\n\`\`\`${ctx.languageId || ""}\n${ctx.selectionText}\n\`\`\``
+            : fullText
+              ? `Use this file as the primary context:\n\`\`\`${ctx.languageId || ""}\n${fullText}\n\`\`\``
+              : "Use the current file as the primary context.",
+        ].join("\n\n");
+      }
+
+      case "security_scan":
+        return [
+          `Review the current project "${repoName}" for security issues.`,
+          "Check for secrets exposure, unsafe code, risky defaults, insecure dependencies, insecure auth flows, injection risks, and attack surfaces.",
+          "Prioritize findings by severity and explain concrete remediation steps.",
+        ].join("\n\n");
+
+      default:
+        return undefined;
+    }
+  };
+
   client.onStateChange((connectionState) => {
     const connected = connectionState === "connected";
 
@@ -146,119 +958,76 @@ export function activate(context: vscode.ExtensionContext): void {
     if (connected) {
       sessionsTree.refresh();
       skillsTree.refresh();
-      void vscode.commands.executeCommand("gitpilot.refreshStatus");
+      void refreshStatusAndBootstrap("client-connected");
     }
   });
 
-  // ─────────────────────────────────────────────────────────────
-  // Primary redesigned webview
-  // ─────────────────────────────────────────────────────────────
-  const gitpilotPanel = new GitPilotPanel(
+  gitpilotPanel = new GitPilotPanel(
     context.extensionUri,
     stateStore,
     async (msg) => {
       try {
         switch (msg.type) {
-          case "INIT": {
+          case "INIT":
+            void refreshStatusAndBootstrap("webview-init");
             return;
-          }
 
-          case "START_SESSION": {
-            await sessionCoordinator.startSession(msg.payload.mode);
+          case "START_SESSION":
+            await sessionCoordinator.startSession(
+              msg.payload.mode as WorkspaceMode
+            );
+            await vscode.commands.executeCommand("gitpilot.refreshStatus");
             return;
-          }
 
-          case "CHANGE_MODE": {
+          case "CHANGE_MODE":
             stateStore.updateWorkspace({ mode: msg.payload.mode });
             return;
-          }
 
-          case "SEND_CHAT": {
-            const sessionId = stateStore.state.session.sessionId;
-            const text = msg.payload.text?.trim();
+          case "SEND_CHAT":
+            await sendChatToBackend(msg.payload.text);
+            return;
 
-            if (!sessionId || !text) {
+          case "RUN_QUICK_ACTION": {
+            const prompt = await buildQuickActionPrompt(
+              msg.payload.action as QuickActionId
+            );
+
+            if (!prompt) {
               return;
             }
 
-            try {
-              const { intent, cleanMessage } = detectIntent(text);
-              const intentPrefix = buildIntentPrefix(intent);
-
-              const enrichedMessage = intentPrefix
-                ? `[${intentPrefix}]\n\n${cleanMessage || text}`
-                : text;
-
-              const workflowMode = stateStore.state.workflow.selectedMode;
-              const topologyId =
-                workflowMode && workflowMode !== "auto"
-                  ? workflowMode
-                  : undefined;
-
-              const response = await chatClientV2.sendMessage({
-                session_id: sessionId,
-                message: enrichedMessage,
-                topology_id: topologyId,
-              });
-
-              gitpilotPanel.postMessage({
-                type: "CHAT_RESPONSE",
-                payload: {
-                  id: response.message_id || Date.now().toString(),
-                  role: "assistant",
-                  content: response.answer,
-                  createdAt: new Date().toISOString(),
-                  plan: response.plan,
-                },
-              });
-            } catch (error: unknown) {
-              gitpilotPanel.postMessage({
-                type: "ERROR",
-                payload: {
-                  code: "CHAT_ERROR",
-                  title: "Chat Error",
-                  message: errorTranslator.translate(error),
-                  recoverable: true,
-                },
-              });
-            }
-            return;
-          }
-
-          case "RUN_QUICK_ACTION": {
-            await vscode.commands.executeCommand(
-              `gitpilot.${msg.payload.action}`
-            );
+            await sendChatToBackend(prompt);
             return;
           }
 
           case "OPEN_SETTINGS":
-          case "OPEN_WORKSPACE": {
             await vscode.commands.executeCommand(
-              "workbench.action.openFolder"
+              "workbench.action.openSettings",
+              "@ext:ruslanmv.gitpilot-vscode"
             );
             return;
-          }
 
-          case "OPEN_ADMIN_UI": {
+          case "OPEN_WORKSPACE":
+            await vscode.commands.executeCommand(
+              "workbench.action.files.openFolder"
+            );
+            return;
+
+          case "OPEN_ADMIN_UI":
             await vscode.commands.executeCommand("gitpilot.showServerInfo");
             return;
-          }
 
-          case "OPEN_PROVIDER_SETUP": {
+          case "OPEN_PROVIDER_SETUP":
             await vscode.commands.executeCommand("gitpilot.selectProviderV2");
             return;
-          }
 
-          case "OPEN_MODEL_SETUP": {
+          case "OPEN_MODEL_SETUP":
             await vscode.commands.executeCommand("gitpilot.selectModelV2");
             return;
-          }
 
-          case "OPEN_LLM_SETTINGS": {
+          case "OPEN_LLM_SETTINGS":
             await vscode.commands.executeCommand("gitpilot.openLlmSettings");
             return;
-          }
 
           case "SET_WORKFLOW_MODE": {
             const selectedMode = msg.payload.mode;
@@ -281,10 +1050,9 @@ export function activate(context: vscode.ExtensionContext): void {
             return;
           }
 
-          case "REFRESH_STATUS": {
+          case "REFRESH_STATUS":
             await vscode.commands.executeCommand("gitpilot.refreshStatus");
             return;
-          }
 
           default: {
             const exhaustiveCheck: never = msg;
@@ -293,18 +1061,12 @@ export function activate(context: vscode.ExtensionContext): void {
           }
         }
       } catch (error: unknown) {
-        output.appendLine(
-          `[GitPilot] Webview message handling error: ${String(error)}`
-        );
+        appendOutputError("[GitPilot] Webview message handling error", error);
 
-        gitpilotPanel.postMessage({
-          type: "ERROR",
-          payload: {
-            code: "WEBVIEW_ACTION_ERROR",
-            title: "Action Error",
-            message: errorTranslator.translate(error),
-            recoverable: true,
-          },
+        postErrorToPanel({
+          code: "WEBVIEW_ACTION_ERROR",
+          title: "Action Error",
+          message: errorTranslator.translate(error),
         });
       }
     }
@@ -318,25 +1080,13 @@ export function activate(context: vscode.ExtensionContext): void {
     )
   );
 
-  // ─────────────────────────────────────────────────────────────
-  // Tree views
-  // ─────────────────────────────────────────────────────────────
   context.subscriptions.push(
-    vscode.window.registerTreeDataProvider(
-      "gitpilot.sessionsView",
-      sessionsTree
-    ),
+    vscode.window.registerTreeDataProvider("gitpilot.sessionsView", sessionsTree),
     vscode.window.registerTreeDataProvider("gitpilot.skillsView", skillsTree)
   );
 
-  // ─────────────────────────────────────────────────────────────
-  // Language providers
-  // ─────────────────────────────────────────────────────────────
   context.subscriptions.push(
-    vscode.languages.registerCodeLensProvider(
-      { scheme: "file" },
-      codeLensProvider
-    ),
+    vscode.languages.registerCodeLensProvider({ scheme: "file" }, codeLensProvider),
     vscode.languages.registerCodeActionsProvider(
       { scheme: "file" },
       new GitPilotCodeActionProvider(),
@@ -347,9 +1097,6 @@ export function activate(context: vscode.ExtensionContext): void {
     )
   );
 
-  // ─────────────────────────────────────────────────────────────
-  // Legacy command groups
-  // ─────────────────────────────────────────────────────────────
   registerChatCommands(context, client, legacyChatProvider);
   registerReviewCommands(context, legacyChatProvider);
   registerSecurityCommands(context, securityProvider);
@@ -357,9 +1104,6 @@ export function activate(context: vscode.ExtensionContext): void {
   registerServerCommands(context, client, legacyChatProvider);
   registerGitCommands(context, client, legacyChatProvider);
 
-  // ─────────────────────────────────────────────────────────────
-  // Redesigned command groups
-  // ─────────────────────────────────────────────────────────────
   registerWorkspaceCommands(
     context,
     stateStore,
@@ -369,46 +1113,82 @@ export function activate(context: vscode.ExtensionContext): void {
     readinessEvaluator,
     statusClient
   );
-
   registerSetupCommands(context, stateStore);
   registerProviderCommands(context, stateStore, settingsClient);
   registerSessionCommands(context, stateStore, sessionCoordinator);
   registerChatCommandsV2(context, stateStore, chatClientV2);
 
-  // ─────────────────────────────────────────────────────────────
-  // Additional utility commands
-  // ─────────────────────────────────────────────────────────────
-  context.subscriptions.push(
-    vscode.commands.registerCommand("gitpilot.showAgentFlow", () => {
-      AgentFlowPanel.show(client, context.extensionUri);
-    }),
+  registerCommand("gitpilot.showAgentFlow", () => {
+    AgentFlowPanel.show(client, context.extensionUri);
+  });
 
-    vscode.commands.registerCommand("gitpilot.refreshSessions", () => {
-      sessionsTree.refresh();
-    }),
+  registerCommand("gitpilot.refreshSessions", () => {
+    sessionsTree.refresh();
+  });
 
-    vscode.commands.registerCommand("gitpilot.refreshSkills", () => {
-      skillsTree.refresh();
-    }),
+  registerCommand("gitpilot.refreshSkills", () => {
+    skillsTree.refresh();
+  });
 
-    vscode.commands.registerCommand("gitpilot.runCommand", async () => {
-      const command = await vscode.window.showInputBox({
-        prompt: "Enter command to run via GitPilot",
-        placeHolder: "e.g. npm test",
-      });
+  registerCommand("gitpilot.runCommand", async () => {
+    const command = await vscode.window.showInputBox({
+      prompt: "Enter command to run via GitPilot",
+      placeHolder: "e.g. npm test",
+      ignoreFocusOut: true,
+    });
 
-      if (!command) {
-        return;
-      }
+    if (!command) {
+      return;
+    }
 
-      legacyChatProvider.sendMessageFromCommand(`Run this command: ${command}`);
-      await vscode.commands.executeCommand("gitpilot.chatView.focus");
-    })
-  );
+    legacyChatProvider.sendMessageFromCommand(`Run this command: ${command}`);
+    await vscode.commands.executeCommand("gitpilot.chatView.focus");
+  });
 
-  // ─────────────────────────────────────────────────────────────
-  // Configuration change handling
-  // ─────────────────────────────────────────────────────────────
+  registerCommand("gitpilot.setupWizard", async () => {
+    await runSetupWizard();
+  });
+
+  registerCommand("gitpilot.refreshProjectContext", async () => {
+    await getProjectSnapshot(true);
+    vscode.window.showInformationMessage("GitPilot project context refreshed.");
+  });
+
+  registerCommand("gitpilot.explain_project", async () => {
+    const prompt = await buildQuickActionPrompt("explain_project");
+    if (prompt) {
+      await sendChatToBackend(prompt);
+    }
+  });
+
+  registerCommand("gitpilot.review_file", async () => {
+    const prompt = await buildQuickActionPrompt("review_file");
+    if (prompt) {
+      await sendChatToBackend(prompt);
+    }
+  });
+
+  registerCommand("gitpilot.fix_selection", async () => {
+    const prompt = await buildQuickActionPrompt("fix_selection");
+    if (prompt) {
+      await sendChatToBackend(prompt);
+    }
+  });
+
+  registerCommand("gitpilot.generate_tests", async () => {
+    const prompt = await buildQuickActionPrompt("generate_tests");
+    if (prompt) {
+      await sendChatToBackend(prompt);
+    }
+  });
+
+  registerCommand("gitpilot.security_scan", async () => {
+    const prompt = await buildQuickActionPrompt("security_scan");
+    if (prompt) {
+      await sendChatToBackend(prompt);
+    }
+  });
+
   context.subscriptions.push(
     onConfigChange((newConfig) => {
       output.appendLine("[GitPilot] Configuration updated.");
@@ -420,25 +1200,22 @@ export function activate(context: vscode.ExtensionContext): void {
       if (newConfig.scanOnSave) {
         securityProvider.enableScanOnSave();
       }
+
+      void refreshStatusAndBootstrap("config-change");
     })
   );
 
-  // ─────────────────────────────────────────────────────────────
-  // Security scanning
-  // ─────────────────────────────────────────────────────────────
   if (config.scanOnSave) {
     securityProvider.enableScanOnSave();
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // Auto-connect
-  // ─────────────────────────────────────────────────────────────
   if (config.autoConnect) {
     void client.connect().then((connected) => {
       if (connected) {
         output.appendLine(
           `[GitPilot] Connected to server at ${config.serverUrl}`
         );
+        void refreshStatusAndBootstrap("auto-connect");
       } else {
         output.appendLine(
           `[GitPilot] Auto-connect failed for ${config.serverUrl}`
@@ -447,19 +1224,16 @@ export function activate(context: vscode.ExtensionContext): void {
     });
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // Initial workspace + git sync
-  // ─────────────────────────────────────────────────────────────
   void initializeWorkspaceState({
     output,
     stateStore,
     workspaceResolver,
     gitContextService,
+  }).then(async () => {
+    await getProjectSnapshot(true);
+    void refreshStatusAndBootstrap("initial-workspace-sync");
   });
 
-  // ─────────────────────────────────────────────────────────────
-  // Workspace change sync
-  // ─────────────────────────────────────────────────────────────
   context.subscriptions.push(
     workspaceResolver.onDidChange(async (info) => {
       stateStore.updateWorkspace({
@@ -468,25 +1242,25 @@ export function activate(context: vscode.ExtensionContext): void {
         folderName: info.folderName,
       });
 
+      projectSnapshotCache = undefined;
+      projectSnapshotCacheKey = undefined;
+
       if (info.folderPath) {
         try {
           const gitContext = await gitContextService.detect(info.folderPath);
           stateStore.updateWorkspace({ git: gitContext });
         } catch (error: unknown) {
-          output.appendLine(
-            `[GitPilot] Failed to refresh git context: ${String(error)}`
-          );
+          appendOutputError("[GitPilot] Failed to refresh git context", error);
         }
       }
 
-      await vscode.commands.executeCommand("gitpilot.refreshStatus");
+      await getProjectSnapshot(true);
+      await refreshStatusAndBootstrap("workspace-change");
     })
   );
 
-  // ─────────────────────────────────────────────────────────────
-  // Workspace repo detection prompt
-  // ─────────────────────────────────────────────────────────────
   const workspaceContext = getWorkspaceContext();
+
   if (workspaceContext.workspaceRoot && !workspaceContext.isGitRepo) {
     setTimeout(() => {
       void ensureGitRepo();
@@ -504,6 +1278,14 @@ export function activate(context: vscode.ExtensionContext): void {
       );
     }
   }
+
+  if (!isWorkspaceTrusted()) {
+    output.appendLine(
+      "[GitPilot] Workspace is not trusted. Some features may be limited."
+    );
+  }
+
+  void logCommandAvailability();
 
   output.appendLine("[GitPilot] Extension activated.");
 }

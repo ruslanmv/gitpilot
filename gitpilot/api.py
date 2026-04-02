@@ -21,7 +21,7 @@ from .github_api import (
     github_request,
 )
 from .github_app import check_repo_write_access
-from .settings import AppSettings, get_settings, set_provider, update_settings, LLMProvider
+from .settings import AppSettings, get_settings, set_provider, update_settings, autoconfigure_local_provider, LLMProvider
 from .agentic import (
     generate_plan,
     execute_plan,
@@ -53,7 +53,11 @@ from .topology_registry import (
     get_saved_topology_preference,
     save_topology_preference,
 )
+import httpx
+import logging
+from fastapi import HTTPException
 
+logger = logging.getLogger(__name__)
 
 def _is_lite_mode_active() -> bool:
     """Check if Lite Mode should be used.
@@ -62,7 +66,7 @@ def _is_lite_mode_active() -> bool:
     - settings.lite_mode is True (explicit toggle), OR
     - the saved topology preference is "lite_mode" (selected in flow viewer)
     """
-    s = get_settings()
+    s = autoconfigure_local_provider()
     if s.lite_mode:
         return True
     pref = get_saved_topology_preference()
@@ -277,6 +281,7 @@ class SettingsResponse(BaseModel):
     claude: dict
     watsonx: dict
     ollama: dict
+    ollabridge: dict
     langflow_url: str
     has_langflow_plan_flow: bool
 
@@ -389,35 +394,28 @@ class SearchRequest(BaseModel):
 
 @app.get("/api/repos", response_model=PaginatedReposResponse)
 async def api_list_repos(
-    query: Optional[str] = Query(None, description="Search query (searches across ALL repositories)"),
-    page: int = Query(1, ge=1, description="Page number (starts at 1)"),
-    per_page: int = Query(100, ge=1, le=100, description="Results per page (max 100)"),
-    authorization: Optional[str] = Header(None),
+    query: str | None = Query(None, description="Search query"),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(100, ge=1, le=100),
+    authorization: str | None = Header(None),
 ):
-    """
-    List user repositories with enterprise-grade pagination and search.
-    Includes default_branch information for correct frontend routing.
-    """
     token = get_github_token(authorization)
 
     try:
         if query:
-            # SEARCH MODE: Search across ALL repositories
             result = await search_user_repos(
                 query=query,
                 page=page,
                 per_page=per_page,
-                token=token
+                token=token,
             )
         else:
-            # PAGINATION MODE: Return repos page by page
             result = await list_user_repos_paginated(
                 page=page,
                 per_page=per_page,
-                token=token
+                token=token,
             )
 
-        # --- FIXED: Mapping default_branch ---
         repos = [
             RepoSummary(
                 id=r["id"],
@@ -425,7 +423,7 @@ async def api_list_repos(
                 full_name=r["full_name"],
                 private=r["private"],
                 owner=r["owner"],
-                default_branch=r.get("default_branch", "main"),  # <--- CRITICAL FIX
+                default_branch=r.get("default_branch", "main"),
             )
             for r in result["repositories"]
         ]
@@ -439,19 +437,33 @@ async def api_list_repos(
             query=query,
         )
 
-    except Exception as e:
-        logging.exception("Error fetching repositories")
-        return JSONResponse(
-            content={
-                "error": f"Failed to fetch repositories: {str(e)}",
-                "repositories": [],
-                "page": page,
-                "per_page": per_page,
-                "has_more": False,
-            },
-            status_code=500
+    except httpx.ConnectTimeout:
+        logger.exception("GitHub connection timed out while fetching repositories")
+        raise HTTPException(
+            status_code=504,
+            detail="Timed out while connecting to GitHub. Please try again."
         )
 
+    except httpx.TimeoutException:
+        logger.exception("GitHub request timed out while fetching repositories")
+        raise HTTPException(
+            status_code=504,
+            detail="GitHub request timed out. Please try again."
+        )
+
+    except httpx.HTTPError as e:
+        logger.exception("GitHub HTTP error while fetching repositories")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to contact GitHub: {str(e)}"
+        )
+
+    except Exception as e:
+        logger.exception("Error fetching repositories")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unexpected error fetching repositories: {str(e)}"
+        )
 
 @app.get("/api/repos/all")
 async def api_list_all_repos(
@@ -587,19 +599,49 @@ async def api_put_file(
 # Settings Endpoints
 # ============================================================================
 
-@app.get("/api/settings", response_model=SettingsResponse)
-async def api_get_settings():
-    s: AppSettings = get_settings()
+def settings_response_from(s: AppSettings) -> SettingsResponse:
     return SettingsResponse(
         provider=s.provider,
-        providers=[LLMProvider.openai, LLMProvider.claude, LLMProvider.watsonx, LLMProvider.ollama],
+        providers=[
+            LLMProvider.openai,
+            LLMProvider.claude,
+            LLMProvider.watsonx,
+            LLMProvider.ollama,
+            LLMProvider.ollabridge,
+        ],
         openai=s.openai.model_dump(),
         claude=s.claude.model_dump(),
         watsonx=s.watsonx.model_dump(),
         ollama=s.ollama.model_dump(),
+        ollabridge=s.ollabridge.model_dump(),
         langflow_url=s.langflow_url,
         has_langflow_plan_flow=bool(s.langflow_plan_flow_id),
     )
+
+
+@app.get("/api/settings", response_model=SettingsResponse)
+async def api_get_settings():
+    """
+    Fast path:
+    Return persisted settings immediately without probing providers/models.
+
+    This keeps the Admin / LLM Settings page fast on first render.
+    """
+    s: AppSettings = get_settings()
+    return settings_response_from(s)
+
+
+@app.post("/api/settings/bootstrap", response_model=SettingsResponse)
+async def api_bootstrap_settings():
+    """
+    Slow path:
+    Perform local provider/model auto-configuration explicitly.
+
+    This can be called after the page renders, or on startup, without blocking
+    the first settings paint.
+    """
+    s: AppSettings = autoconfigure_local_provider()
+    return settings_response_from(s)
 
 
 @app.get("/api/settings/models", response_model=ProviderModelsResponse)
@@ -623,30 +665,41 @@ async def api_list_models(provider: Optional[LLMProvider] = Query(None)):
 
 @app.post("/api/settings/provider", response_model=SettingsResponse)
 async def api_set_provider(update: ProviderUpdate):
+    """
+    Provider changes may legitimately trigger local bootstrap, but only when
+    switching to local providers.
+    """
     s = set_provider(update.provider)
-    return SettingsResponse(
-        provider=s.provider,
-        providers=[LLMProvider.openai, LLMProvider.claude, LLMProvider.watsonx, LLMProvider.ollama],
-        openai=s.openai.model_dump(),
-        claude=s.claude.model_dump(),
-        watsonx=s.watsonx.model_dump(),
-        ollama=s.ollama.model_dump(),
-        langflow_url=s.langflow_url,
-        has_langflow_plan_flow=bool(s.langflow_plan_flow_id),
-    )
+
+    if s.provider in (LLMProvider.ollama, LLMProvider.ollabridge):
+        s = autoconfigure_local_provider(force=True)
+
+    return settings_response_from(s)
 
 
 @app.put("/api/settings/llm", response_model=SettingsResponse)
 async def api_update_llm_settings(updates: dict):
+    """
+    Update full LLM settings including provider-specific configs.
+
+    Important:
+    - Do NOT auto-probe providers here on every save.
+    - Saving should be fast and deterministic.
+    """
+    s = update_settings(updates)
+    return settings_response_from(s)
+
     """Update full LLM settings including provider-specific configs."""
     s = update_settings(updates)
+    s = autoconfigure_local_provider()
     return SettingsResponse(
         provider=s.provider,
-        providers=[LLMProvider.openai, LLMProvider.claude, LLMProvider.watsonx, LLMProvider.ollama],
+        providers=[LLMProvider.openai, LLMProvider.claude, LLMProvider.watsonx, LLMProvider.ollama, LLMProvider.ollabridge],
         openai=s.openai.model_dump(),
         claude=s.claude.model_dump(),
         watsonx=s.watsonx.model_dump(),
         ollama=s.ollama.model_dump(),
+        ollabridge=s.ollabridge.model_dump(),
         langflow_url=s.langflow_url,
         has_langflow_plan_flow=bool(s.langflow_plan_flow_id),
     )
@@ -2568,10 +2621,10 @@ async def api_status():
         StatusResponse, ProviderStatusResponse, ProviderName,
         WorkspaceCapabilitySummary, GithubStatusSummary, ProviderHealth,
     )
-    from gitpilot.settings import get_settings
+    from gitpilot.settings import autoconfigure_local_provider
     from gitpilot.github_api import get_github_status_summary
 
-    s = get_settings()
+    s = autoconfigure_local_provider()
     provider_summary = s.get_provider_summary()
 
     # Build provider status
@@ -2613,10 +2666,10 @@ async def api_status():
 @app.get("/api/providers/status")
 async def api_providers_status():
     """Get detailed status for the active provider."""
-    from gitpilot.settings import get_settings
+    from gitpilot.settings import autoconfigure_local_provider
     from gitpilot.llm_provider import test_provider_connection
 
-    s = get_settings()
+    s = autoconfigure_local_provider()
     summary = await test_provider_connection(s)
     return summary
 
@@ -2632,7 +2685,7 @@ async def api_providers_test(req: _ProviderTestRequest):
     from gitpilot.llm_provider import test_provider_connection
     import copy
 
-    s = get_settings()
+    s = autoconfigure_local_provider()
     # Apply test overrides temporarily
     test_settings = copy.deepcopy(s)
 

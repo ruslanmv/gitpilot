@@ -152,7 +152,16 @@ stop:
 
 ## Run tests
 test:
-	@echo "🧪 Running tests with pytest..."
+	@echo "🧪 Running tests with isolated GitPilot config..."
+	@TMP_CFG="$$(mktemp -d)"; \
+	echo "Using GITPILOT_CONFIG_DIR=$$TMP_CFG"; \
+	GITPILOT_CONFIG_DIR="$$TMP_CFG" GITPILOT_LITE_MODE=0 PYTHONWARNINGS="ignore::RuntimeWarning" $(UV) run pytest; \
+	STATUS=$$?; \
+	rm -rf "$$TMP_CFG"; \
+	exit $$STATUS
+
+test-fast:
+	@echo "🧪 Running tests (no isolation)..."
 	@$(UV) run pytest
 
 ## Lint code

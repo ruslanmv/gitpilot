@@ -6,6 +6,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
@@ -19,8 +20,10 @@ from gitpilot.models import (
 # Load .env file if it exists (from project root or current directory)
 load_dotenv()
 
-CONFIG_DIR = Path.home() / ".gitpilot"
+CONFIG_DIR = Path(os.getenv("GITPILOT_CONFIG_DIR", str(Path.home() / ".gitpilot")))
 CONFIG_FILE = CONFIG_DIR / "settings.json"
+
+logger = logging.getLogger(__name__)
 
 
 class LLMProvider(enum.StrEnum):
@@ -82,89 +85,118 @@ class AppSettings(BaseModel):
 
     @classmethod
     def from_disk(cls) -> AppSettings:
-        """Load settings from disk and merge with environment variables.
-
-        On Vercel or serverless environments, relies entirely on environment variables
-        since the filesystem is ephemeral.
         """
-        # Start with defaults or saved settings
-        if CONFIG_FILE.exists():
+        Load settings from disk and merge with environment variables.
+
+        Production behavior:
+        - Persisted settings are the primary source of truth for user-editable choices.
+        - `.env` is used to bootstrap defaults on first run when no config file exists.
+        - Secrets from environment variables are always merged in, so they never need
+          to be written to disk from the UI.
+        - Test runs can isolate config by setting GITPILOT_CONFIG_DIR.
+        """
+        config_exists = CONFIG_FILE.exists()
+
+        if config_exists:
             data = json.loads(CONFIG_FILE.read_text("utf-8"))
             settings = cls.model_validate(data)
         else:
             settings = cls()
 
-        # Override with environment variables (they take precedence)
-        env_provider = os.getenv("GITPILOT_PROVIDER")
-        if env_provider:
-            with contextlib.suppress(ValueError):
-                settings.provider = LLMProvider(env_provider.lower())
+        # ---------------------------------------------------------------------
+        # Secrets and connection settings always merge from environment.
+        # This lets operators provide credentials via .env / deployment config
+        # without overwriting the user's provider/model choices every restart.
+        # ---------------------------------------------------------------------
 
-        # Merge environment variables into provider configs
         # OpenAI
         if os.getenv("OPENAI_API_KEY"):
-            settings.openai.api_key = os.getenv("OPENAI_API_KEY")
-        if os.getenv("GITPILOT_OPENAI_MODEL"):
-            settings.openai.model = os.getenv("GITPILOT_OPENAI_MODEL")
+            settings.openai.api_key = os.getenv("OPENAI_API_KEY", "")
         if os.getenv("OPENAI_BASE_URL"):
-            settings.openai.base_url = os.getenv("OPENAI_BASE_URL")
+            settings.openai.base_url = os.getenv("OPENAI_BASE_URL", "")
 
         # Claude
         if os.getenv("ANTHROPIC_API_KEY"):
-            settings.claude.api_key = os.getenv("ANTHROPIC_API_KEY")
-        if os.getenv("GITPILOT_CLAUDE_MODEL"):
-            settings.claude.model = os.getenv("GITPILOT_CLAUDE_MODEL")
+            settings.claude.api_key = os.getenv("ANTHROPIC_API_KEY", "")
         if os.getenv("ANTHROPIC_BASE_URL"):
-            settings.claude.base_url = os.getenv("ANTHROPIC_BASE_URL")
+            settings.claude.base_url = os.getenv("ANTHROPIC_BASE_URL", "")
 
         # Watsonx
         if os.getenv("WATSONX_API_KEY"):
-            settings.watsonx.api_key = os.getenv("WATSONX_API_KEY")
+            settings.watsonx.api_key = os.getenv("WATSONX_API_KEY", "")
         if os.getenv("WATSONX_PROJECT_ID") or os.getenv("PROJECT_ID"):
             settings.watsonx.project_id = os.getenv(
                 "WATSONX_PROJECT_ID", os.getenv("PROJECT_ID", "")
             )
-        if os.getenv("GITPILOT_WATSONX_MODEL"):
-            settings.watsonx.model_id = os.getenv("GITPILOT_WATSONX_MODEL")
         if os.getenv("WATSONX_BASE_URL"):
-            settings.watsonx.base_url = os.getenv("WATSONX_BASE_URL")
+            settings.watsonx.base_url = os.getenv("WATSONX_BASE_URL", "")
 
         # Ollama
         if os.getenv("OLLAMA_BASE_URL"):
-            settings.ollama.base_url = os.getenv("OLLAMA_BASE_URL")
-        if os.getenv("GITPILOT_OLLAMA_MODEL"):
-            settings.ollama.model = os.getenv("GITPILOT_OLLAMA_MODEL")
+            settings.ollama.base_url = os.getenv("OLLAMA_BASE_URL", "")
 
-        # OllaBridge / OllaBridge Cloud
+        # OllaBridge
         if os.getenv("OLLABRIDGE_BASE_URL"):
-            settings.ollabridge.base_url = os.getenv("OLLABRIDGE_BASE_URL")
-        if os.getenv("GITPILOT_OLLABRIDGE_MODEL"):
-            settings.ollabridge.model = os.getenv("GITPILOT_OLLABRIDGE_MODEL")
+            settings.ollabridge.base_url = os.getenv("OLLABRIDGE_BASE_URL", "")
         if os.getenv("OLLABRIDGE_API_KEY"):
-            settings.ollabridge.api_key = os.getenv("OLLABRIDGE_API_KEY")
-
-        # Lite Mode
-        env_lite = os.getenv("GITPILOT_LITE_MODE", "").lower()
-        if env_lite in ("1", "true", "yes", "on"):
-            settings.lite_mode = True
-        elif env_lite in ("0", "false", "no", "off"):
-            settings.lite_mode = False
+            settings.ollabridge.api_key = os.getenv("OLLABRIDGE_API_KEY", "")
 
         # LangFlow (optional)
         if os.getenv("GITPILOT_LANGFLOW_URL"):
-            settings.langflow_url = os.getenv("GITPILOT_LANGFLOW_URL")
+            settings.langflow_url = os.getenv("GITPILOT_LANGFLOW_URL", "")
         if os.getenv("GITPILOT_LANGFLOW_API_KEY"):
             settings.langflow_api_key = os.getenv("GITPILOT_LANGFLOW_API_KEY")
         if os.getenv("GITPILOT_LANGFLOW_PLAN_FLOW_ID"):
             settings.langflow_plan_flow_id = os.getenv("GITPILOT_LANGFLOW_PLAN_FLOW_ID")
 
+        # Lite mode may be intentionally controlled by env in CI or deployments.
+        env_lite = os.getenv("GITPILOT_LITE_MODE", "").strip().lower()
+        if env_lite in ("1", "true", "yes", "on"):
+            settings.lite_mode = True
+        elif env_lite in ("0", "false", "no", "off"):
+            settings.lite_mode = False
+
+        # ---------------------------------------------------------------------
+        # First-run bootstrap defaults from environment.
+        # These only apply when no persisted config exists yet.
+        # This allows `.env` to help initial setup, while later VS Code changes
+        # remain persistent across restarts.
+        # ---------------------------------------------------------------------
+        if not config_exists:
+            env_provider = os.getenv("GITPILOT_PROVIDER")
+            if env_provider:
+                with contextlib.suppress(ValueError):
+                    settings.provider = LLMProvider(env_provider.lower())
+
+            if os.getenv("GITPILOT_OPENAI_MODEL"):
+                settings.openai.model = os.getenv("GITPILOT_OPENAI_MODEL", settings.openai.model)
+
+            if os.getenv("GITPILOT_CLAUDE_MODEL"):
+                settings.claude.model = os.getenv("GITPILOT_CLAUDE_MODEL", settings.claude.model)
+
+            if os.getenv("GITPILOT_WATSONX_MODEL"):
+                settings.watsonx.model_id = os.getenv(
+                    "GITPILOT_WATSONX_MODEL", settings.watsonx.model_id
+                )
+
+            if os.getenv("GITPILOT_OLLAMA_MODEL"):
+                settings.ollama.model = os.getenv("GITPILOT_OLLAMA_MODEL", settings.ollama.model)
+
+            if os.getenv("GITPILOT_OLLABRIDGE_MODEL"):
+                settings.ollabridge.model = os.getenv(
+                    "GITPILOT_OLLABRIDGE_MODEL", settings.ollabridge.model
+                )
+
         return settings
 
     def save(self) -> None:
-        """Save settings to disk. Skipped on Vercel (ephemeral filesystem)."""
-        # Skip saving on Vercel - filesystem is ephemeral
+        """
+        Save settings to disk.
+
+        Skipped on Vercel/serverless deployments where the filesystem is ephemeral.
+        """
         if os.getenv("GITPILOT_VERCEL_DEPLOYMENT") or os.getenv("VERCEL"):
-            logging.warning(
+            logger.warning(
                 "Settings persistence disabled on Vercel. "
                 "Use environment variables for configuration."
             )
@@ -173,7 +205,7 @@ class AppSettings(BaseModel):
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         CONFIG_FILE.write_text(self.model_dump_json(indent=2), "utf-8")
 
-    # ── Provider introspection helpers ────────────────────
+    # ── Provider introspection helpers ─────────────────────────────────────
 
     def is_provider_configured(self) -> bool:
         """Return True if the active provider has the required configuration."""
@@ -186,7 +218,9 @@ class AppSettings(BaseModel):
             return bool(self.watsonx.api_key and self.watsonx.project_id)
         if p == LLMProvider.ollama:
             return True
-        return p == LLMProvider.ollabridge
+        if p == LLMProvider.ollabridge:
+            return True
+        return False
 
     def get_effective_model(self) -> str | None:
         """Return the model string for the active provider."""
@@ -204,10 +238,14 @@ class AppSettings(BaseModel):
         return None
 
     def get_provider_summary(self) -> ProviderSummary:
-        """Build a :class:`ProviderSummary` for the active provider."""
+        """Build a ProviderSummary for the active provider."""
         p = self.provider
 
-        # --- source detection (.env vs settings) ---
+        # Source detection:
+        # - If there is no config file yet, and matching env vars exist, this is a bootstrap/env source.
+        # - Otherwise, treat user-facing settings as persistent settings, even if secrets still come from env.
+        config_exists = CONFIG_FILE.exists()
+
         env_key_map = {
             LLMProvider.openai: "OPENAI_API_KEY",
             LLMProvider.claude: "ANTHROPIC_API_KEY",
@@ -215,11 +253,13 @@ class AppSettings(BaseModel):
             LLMProvider.ollama: "OLLAMA_BASE_URL",
             LLMProvider.ollabridge: "OLLABRIDGE_BASE_URL",
         }
+
         source: str = (
-            ".env" if os.getenv(env_key_map.get(p, "")) else "settings"
+            ".env"
+            if (not config_exists and os.getenv(env_key_map.get(p, "")))
+            else "settings"
         )
 
-        # --- per-provider fields ---
         if p == LLMProvider.openai:
             model = self.openai.model
             base_url = self.openai.base_url or None
@@ -269,35 +309,171 @@ def get_settings() -> AppSettings:
     return _settings
 
 
+def reload_settings() -> AppSettings:
+    """
+    Reload settings from disk/environment.
+
+    Useful in tests and in controlled runtime refresh paths.
+    """
+    global _settings  # noqa: PLW0602
+    _settings = AppSettings.from_disk()
+    return _settings
+
+
+_AUTOCONFIG_LAST_RUN_TS: float = 0.0
+_AUTOCONFIG_TTL_SECONDS: float = 20.0
+
+
+def autoconfigure_local_provider(force: bool = False) -> AppSettings:
+    """
+    Prefer a zero-config local provider when it is available.
+
+    Performance improvements:
+    - Uses a TTL so repeated calls do not re-probe local providers constantly.
+    - Supports force=True for explicit bootstrap actions.
+    - Keeps cloud-provider user choices intact.
+    - Only switches among local providers when appropriate.
+
+    Rules:
+    - Never override an explicitly configured cloud provider.
+    - If the active provider is ollama or ollabridge, pick a valid default model.
+    - If the app is still on the local default provider but has no model, prefer Ollama first.
+    """
+    global _settings  # noqa: PLW0602
+    global _AUTOCONFIG_LAST_RUN_TS  # noqa: PLW0603
+
+    import time
+
+    now = time.time()
+    if not force and (now - _AUTOCONFIG_LAST_RUN_TS) < _AUTOCONFIG_TTL_SECONDS:
+      return _settings
+
+    try:
+        from gitpilot.model_catalog import list_models_for_provider
+
+        available: dict[LLMProvider, list[str]] = {}
+        for provider in (LLMProvider.ollama, LLMProvider.ollabridge):
+            models, _error = list_models_for_provider(provider, _settings)
+            if models:
+                available[provider] = models
+
+        _AUTOCONFIG_LAST_RUN_TS = now
+
+        if not available:
+            return _settings
+
+        current = _settings.provider
+        current_model = _settings.get_effective_model()
+        changed = False
+
+        # Only auto-switch among local providers.
+        auto_switch_allowed = current in (
+            LLMProvider.ollama,
+            LLMProvider.ollabridge,
+        )
+
+        preferred = current
+        if auto_switch_allowed:
+            if current == LLMProvider.ollabridge and LLMProvider.ollama in available:
+                preferred = LLMProvider.ollama
+            elif current not in available:
+                preferred = (
+                    LLMProvider.ollama
+                    if LLMProvider.ollama in available
+                    else next(iter(available))
+                )
+
+        if preferred in available and preferred != current:
+            _settings.provider = preferred
+            current = preferred
+            changed = True
+
+        selected_provider = _settings.provider
+        if selected_provider in available:
+            models = available[selected_provider]
+            if not current_model or current_model not in models:
+                default_model = models[0]
+                if selected_provider == LLMProvider.ollama:
+                    _settings.ollama.model = default_model
+                elif selected_provider == LLMProvider.ollabridge:
+                    _settings.ollabridge.model = default_model
+                changed = True
+
+        if changed:
+            _settings.save()
+
+    except Exception as exc:
+        logger.debug("Local provider autoconfiguration skipped: %s", exc)
+        return _settings
+
+    return _settings
+
 def set_provider(provider: LLMProvider) -> AppSettings:
+    global _settings  # noqa: PLW0602
     _settings.provider = provider
     _settings.save()
     return _settings
 
 
-def update_settings(updates: dict) -> AppSettings:
-    """Update settings with partial or full configuration."""
+def _merge_model_config(
+    existing: BaseModel,
+    incoming: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Merge partial provider updates into an existing config model.
+
+    This prevents API updates like {"model": "..."} from wiping out api_key/base_url.
+    """
+    current = existing.model_dump()
+    current.update(incoming)
+    return current
+
+
+def update_settings(updates: dict[str, Any]) -> AppSettings:
+    """
+    Update settings with partial or full configuration.
+
+    Important behavior:
+    - Partial provider updates are merged into existing configs.
+    - User changes made from VS Code persist to disk.
+    - Environment secrets are still layered back in on next reload.
+    """
     global _settings  # noqa: PLW0602
 
-    # Update provider if present
     if "provider" in updates:
         _settings.provider = LLMProvider(updates["provider"])
 
-    # Update provider-specific configs
     if "openai" in updates:
-        _settings.openai = OpenAIConfig(**updates["openai"])
-    if "claude" in updates:
-        _settings.claude = ClaudeConfig(**updates["claude"])
-    if "watsonx" in updates:
-        _settings.watsonx = WatsonxConfig(**updates["watsonx"])
-    if "ollama" in updates:
-        _settings.ollama = OllamaConfig(**updates["ollama"])
-    if "ollabridge" in updates:
-        _settings.ollabridge = OllaBridgeConfig(**updates["ollabridge"])
+        merged = _merge_model_config(_settings.openai, updates["openai"])
+        _settings.openai = OpenAIConfig(**merged)
 
-    # Lite mode toggle
+    if "claude" in updates:
+        merged = _merge_model_config(_settings.claude, updates["claude"])
+        _settings.claude = ClaudeConfig(**merged)
+
+    if "watsonx" in updates:
+        merged = _merge_model_config(_settings.watsonx, updates["watsonx"])
+        _settings.watsonx = WatsonxConfig(**merged)
+
+    if "ollama" in updates:
+        merged = _merge_model_config(_settings.ollama, updates["ollama"])
+        _settings.ollama = OllamaConfig(**merged)
+
+    if "ollabridge" in updates:
+        merged = _merge_model_config(_settings.ollabridge, updates["ollabridge"])
+        _settings.ollabridge = OllaBridgeConfig(**merged)
+
     if "lite_mode" in updates:
         _settings.lite_mode = bool(updates["lite_mode"])
+
+    if "langflow_url" in updates:
+        _settings.langflow_url = updates["langflow_url"] or _settings.langflow_url
+
+    if "langflow_api_key" in updates:
+        _settings.langflow_api_key = updates["langflow_api_key"]
+
+    if "langflow_plan_flow_id" in updates:
+        _settings.langflow_plan_flow_id = updates["langflow_plan_flow_id"]
 
     _settings.save()
     return _settings

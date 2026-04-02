@@ -952,7 +952,7 @@ export class GitPilotPanel implements vscode.WebviewViewProvider {
           </div>
           <div class="composer-help">Enter to send · Shift+Enter for newline</div>
           <div id="chat-blocked" class="chat-blocked hidden">
-            Chat is unavailable until setup is complete.
+            GitPilot is finishing setup. This usually takes only a moment.
           </div>
         </div>
       </div>

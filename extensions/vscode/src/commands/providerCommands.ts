@@ -8,15 +8,51 @@ import { SettingsClient } from "../api/settingsClient";
 import { PROVIDER_LABELS, PROVIDER_DESCRIPTIONS } from "../core/constants";
 import { ProviderName } from "../core/types";
 
+async function autoSelectFirstModelIfPossible(
+  provider: ProviderName,
+  stateStore: StateStore,
+  settingsClient: SettingsClient
+): Promise<string | undefined> {
+  if (provider !== "ollama" && provider !== "ollabridge") {
+    return undefined;
+  }
+
+  try {
+    const response = await settingsClient.listModels(provider);
+    const models = response.models || [];
+    if (!models.length) {
+      return undefined;
+    }
+
+    const selectedModel = models[0];
+    await settingsClient.updateProviderModel(provider, selectedModel);
+    stateStore.updateProvider({
+      providerName: provider,
+      configured: true,
+      model: selectedModel,
+    });
+
+    return selectedModel;
+  } catch {
+    return undefined;
+  }
+}
+
 export function registerProviderCommands(
   context: vscode.ExtensionContext,
   stateStore: StateStore,
   settingsClient: SettingsClient
 ): void {
-  // ── Select Provider (V2) ────────────────────────────────
   context.subscriptions.push(
     vscode.commands.registerCommand("gitpilot.selectProviderV2", async () => {
-      const providers: ProviderName[] = ["openai", "claude", "watsonx", "ollama", "ollabridge"];
+      const providers: ProviderName[] = [
+        "openai",
+        "claude",
+        "watsonx",
+        "ollama",
+        "ollabridge",
+      ];
+
       const items = providers.map((p) => ({
         label: PROVIDER_LABELS[p] || p,
         description: PROVIDER_DESCRIPTIONS[p] || "",
@@ -28,43 +64,54 @@ export function registerProviderCommands(
         title: "GitPilot — Select Provider",
       });
 
-      if (selected) {
-        try {
-          await settingsClient.setProvider(selected.provider);
-          stateStore.updateProvider({
-            providerName: selected.provider,
-            configured: true,
-          });
-          vscode.window.showInformationMessage(
-            `Provider set to ${PROVIDER_LABELS[selected.provider]}`
-          );
-          vscode.commands.executeCommand("gitpilot.refreshStatus");
-        } catch (err: any) {
-          vscode.window.showErrorMessage(`Failed to set provider: ${err.message || err}`);
-        }
+      if (!selected) {
+        return;
+      }
+
+      try {
+        await settingsClient.setProvider(selected.provider);
+
+        stateStore.updateProvider({
+          providerName: selected.provider,
+          configured: true,
+        });
+
+        const autoModel = await autoSelectFirstModelIfPossible(
+          selected.provider,
+          stateStore,
+          settingsClient
+        );
+
+        vscode.window.showInformationMessage(
+          autoModel
+            ? `Provider set to ${PROVIDER_LABELS[selected.provider]} · using ${autoModel}`
+            : `Provider set to ${PROVIDER_LABELS[selected.provider]}`
+        );
+
+        await vscode.commands.executeCommand("gitpilot.refreshStatus");
+      } catch (err: any) {
+        vscode.window.showErrorMessage(
+          `Failed to set provider: ${err.message || err}`
+        );
       }
     })
   );
 
-  // ── Select Model (V2) ──────────────────────────────────
   context.subscriptions.push(
     vscode.commands.registerCommand("gitpilot.selectModelV2", async () => {
       try {
         const { provider, config } = await settingsClient.getActiveProviderConfig();
         const currentModel =
-          (config as any).model ||
-          (config as any).model_id ||
-          "";
+          (config as any).model || (config as any).model_id || "";
 
         let models: string[] = [];
 
-        // Prefer live model listing when available.
         if (provider === "ollabridge" || provider === "ollama") {
           try {
             const response = await settingsClient.listModels(provider);
             models = response.models || [];
           } catch {
-            // Fall through to manual input
+            // manual fallback below
           }
         }
 
@@ -74,14 +121,20 @@ export function registerProviderCommands(
             value: currentModel,
             placeHolder: "e.g. qwen2.5-coder, llama3, gpt-4o",
           });
+
           if (!manual) {
             return;
           }
 
           await settingsClient.updateProviderModel(provider, manual);
-          stateStore.updateProvider({ model: manual });
+          stateStore.updateProvider({
+            providerName: provider,
+            configured: true,
+            model: manual,
+          });
+
           vscode.window.showInformationMessage(`Model set to ${manual}`);
-          vscode.commands.executeCommand("gitpilot.refreshStatus");
+          await vscode.commands.executeCommand("gitpilot.refreshStatus");
           return;
         }
 
@@ -101,16 +154,22 @@ export function registerProviderCommands(
         }
 
         await settingsClient.updateProviderModel(provider, selected.model);
-        stateStore.updateProvider({ model: selected.model });
+        stateStore.updateProvider({
+          providerName: provider,
+          configured: true,
+          model: selected.model,
+        });
+
         vscode.window.showInformationMessage(`Model set to ${selected.model}`);
-        vscode.commands.executeCommand("gitpilot.refreshStatus");
+        await vscode.commands.executeCommand("gitpilot.refreshStatus");
       } catch (err: any) {
-        vscode.window.showErrorMessage(`Failed to change model: ${err.message || err}`);
+        vscode.window.showErrorMessage(
+          `Failed to change model: ${err.message || err}`
+        );
       }
     })
   );
 
-  // ── LLM Settings Menu ──────────────────────────────────
   context.subscriptions.push(
     vscode.commands.registerCommand("gitpilot.openLlmSettings", async () => {
       try {
@@ -150,12 +209,14 @@ export function registerProviderCommands(
             value: (config as any).base_url || "",
             placeHolder: "http://localhost:3000",
           });
+
           if (typeof baseUrl !== "string") {
             return;
           }
+
           await settingsClient.updateProviderBaseUrl(provider, baseUrl);
           vscode.window.showInformationMessage("Base URL updated");
-          vscode.commands.executeCommand("gitpilot.refreshStatus");
+          await vscode.commands.executeCommand("gitpilot.refreshStatus");
           return;
         }
 
@@ -177,6 +238,7 @@ export function registerProviderCommands(
             value: (config as any).api_key || "",
             password: true,
           });
+
           if (typeof apiKey !== "string") {
             return;
           }
@@ -184,8 +246,9 @@ export function registerProviderCommands(
           await settingsClient.updateProviderConfig(provider as any, {
             api_key: apiKey,
           } as any);
+
           vscode.window.showInformationMessage("API key updated");
-          vscode.commands.executeCommand("gitpilot.refreshStatus");
+          await vscode.commands.executeCommand("gitpilot.refreshStatus");
           return;
         }
 
@@ -195,6 +258,7 @@ export function registerProviderCommands(
               provider,
               [provider]: config,
             } as any);
+
             if (result.health === "ok") {
               vscode.window.showInformationMessage(
                 `Connection OK — ${result.details || "Provider is reachable"}`
@@ -218,10 +282,9 @@ export function registerProviderCommands(
     })
   );
 
-  // Keep legacy command name as alias
   context.subscriptions.push(
     vscode.commands.registerCommand("gitpilot.openProviderSetupV2", async () => {
-      vscode.commands.executeCommand("gitpilot.selectProviderV2");
+      await vscode.commands.executeCommand("gitpilot.selectProviderV2");
     })
   );
 }

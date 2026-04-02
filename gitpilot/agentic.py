@@ -1249,12 +1249,35 @@ async def dispatch_request(
     # ---------- Lite Mode check (additive, non-destructive) ----------
     # Lite mode activates if EITHER the setting is on OR the topology is "lite_mode"
     from .settings import get_settings as _get_settings
-    from .topology_registry import get_saved_topology_preference as _get_topo_pref
+
     _current_settings = _get_settings()
-    _lite_active = _current_settings.lite_mode or _get_topo_pref() == "lite_mode"
+    _saved_topology = get_saved_topology_preference()
+
+    # Explicit topology_id must always win.
+    if topology_id:
+        _resolved_tid = topology_id
+    else:
+        _resolved_tid = _saved_topology
+
+    # Lite mode only applies when explicitly selected or globally enabled,
+    # and it must not override an explicit non-lite topology choice.
+    _lite_active = (
+        _current_settings.lite_mode
+        or _resolved_tid == "lite_mode"
+    )
+
+    # Do not force lite mode when the caller explicitly requested another topology.
+    if topology_id and topology_id != "lite_mode":
+        _lite_active = False
+
     if _lite_active:
         logger.info("[GitPilot Lite] Lite Mode active — using simplified single-agent path")
-        plan = await generate_plan_lite(user_request, repo_full_name, token=token, branch_name=branch_name)
+        plan = await generate_plan_lite(
+            user_request,
+            repo_full_name,
+            token=token,
+            branch_name=branch_name,
+        )
         return {
             "category": "plan_execute",
             "workflow": "plan_execute",
@@ -1262,6 +1285,10 @@ async def dispatch_request(
             "message": "Lite Mode: Plan generated. Review and approve to execute.",
             "lite_mode": True,
         }
+
+    _active_topology = None
+    if _resolved_tid:
+        _active_topology = get_topology(_resolved_tid)
 
     # ---------- Topology-aware routing (additive) ----------
     _active_topology = None
