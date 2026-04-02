@@ -2,7 +2,7 @@
   "name": "gitpilot-vscode",
   "displayName": "GitPilot — AI Agent for GitHub",
   "description": "Enterprise agentic AI assistant for GitHub repositories — multi-agent orchestration, security scanning, MCP support, local editing, and multi-model AI powered by CrewAI",
-  "version": "0.2.4",
+  "version": "0.1.4",
   "publisher": "ruslanmv",
   "license": "MIT",
   "icon": "resources/icon.png",
