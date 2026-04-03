@@ -2,6 +2,7 @@
 .vscode-test/**
 src/**
 !src/**/*.d.ts
+!src/ui/webview/gitpilotWorkspaceTemplate.html
 **/*.map
 .gitignore
 tsconfig.json

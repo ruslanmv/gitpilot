@@ -8,15 +8,17 @@
   <style>
     :root {
       --bg: var(--vscode-sideBar-background);
-      --panel: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
-      --panel-alt: var(--vscode-editor-background, var(--vscode-sideBar-background));
+      --surface: var(--vscode-sideBar-background);
+      --surface-2: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
+      --surface-3: var(--vscode-editor-background, var(--vscode-sideBar-background));
       --fg: var(--vscode-foreground);
       --muted: var(--vscode-descriptionForeground);
-      --border: var(--vscode-panel-border);
+      --border: color-mix(in srgb, var(--vscode-panel-border) 84%, transparent);
+      --border-strong: color-mix(in srgb, var(--vscode-panel-border) 100%, transparent);
       --button: var(--vscode-button-background);
       --button-fg: var(--vscode-button-foreground);
       --button-hover: var(--vscode-button-hoverBackground);
-      --secondary: var(--vscode-button-secondaryBackground, rgba(127,127,127,.18));
+      --secondary: var(--vscode-button-secondaryBackground, rgba(127,127,127,.12));
       --secondary-fg: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
       --input-bg: var(--vscode-input-background);
       --input-fg: var(--vscode-input-foreground);
@@ -24,68 +26,695 @@
       --focus: var(--vscode-focusBorder);
       --link: var(--vscode-textLink-foreground);
       --accent: var(--vscode-textLink-foreground);
+      --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
       --success: var(--vscode-testing-iconPassed, #4caf50);
+      --success-soft: color-mix(in srgb, var(--success) 12%, transparent);
       --warning: var(--vscode-testing-iconQueued, #d7ba7d);
+      --warning-soft: color-mix(in srgb, var(--warning) 12%, transparent);
       --danger: var(--vscode-errorForeground, #f14c4c);
-      --radius: 12px;
+      --danger-soft: color-mix(in srgb, var(--danger) 12%, transparent);
+      --radius-xl: 16px;
+      --radius-lg: 13px;
+      --radius-md: 10px;
       --radius-sm: 8px;
-      --shadow: 0 8px 28px rgba(0,0,0,.12);
+      --shadow-soft: 0 10px 24px rgba(0, 0, 0, .08);
+      --font-xs: 10px;
+      --font-sm: 11px;
+      --font-md: 12px;
+      --font-lg: 14px;
+      --font-xl: 16px;
+      --transition: 140ms ease;
     }
+
     * { box-sizing: border-box; }
-    html, body { height: 100%; }
-    body { margin: 0; padding: 10px; font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: var(--fg); background: var(--bg); }
-    button, input, textarea { font: inherit; }
-    button { border: 1px solid transparent; border-radius: 10px; padding: 7px 10px; cursor: pointer; background: var(--button); color: var(--button-fg); }
-    button:hover { background: var(--button-hover); }
-    button.secondary { background: var(--secondary); color: var(--secondary-fg); border-color: var(--border); }
-    button.ghost { background: transparent; color: var(--link); border-color: var(--border); }
-    button:focus-visible, textarea:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
-    button[disabled] { opacity: .6; cursor: not-allowed; }
-    .app { display: flex; flex-direction: column; gap: 10px; min-height: calc(100vh - 20px); }
-    .surface { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
-    .header { padding: 14px; display: grid; gap: 10px; }
-    .header-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-    .header-title { font-size: 15px; font-weight: 700; line-height: 1.2; margin: 0; }
-    .header-subtitle, .header-meta { color: var(--muted); font-size: 11px; line-height: 1.4; }
-    .header-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-    .section { padding: 12px; display: grid; gap: 10px; }
-    .section-title { font-size: 11px; font-weight: 700; letter-spacing: .7px; text-transform: uppercase; color: var(--muted); margin: 0; }
-    .section-copy { color: var(--muted); font-size: 12px; line-height: 1.45; }
-    .active-task-grid { display: grid; gap: 8px; }
-    .task-title { font-size: 14px; font-weight: 700; }
-    .task-meta-row { display: flex; gap: 8px; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
-    .pill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 999px; padding: 4px 9px; background: rgba(127,127,127,.08); }
-    .progress { display: grid; gap: 6px; }
-    .progress-track { width: 100%; height: 8px; border-radius: 999px; background: rgba(127,127,127,.18); overflow: hidden; }
-    .progress-bar { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent), #8ed2ff); width: 0%; transition: width .2s ease; }
-    .progress-label { color: var(--muted); font-size: 11px; }
-    .plan-list, .item-list, .chat-list, .context-list, .recent-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-    .plan-item, .item-row, .chat-item, .context-row, .recent-row { background: var(--panel-alt); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; }
-    .plan-item { display: grid; grid-template-columns: 22px 1fr; gap: 10px; align-items: start; }
-    .plan-marker { width: 22px; height: 22px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; border: 1px solid var(--border); color: var(--muted); background: rgba(127,127,127,.08); }
-    .plan-item.done .plan-marker { color: var(--success); }
-    .plan-item.active .plan-marker { color: var(--accent); }
-    .plan-title { font-size: 12px; font-weight: 600; }
-    .plan-desc { color: var(--muted); font-size: 11px; margin-top: 3px; line-height: 1.4; }
-    .item-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-    .item-title { font-size: 12px; font-weight: 600; word-break: break-word; }
-    .item-meta { color: var(--muted); font-size: 11px; margin-top: 4px; }
-    .item-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-    .mini-tag { display: inline-flex; align-items: center; border-radius: 999px; padding: 2px 7px; border: 1px solid var(--border); color: var(--muted); font-size: 10px; font-weight: 700; }
-    .chat-list { max-height: 250px; overflow: auto; }
-    .chat-item.user { border-left: 3px solid var(--accent); }
-    .chat-item.assistant { border-left: 3px solid var(--success); }
-    .chat-item.system { border-left: 3px solid var(--warning); }
-    .chat-role { font-size: 10px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
-    .chat-content { font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
-    .chat-compose { display: grid; gap: 8px; }
-    textarea { width: 100%; min-height: 84px; resize: vertical; border-radius: 10px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--input-fg); padding: 10px; }
-    .action-grid, .quick-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-    .quick-grid button, .action-grid button { width: 100%; }
-    .empty { color: var(--muted); font-size: 12px; line-height: 1.45; padding: 4px 0; }
-    .hidden { display: none !important; }
-    .banner { border: 1px solid var(--danger); color: var(--danger); background: rgba(241,76,76,.08); }
-    .footer-note { color: var(--muted); font-size: 10px; text-align: center; padding: 4px 0 2px; }
+
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size);
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    body {
+      padding: 10px;
+    }
+
+    button, input, textarea {
+      font: inherit;
+    }
+
+    button {
+      appearance: none;
+      border: 1px solid transparent;
+      border-radius: 11px;
+      padding: 9px 12px;
+      cursor: pointer;
+      background: var(--button);
+      color: var(--button-fg);
+      transition:
+        background var(--transition),
+        border-color var(--transition),
+        opacity var(--transition),
+        transform var(--transition);
+    }
+
+    button:hover {
+      background: var(--button-hover);
+    }
+
+    button:active {
+      transform: translateY(1px);
+    }
+
+    button.secondary {
+      background: var(--secondary);
+      color: var(--secondary-fg);
+      border-color: var(--border);
+    }
+
+    button.ghost {
+      background: transparent;
+      color: var(--link);
+      border-color: var(--border);
+    }
+
+    button.quiet {
+      background: transparent;
+      color: var(--muted);
+      border-color: transparent;
+      padding: 6px 8px;
+    }
+
+    button.quiet:hover {
+      background: color-mix(in srgb, var(--fg) 6%, transparent);
+      color: var(--fg);
+    }
+
+    button:focus-visible,
+    textarea:focus-visible {
+      outline: 1px solid var(--focus);
+      outline-offset: 1px;
+    }
+
+    button[disabled] {
+      opacity: .58;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 88px;
+      resize: vertical;
+      border-radius: 12px;
+      border: 1px solid var(--input-border);
+      background: var(--input-bg);
+      color: var(--input-fg);
+      padding: 12px;
+      line-height: 1.55;
+    }
+
+    .app {
+      display: grid;
+      gap: 10px;
+      min-height: calc(100vh - 20px);
+      align-content: start;
+    }
+
+    .surface {
+      background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--surface-2) 74%, transparent),
+        color-mix(in srgb, var(--surface) 100%, transparent)
+      );
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow-soft);
+      overflow: hidden;
+    }
+
+    .header {
+      position: relative;
+      padding: 16px 16px 14px;
+      display: grid;
+      gap: 12px;
+      background:
+        radial-gradient(circle at top right, color-mix(in srgb, var(--accent) 12%, transparent), transparent 34%),
+        linear-gradient(180deg, color-mix(in srgb, var(--surface-3) 82%, transparent), color-mix(in srgb, var(--surface) 100%, transparent));
+    }
+
+    .header-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-size: var(--font-xs);
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 8px;
+      font-weight: 700;
+    }
+
+    .eyebrow-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--success);
+      box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 15%, transparent);
+    }
+
+    .header-title {
+      font-size: var(--font-xl);
+      font-weight: 800;
+      line-height: 1.18;
+      letter-spacing: -.01em;
+      margin: 0;
+    }
+
+    .header-subtitle,
+    .header-meta {
+      color: var(--muted);
+      font-size: var(--font-sm);
+      line-height: 1.45;
+    }
+
+    .header-subtitle {
+      margin-top: 5px;
+    }
+
+    .header-meta {
+      margin-top: 2px;
+    }
+
+    .header-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      max-width: 180px;
+      flex-shrink: 0;
+    }
+
+    .status-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 28px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 4px 10px;
+      background: color-mix(in srgb, var(--surface-3) 88%, transparent);
+      color: var(--fg);
+      font-size: var(--font-sm);
+      white-space: nowrap;
+    }
+
+    .pill.muted {
+      color: var(--muted);
+    }
+
+    .pill-accent {
+      background: var(--accent-soft);
+      border-color: color-mix(in srgb, var(--accent) 20%, var(--border));
+    }
+
+    .pill-success {
+      background: var(--success-soft);
+      border-color: color-mix(in srgb, var(--success) 22%, var(--border));
+    }
+
+    .pill-warning {
+      background: var(--warning-soft);
+      border-color: color-mix(in srgb, var(--warning) 22%, var(--border));
+    }
+
+    .pill-danger {
+      background: var(--danger-soft);
+      border-color: color-mix(in srgb, var(--danger) 22%, var(--border));
+    }
+
+    .section {
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .section.compact {
+      gap: 10px;
+    }
+
+    .section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .section-title {
+      font-size: var(--font-sm);
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 0;
+    }
+
+    .section-copy {
+      color: var(--muted);
+      font-size: var(--font-md);
+      line-height: 1.55;
+    }
+
+    .section-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+
+    .context-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .context-chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 32px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: color-mix(in srgb, var(--surface-3) 90%, transparent);
+      color: var(--fg);
+      font-size: var(--font-md);
+      line-height: 1.3;
+    }
+
+    .context-chip strong {
+      margin-right: 5px;
+      font-weight: 700;
+      color: var(--muted);
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .quick-card {
+      display: grid;
+      gap: 6px;
+      align-content: start;
+      padding: 12px;
+      min-height: 78px;
+      border-radius: var(--radius-lg);
+      border: 1px solid var(--border);
+      background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--surface-3) 94%, transparent),
+        color-mix(in srgb, var(--surface-2) 100%, transparent)
+      );
+      text-align: left;
+    }
+
+    .quick-card:hover {
+      border-color: color-mix(in srgb, var(--accent) 26%, var(--border));
+      background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--surface-3) 94%, var(--accent-soft)),
+        color-mix(in srgb, var(--surface-2) 100%, transparent)
+      );
+    }
+
+    .quick-card-title {
+      font-size: var(--font-md);
+      font-weight: 700;
+      color: var(--fg);
+    }
+
+    .quick-card-copy {
+      font-size: var(--font-sm);
+      line-height: 1.45;
+      color: var(--muted);
+    }
+
+    .active-task-grid {
+      display: grid;
+      gap: 10px;
+    }
+
+    .task-title {
+      font-size: var(--font-lg);
+      font-weight: 700;
+      line-height: 1.35;
+    }
+
+    .task-meta-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: var(--font-md);
+    }
+
+    .progress {
+      display: grid;
+      gap: 7px;
+    }
+
+    .progress-track {
+      width: 100%;
+      height: 8px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--fg) 10%, transparent);
+      overflow: hidden;
+    }
+
+    .progress-bar {
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 42%, white));
+      width: 0%;
+      transition: width .2s ease;
+    }
+
+    .progress-label {
+      color: var(--muted);
+      font-size: var(--font-sm);
+    }
+
+    .plan-list,
+    .item-list,
+    .chat-list,
+    .recent-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 8px;
+    }
+
+    .plan-item,
+    .item-row,
+    .chat-item,
+    .recent-row {
+      background: var(--surface-3);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 10px;
+    }
+
+    .plan-item {
+      display: grid;
+      grid-template-columns: 22px 1fr;
+      gap: 10px;
+      align-items: start;
+    }
+
+    .plan-marker {
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: var(--font-sm);
+      font-weight: 800;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      background: color-mix(in srgb, var(--fg) 6%, transparent);
+    }
+
+    .plan-item.done .plan-marker {
+      color: var(--success);
+      background: var(--success-soft);
+    }
+
+    .plan-item.active .plan-marker {
+      color: var(--accent);
+      background: var(--accent-soft);
+    }
+
+    .plan-item.failed .plan-marker {
+      color: var(--danger);
+      background: var(--danger-soft);
+    }
+
+    .plan-title {
+      font-size: var(--font-md);
+      font-weight: 700;
+      line-height: 1.4;
+    }
+
+    .plan-desc {
+      color: var(--muted);
+      font-size: var(--font-sm);
+      margin-top: 3px;
+      line-height: 1.45;
+    }
+
+    .item-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .item-title {
+      font-size: var(--font-md);
+      font-weight: 700;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+
+    .item-meta {
+      color: var(--muted);
+      font-size: var(--font-sm);
+      margin-top: 4px;
+      line-height: 1.45;
+    }
+
+    .item-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-end;
+      flex-shrink: 0;
+    }
+
+    .mini-tag {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 3px 8px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-size: var(--font-xs);
+      font-weight: 800;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      background: color-mix(in srgb, var(--surface-2) 90%, transparent);
+    }
+
+    .chat-shell {
+      display: grid;
+      gap: 10px;
+    }
+
+    .chat-list {
+      max-height: 300px;
+      overflow: auto;
+      padding-right: 2px;
+    }
+
+    .chat-item {
+      position: relative;
+      padding: 11px 12px;
+      border-left: 3px solid transparent;
+    }
+
+    .chat-item.user {
+      border-left-color: var(--accent);
+    }
+
+    .chat-item.assistant {
+      border-left-color: var(--success);
+    }
+
+    .chat-item.system {
+      border-left-color: var(--warning);
+    }
+
+    .chat-role-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 7px;
+    }
+
+    .chat-role {
+      font-size: var(--font-xs);
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .chat-time {
+      color: var(--muted);
+      font-size: var(--font-xs);
+    }
+
+    .chat-content {
+      font-size: var(--font-md);
+      line-height: 1.58;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .chat-compose {
+      display: grid;
+      gap: 8px;
+    }
+
+    .compose-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--muted);
+      font-size: var(--font-sm);
+    }
+
+    .action-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .empty {
+      color: var(--muted);
+      font-size: var(--font-md);
+      line-height: 1.5;
+      padding: 2px 0;
+    }
+
+    .notice-banner {
+      border-color: color-mix(in srgb, var(--warning) 32%, var(--border));
+      background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--warning) 8%, transparent),
+        color-mix(in srgb, var(--surface-2) 100%, transparent)
+      );
+    }
+
+    .notice-banner.danger {
+      border-color: color-mix(in srgb, var(--danger) 36%, var(--border));
+      background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--danger) 9%, transparent),
+        color-mix(in srgb, var(--surface-2) 100%, transparent)
+      );
+    }
+
+    .footer-note {
+      color: var(--muted);
+      font-size: var(--font-xs);
+      text-align: center;
+      padding-top: 2px;
+      line-height: 1.5;
+    }
+
+    .busy-overlay {
+      position: fixed;
+      inset: auto 14px 14px 14px;
+      z-index: 50;
+      display: none;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: color-mix(in srgb, var(--surface-3) 96%, transparent);
+      box-shadow: var(--shadow-soft);
+      backdrop-filter: blur(8px);
+    }
+
+    .busy-overlay.visible {
+      display: flex;
+    }
+
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border-radius: 999px;
+      border: 2px solid color-mix(in srgb, var(--accent) 24%, transparent);
+      border-top-color: var(--accent);
+      animation: spin .9s linear infinite;
+      flex-shrink: 0;
+    }
+
+    .busy-text {
+      font-size: var(--font-sm);
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    @media (max-width: 520px) {
+      .grid-2,
+      .action-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .header-top,
+      .section-head,
+      .compose-meta,
+      .item-head {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .header-actions,
+      .item-actions {
+        justify-content: flex-start;
+        max-width: none;
+      }
+    }
   </style>
 </head>
 <body>
@@ -93,312 +722,728 @@
     <section class="surface header">
       <div class="header-top">
         <div>
-          <h1 class="header-title">GitPilot Workspace</h1>
+          <div class="eyebrow">
+            <span class="eyebrow-dot"></span>
+            GitPilot Workspace
+          </div>
+          <h1 class="header-title">Enterprise Repo Copilot</h1>
           <div class="header-subtitle" id="provider-line">Provider state</div>
           <div class="header-meta" id="repo-line">Repo state</div>
         </div>
+
         <div class="header-actions">
-          <button class="secondary" id="setup-context-btn">↻ Setup Context</button>
-          <button class="secondary" id="provider-setup-btn">⚙ Provider</button>
+          <button class="secondary" id="setup-context-btn">Refresh Context</button>
+          <button class="secondary" id="provider-setup-btn">Provider</button>
         </div>
+      </div>
+
+      <div class="status-row" id="status-row">
+        <span class="pill muted" id="workflow-pill">Workflow: auto</span>
+        <span class="pill muted" id="connection-pill">Disconnected</span>
+        <span class="pill muted" id="task-pill">No active task</span>
       </div>
     </section>
 
-    <section class="surface section" id="error-banner" hidden>
-      <h2 class="section-title">Workspace Notice</h2>
+    <section class="surface section compact notice-banner hidden" id="error-banner">
+      <div class="section-head">
+        <h2 class="section-title">Workspace Notice</h2>
+      </div>
       <div class="section-copy" id="error-copy"></div>
     </section>
 
-    <section class="surface section hidden" id="idle-project-section">
-      <h2 class="section-title">Project Context</h2>
-      <ul class="context-list" id="project-context-list"></ul>
-    </section>
+    <section class="surface section hidden" id="idle-overview-section">
+      <div class="section-head">
+        <h2 class="section-title">Project Overview</h2>
+        <div class="section-actions">
+          <button class="quiet" id="idle-setup-btn">Setup Wizard</button>
+        </div>
+      </div>
 
-    <section class="surface section hidden" id="idle-quick-section">
-      <h2 class="section-title">Quick Actions</h2>
-      <div class="quick-grid">
-        <button class="secondary" data-quick-action="explain_project">Explain Project</button>
-        <button class="secondary" data-quick-action="review_file">Review File</button>
-        <button class="secondary" data-quick-action="fix_selection">Fix Selection</button>
-        <button class="secondary" data-quick-action="generate_tests">Generate Tests</button>
-        <button class="secondary" data-quick-action="security_scan">Security Scan</button>
-        <button class="secondary" id="idle-setup-btn">Setup Wizard</button>
+      <div class="hero-grid">
+        <div class="context-chips" id="project-context-chips"></div>
+
+        <div class="grid-2">
+          <button class="quick-card" data-quick-action="explain_project">
+            <div class="quick-card-title">Explain Project</div>
+            <div class="quick-card-copy">Understand architecture, responsibilities, and key modules.</div>
+          </button>
+
+          <button class="quick-card" data-quick-action="review_file">
+            <div class="quick-card-title">Review File</div>
+            <div class="quick-card-copy">Run a focused review of the current file and surface improvements.</div>
+          </button>
+
+          <button class="quick-card" data-quick-action="fix_selection">
+            <div class="quick-card-title">Fix Selection</div>
+            <div class="quick-card-copy">Improve the selected code with a targeted patch proposal.</div>
+          </button>
+
+          <button class="quick-card" data-quick-action="generate_tests">
+            <div class="quick-card-title">Generate Tests</div>
+            <div class="quick-card-copy">Create practical tests aligned with the selected logic.</div>
+          </button>
+
+          <button class="quick-card" data-quick-action="security_scan">
+            <div class="quick-card-title">Security Scan</div>
+            <div class="quick-card-copy">Inspect the workspace for risks, vulnerabilities, and gaps.</div>
+          </button>
+
+          <button class="quick-card" id="refresh-context-card">
+            <div class="quick-card-title">Refresh Index</div>
+            <div class="quick-card-copy">Rebuild repository context, files, manifests, and working state.</div>
+          </button>
+        </div>
       </div>
     </section>
 
     <section class="surface section hidden" id="idle-recent-section">
-      <h2 class="section-title">Recent Files</h2>
+      <div class="section-head">
+        <h2 class="section-title">Recent Files</h2>
+      </div>
       <ul class="recent-list" id="recent-files-list"></ul>
     </section>
 
     <section class="surface section hidden" id="active-task-section">
-      <h2 class="section-title">Active Task</h2>
+      <div class="section-head">
+        <h2 class="section-title">Active Task</h2>
+      </div>
+
       <div class="active-task-grid">
         <div class="task-title" id="task-title">No active task</div>
+
         <div class="task-meta-row">
-          <span class="pill" id="task-status-pill">Status: idle</span>
-          <span class="pill" id="task-step-pill">Step 0/0</span>
+          <span class="pill pill-accent" id="task-status-pill">Status: idle</span>
+          <span class="pill muted" id="task-step-pill">Step 0/0</span>
         </div>
+
         <div class="section-copy" id="task-summary">GitPilot is ready for the next workspace task.</div>
+
         <div class="progress">
-          <div class="progress-track"><div class="progress-bar" id="task-progress-bar"></div></div>
+          <div class="progress-track">
+            <div class="progress-bar" id="task-progress-bar"></div>
+          </div>
           <div class="progress-label" id="task-progress-label">Waiting for a task</div>
         </div>
       </div>
     </section>
 
     <section class="surface section hidden" id="plan-section">
-      <h2 class="section-title">Plan</h2>
+      <div class="section-head">
+        <h2 class="section-title">Execution Plan</h2>
+      </div>
       <ul class="plan-list" id="plan-list"></ul>
     </section>
 
     <section class="surface section hidden" id="scope-section">
-      <h2 class="section-title">Files in Scope</h2>
+      <div class="section-head">
+        <h2 class="section-title">Files in Scope</h2>
+      </div>
       <ul class="item-list" id="scope-list"></ul>
     </section>
 
     <section class="surface section hidden" id="changes-section">
-      <h2 class="section-title">Changes</h2>
+      <div class="section-head">
+        <h2 class="section-title">Proposed Changes</h2>
+      </div>
       <ul class="item-list" id="changes-list"></ul>
     </section>
 
     <section class="surface section" id="chat-section">
-      <h2 class="section-title">Chat</h2>
-      <ul class="chat-list" id="chat-list"></ul>
-      <div class="chat-compose">
-        <textarea id="chat-input" placeholder="Describe the task..."></textarea>
-        <div class="action-grid">
-          <button id="send-btn">Send</button>
-          <button class="secondary" id="refresh-context-btn">Refresh Context</button>
+      <div class="section-head">
+        <h2 class="section-title">Chat</h2>
+        <div class="section-actions">
+          <button class="quiet" id="refresh-context-btn">Refresh Context</button>
+        </div>
+      </div>
+
+      <div class="chat-shell">
+        <ul class="chat-list" id="chat-list"></ul>
+
+        <div class="chat-compose">
+          <textarea id="chat-input" placeholder="Describe the task, ask a question, or request a change..."></textarea>
+
+          <div class="compose-meta">
+            <span id="compose-hint">Enter to send · Shift+Enter for a new line</span>
+            <span id="compose-status">Ready</span>
+          </div>
+
+          <div class="action-grid">
+            <button id="send-btn">Send</button>
+            <button class="secondary" id="apply-btn">Apply Patch</button>
+            <button class="secondary" id="revert-btn">Revert</button>
+            <button class="ghost" id="settings-btn">Settings</button>
+          </div>
         </div>
       </div>
     </section>
 
     <section class="surface section hidden" id="actions-section">
-      <h2 class="section-title">Actions</h2>
+      <div class="section-head">
+        <h2 class="section-title">Task Controls</h2>
+      </div>
+
       <div class="action-grid">
-        <button id="apply-btn">Apply Patch</button>
-        <button class="secondary" id="revert-btn">Revert</button>
         <button class="secondary" id="replan-btn">Regenerate Plan</button>
         <button class="secondary" id="setup-btn">Setup Wizard</button>
-        <button class="ghost" id="settings-btn">Extension Settings</button>
       </div>
-      <div class="footer-note">Explorer on the left. Code in the center. GitPilot on the right.</div>
+
+      <div class="footer-note">
+        GitPilot keeps repository context, active scope, plan state, and proposed changes aligned in one workspace view.
+      </div>
     </section>
+  </div>
+
+  <div class="busy-overlay" id="busy-overlay" aria-live="polite" aria-hidden="true">
+    <div class="spinner"></div>
+    <div class="busy-text" id="busy-text">GitPilot is working…</div>
   </div>
 
   <script nonce="__NONCE__">
     const vscode = acquireVsCodeApi();
-    let currentState;
-    let lastError;
+
+    let currentState = null;
+    let lastError = null;
+    let busyCount = 0;
+    let lastRenderedSignature = "";
+    let dynamicHandlerAbortController = null;
 
     const byId = (id) => document.getElementById(id);
-    const esc = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+    const esc = (value) => String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+
     const post = (msg) => vscode.postMessage(msg);
 
+    const nowIso = () => new Date().toISOString();
+
+    const formatTime = (iso) => {
+      try {
+        const date = iso ? new Date(iso) : new Date();
+        if (Number.isNaN(date.getTime())) return "";
+        return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      } catch {
+        return "";
+      }
+    };
+
     const statusLabel = (status) => ({
-      idle: 'Idle', planning: 'Planning', generating: 'Editing files', reviewing: 'Reviewing', ready_to_apply: 'Ready to apply', applying: 'Applying', done: 'Done', failed: 'Failed',
-    }[status] || String(status || 'idle'));
+      idle: "Idle",
+      planning: "Planning",
+      generating: "Generating",
+      reviewing: "Reviewing",
+      ready_to_apply: "Ready to apply",
+      applying: "Applying",
+      done: "Done",
+      failed: "Failed",
+    }[status] || String(status || "idle"));
+
+    const pillClassForStatus = (status) => {
+      if (status === "failed") return "pill pill-danger";
+      if (status === "ready_to_apply" || status === "done") return "pill pill-success";
+      if (status === "planning" || status === "generating" || status === "reviewing" || status === "applying") return "pill pill-accent";
+      return "pill muted";
+    };
 
     const getChatMessages = (state) => {
-      const messages = ((state || {}).chat || {}).messages || [];
-      if (messages.length) return messages;
-      return [{ id: 'assistant:default', role: 'assistant', content: 'What would you like GitPilot to do?', createdAt: new Date().toISOString() }];
+      const messages = (((state || {}).chat || {}).messages || []).slice();
+      if (messages.length > 0) return messages;
+
+      return [{
+        id: "assistant:default",
+        role: "assistant",
+        content: "What would you like GitPilot to do?",
+        createdAt: nowIso(),
+      }];
     };
 
     const taskIsActive = (state) => {
       if (!state) return false;
-      if (state.ui && state.ui.mode === 'idle') return false;
+      if (state.ui && state.ui.mode === "idle") return false;
+
       const task = state.activeTask || {};
-      return Boolean(task.title || (task.plan && task.plan.steps && task.plan.steps.length) || (task.filesInScope && task.filesInScope.length) || (task.changedFiles && task.changedFiles.length) || (task.status && task.status !== 'idle'));
+      return Boolean(
+        task.title ||
+        (task.plan && task.plan.steps && task.plan.steps.length) ||
+        (task.filesInScope && task.filesInScope.length) ||
+        (task.changedFiles && task.changedFiles.length) ||
+        (task.status && task.status !== "idle")
+      );
+    };
+
+    const pushOptimisticUserMessage = (text) => {
+      if (!currentState) currentState = {};
+      if (!currentState.chat) currentState.chat = {};
+      if (!Array.isArray(currentState.chat.messages)) currentState.chat.messages = [];
+
+      currentState.chat.messages = [
+        ...currentState.chat.messages,
+        {
+          id: "user:optimistic:" + Date.now(),
+          role: "user",
+          content: text,
+          createdAt: nowIso(),
+        }
+      ];
+
+      render(currentState);
+    };
+
+    const pushAssistantMessage = (payload) => {
+      if (!payload) return;
+      if (!currentState) currentState = {};
+      if (!currentState.chat) currentState.chat = {};
+      if (!Array.isArray(currentState.chat.messages)) currentState.chat.messages = [];
+
+      currentState.chat.messages = [
+        ...currentState.chat.messages,
+        {
+          id: payload.id || ("assistant:" + Date.now()),
+          role: payload.role || "assistant",
+          content: payload.content || "",
+          createdAt: payload.createdAt || nowIso(),
+        }
+      ];
+
+      const activeTask = currentState.activeTask || {};
+      if (payload.plan && (!activeTask.plan || !activeTask.plan.steps || !activeTask.plan.steps.length)) {
+        currentState.activeTask = {
+          ...activeTask,
+          plan: payload.plan,
+          status: activeTask.status || "planning",
+          title: activeTask.title || "Task in progress",
+        };
+      }
+
+      render(currentState);
+    };
+
+    const setBusy = (busy, text) => {
+      busyCount = Math.max(0, busy ? busyCount + 1 : busyCount - 1);
+
+      const visible = busyCount > 0;
+      const overlay = byId("busy-overlay");
+      const composeStatus = byId("compose-status");
+
+      overlay.classList.toggle("visible", visible);
+      overlay.setAttribute("aria-hidden", visible ? "false" : "true");
+
+      if (text) byId("busy-text").textContent = text;
+      composeStatus.textContent = visible ? (text || "Working…") : "Ready";
+
+      document.querySelectorAll("button").forEach((button) => {
+        if (button.id === "provider-setup-btn" || button.id === "settings-btn") return;
+        button.disabled = visible;
+      });
+    };
+
+    const clearBusy = () => {
+      busyCount = 0;
+      byId("busy-overlay").classList.remove("visible");
+      byId("busy-overlay").setAttribute("aria-hidden", "true");
+      byId("compose-status").textContent = "Ready";
+
+      document.querySelectorAll("button").forEach((button) => {
+        button.disabled = false;
+      });
     };
 
     const renderError = (state) => {
-      const banner = byId('error-banner');
-      const copy = byId('error-copy');
-      const notice = lastError || (state && state.ui && state.ui.notice ? { title: 'Notice', message: state.ui.notice } : undefined);
+      const banner = byId("error-banner");
+      const copy = byId("error-copy");
+
+      const notice = lastError || (
+        state && state.ui && state.ui.notice
+          ? { title: "Notice", message: state.ui.notice }
+          : undefined
+      );
+
       if (!notice) {
-        banner.hidden = true;
-        banner.classList.remove('banner');
-        copy.textContent = '';
+        banner.classList.add("hidden");
+        banner.classList.remove("danger");
+        copy.textContent = "";
         return;
       }
-      banner.hidden = false;
-      copy.textContent = String(notice.title || 'Notice') + ': ' + String(notice.message || '');
-      if (lastError) banner.classList.add('banner'); else banner.classList.remove('banner');
+
+      banner.classList.remove("hidden");
+      banner.classList.toggle("danger", Boolean(lastError));
+      copy.textContent = String(notice.title || "Notice") + ": " + String(notice.message || "");
     };
 
     const renderHeader = (state) => {
       const provider = state.provider || {};
       const project = state.projectContextSummary || {};
       const workspace = state.workspace || {};
-      const repoName = project.repoName || (workspace.git && workspace.git.repoName) || workspace.folderName || 'No repo';
-      const branch = project.branch || (workspace.git && workspace.git.branch) || (state.session && state.session.branch) || 'No branch';
-      const providerName = provider.providerName || 'Provider not set';
-      const model = provider.model || 'No model';
-      const connection = state.server && state.server.connected ? (provider.health === 'error' ? 'Degraded' : 'Connected') : 'Disconnected';
-      const workflow = state.workflow && state.workflow.selectedMode ? state.workflow.selectedMode : 'auto';
-      byId('provider-line').textContent = providerName + ' · ' + connection + ' · ' + model;
-      byId('repo-line').textContent = 'Workflow: ' + workflow + ' · Repo: ' + repoName + ' · Branch: ' + branch;
+      const server = state.server || {};
+      const task = state.activeTask || {};
+
+      const repoName = project.repoName || (workspace.git && workspace.git.repoName) || workspace.folderName || "No repo";
+      const branch = project.branch || (workspace.git && workspace.git.branch) || (state.session && state.session.branch) || "No branch";
+      const providerName = provider.providerName || "Provider not set";
+      const model = provider.model || "No model";
+      const workflow = (state.workflow && state.workflow.selectedMode) || "auto";
+      const connection = server.connected
+        ? (provider.health === "error" ? "Degraded" : "Connected")
+        : "Disconnected";
+
+      byId("provider-line").textContent = providerName + " · " + connection + " · " + model;
+      byId("repo-line").textContent = "Repo: " + repoName + " · Branch: " + branch;
+
+      byId("workflow-pill").textContent = "Workflow: " + workflow;
+      byId("connection-pill").textContent = connection;
+      byId("connection-pill").className =
+        connection === "Connected"
+          ? "pill pill-success"
+          : connection === "Degraded"
+            ? "pill pill-warning"
+            : "pill pill-danger";
+
+      byId("task-pill").textContent = task.title
+        ? "Task: " + task.title
+        : "No active task";
+      byId("task-pill").className = task.title ? "pill pill-accent" : "pill muted";
     };
 
-    const renderIdleSections = (state, isActive) => {
-      const projectSection = byId('idle-project-section');
-      const quickSection = byId('idle-quick-section');
-      const recentSection = byId('idle-recent-section');
-      projectSection.classList.toggle('hidden', isActive);
-      quickSection.classList.toggle('hidden', isActive);
-      recentSection.classList.toggle('hidden', isActive);
+    const renderIdleOverview = (state, isActive) => {
+      const section = byId("idle-overview-section");
+      const recentSection = byId("idle-recent-section");
+      section.classList.toggle("hidden", isActive);
+      recentSection.classList.toggle("hidden", isActive);
+
       if (isActive) return;
 
       const project = state.projectContextSummary || {};
-      const contextItems = [
-        'Languages: ' + ((project.languages || []).length ? project.languages.join(', ') : 'unknown'),
-        'README: ' + (project.readmeFound ? 'found' : 'not detected'),
-        'Manifests: ' + ((project.manifests || []).length ? project.manifests.join(', ') : 'not detected'),
-        'Indexed files: ' + String(project.indexedFiles || 0),
+      const chips = [
+        { label: "Languages", value: (project.languages || []).length ? project.languages.join(", ") : "unknown" },
+        { label: "README", value: project.readmeFound ? "detected" : "not detected" },
+        { label: "Manifests", value: (project.manifests || []).length ? project.manifests.join(", ") : "not detected" },
+        { label: "Indexed", value: String(project.indexedFiles || 0) + " files" },
       ];
-      byId('project-context-list').innerHTML = contextItems.map((item) => '<li class="context-row">' + esc(item) + '</li>').join('');
+
+      byId("project-context-chips").innerHTML = chips.map((chip) =>
+        '<div class="context-chip"><strong>' + esc(chip.label) + ":</strong> " + esc(chip.value) + "</div>"
+      ).join("");
 
       const recentFiles = (project.recentFiles || project.keyFiles || []).slice(0, 6);
-      byId('recent-files-list').innerHTML = recentFiles.length
-        ? recentFiles.map((file) => '<li class="recent-row"><div class="item-head"><div class="item-title">' + esc(file) + '</div><button class="secondary" data-open-file="' + esc(file) + '">Open</button></div></li>').join('')
-        : '<li class="recent-row"><div class="empty">Open a repo and refresh project context to populate recent files.</div></li>';
+
+      byId("recent-files-list").innerHTML = recentFiles.length
+        ? recentFiles.map((file) =>
+            '<li class="recent-row">' +
+              '<div class="item-head">' +
+                '<div>' +
+                  '<div class="item-title">' + esc(file) + '</div>' +
+                  '<div class="item-meta">Recently referenced in repository context</div>' +
+                '</div>' +
+                '<div class="item-actions">' +
+                  '<button class="secondary" data-open-file="' + esc(file) + '">Open</button>' +
+                '</div>' +
+              '</div>' +
+            '</li>'
+          ).join("")
+        : '<li class="recent-row"><div class="empty">Open a repository and refresh project context to populate recent files.</div></li>';
     };
 
     const renderActiveTask = (state, isActive) => {
-      const section = byId('active-task-section');
-      section.classList.toggle('hidden', !isActive);
+      const section = byId("active-task-section");
+      section.classList.toggle("hidden", !isActive);
       if (!isActive) return;
+
       const task = state.activeTask || {};
-      const steps = (task.plan && task.plan.steps) || [];
+      const steps = ((task.plan || {}).steps || []);
       const totalSteps = steps.length;
-      const doneCount = steps.filter((step) => step.status === 'applied' || step.status === 'ready').length;
-      const activeStepIndex = steps.findIndex((step) => step.status !== 'applied' && step.status !== 'ready');
-      const currentStep = totalSteps === 0 ? 0 : (activeStepIndex >= 0 ? activeStepIndex + 1 : totalSteps);
-      const ratio = totalSteps > 0 ? Math.max(0, Math.min(1, (currentStep - 1) / totalSteps)) : 0;
-      byId('task-title').textContent = task.title || 'Workspace task in progress';
-      byId('task-status-pill').textContent = 'Status: ' + statusLabel(task.status);
-      byId('task-step-pill').textContent = totalSteps > 0 ? ('Step ' + String(Math.max(1, currentStep)) + '/' + String(totalSteps)) : 'Step 0/0';
-      byId('task-summary').textContent = task.summary || 'GitPilot is working through the scoped files and proposed changes.';
-      byId('task-progress-bar').style.width = String(Math.max(0, Math.min(100, Math.round(ratio * 100)))) + '%';
-      byId('task-progress-label').textContent = totalSteps > 0 ? (String(doneCount) + ' of ' + String(totalSteps) + ' steps completed') : statusLabel(task.status);
+      const completedCount = steps.filter((step) =>
+        step.status === "applied" || step.status === "ready" || step.status === "done"
+      ).length;
+
+      const activeStepIndex = steps.findIndex((step) =>
+        !["applied", "ready", "done"].includes(step.status)
+      );
+
+      const currentStep = totalSteps === 0
+        ? 0
+        : (activeStepIndex >= 0 ? activeStepIndex + 1 : totalSteps);
+
+      const ratio = totalSteps > 0
+        ? Math.max(0, Math.min(1, completedCount / totalSteps))
+        : 0;
+
+      byId("task-title").textContent = task.title || "Workspace task in progress";
+      byId("task-status-pill").textContent = "Status: " + statusLabel(task.status);
+      byId("task-status-pill").className = pillClassForStatus(task.status);
+      byId("task-step-pill").textContent = totalSteps > 0 ? ("Step " + Math.max(1, currentStep) + "/" + totalSteps) : "Step 0/0";
+      byId("task-summary").textContent = task.summary || "GitPilot is working through the scoped files and proposed changes.";
+      byId("task-progress-bar").style.width = Math.round(ratio * 100) + "%";
+      byId("task-progress-label").textContent = totalSteps > 0
+        ? (completedCount + " of " + totalSteps + " steps completed")
+        : statusLabel(task.status);
     };
 
     const renderPlan = (state, isActive) => {
-      const section = byId('plan-section');
-      const list = byId('plan-list');
-      const steps = ((state.activeTask || {}).plan || {}).steps || [];
-      section.classList.toggle('hidden', !isActive);
+      const section = byId("plan-section");
+      const list = byId("plan-list");
+      const steps = (((state.activeTask || {}).plan || {}).steps || []);
+
+      section.classList.toggle("hidden", !isActive);
       if (!isActive) return;
+
       list.innerHTML = steps.length
         ? steps.map((step, index) => {
-            let cssClass = 'pending';
-            if (step.status === 'applied' || step.status === 'ready') cssClass = 'done';
-            else if (step.status === 'failed' || step.status === 'pending' || index === 0) cssClass = 'active';
-            const marker = cssClass === 'done' ? '✓' : (cssClass === 'active' ? '→' : '•');
-            return '<li class="plan-item ' + cssClass + '"><div class="plan-marker">' + marker + '</div><div><div class="plan-title">' + esc(step.title || step.action || ('Step ' + String(index + 1))) + '</div><div class="plan-desc">' + esc(step.description || step.file || 'Planned task step') + '</div></div></li>';
-          }).join('')
+            let cssClass = "pending";
+            if (["applied", "ready", "done"].includes(step.status)) cssClass = "done";
+            else if (step.status === "failed") cssClass = "failed";
+            else if (index === 0 || step.status === "pending" || step.status === "planning") cssClass = "active";
+
+            const marker =
+              cssClass === "done" ? "✓" :
+              cssClass === "failed" ? "!" :
+              cssClass === "active" ? "→" : "•";
+
+            return (
+              '<li class="plan-item ' + cssClass + '">' +
+                '<div class="plan-marker">' + marker + '</div>' +
+                '<div>' +
+                  '<div class="plan-title">' + esc(step.title || step.action || ("Step " + (index + 1))) + '</div>' +
+                  '<div class="plan-desc">' + esc(step.description || step.file || "Planned task step") + '</div>' +
+                '</div>' +
+              '</li>'
+            );
+          }).join("")
         : '<li class="empty">No plan yet. Ask GitPilot to inspect, review, or change the workspace.</li>';
     };
 
     const renderScope = (state, isActive) => {
-      const section = byId('scope-section');
-      const list = byId('scope-list');
-      const files = ((state.activeTask || {}).filesInScope) || [];
-      section.classList.toggle('hidden', !isActive);
+      const section = byId("scope-section");
+      const list = byId("scope-list");
+      const files = ((state.activeTask || {}).filesInScope || []);
+
+      section.classList.toggle("hidden", !isActive);
       if (!isActive) return;
+
       list.innerHTML = files.length
-        ? files.map((item) => '<li class="item-row"><div class="item-head"><div><div class="item-title">' + esc(item.path) + '</div><div class="item-meta">' + esc(item.reason || 'In scope for the current task') + '</div></div><div class="item-actions"><button class="secondary" data-open-file="' + esc(item.path) + '">Open</button><button class="ghost" data-reveal-file="' + esc(item.path) + '">Reveal</button></div></div></li>').join('')
+        ? files.map((item) =>
+            '<li class="item-row">' +
+              '<div class="item-head">' +
+                '<div>' +
+                  '<div class="item-title">' + esc(item.path) + '</div>' +
+                  '<div class="item-meta">' + esc(item.reason || "In scope for the current task") + '</div>' +
+                '</div>' +
+                '<div class="item-actions">' +
+                  '<button class="secondary" data-open-file="' + esc(item.path) + '">Open</button>' +
+                  '<button class="ghost" data-reveal-file="' + esc(item.path) + '">Reveal</button>' +
+                '</div>' +
+              '</div>' +
+            '</li>'
+          ).join("")
         : '<li class="item-row"><div class="empty">Files in scope will appear here after GitPilot builds task context.</div></li>';
     };
 
     const renderChanges = (state, isActive) => {
-      const section = byId('changes-section');
-      const list = byId('changes-list');
-      const changes = ((state.activeTask || {}).changedFiles) || [];
-      section.classList.toggle('hidden', !isActive);
+      const section = byId("changes-section");
+      const list = byId("changes-list");
+      const changes = ((state.activeTask || {}).changedFiles || []);
+
+      section.classList.toggle("hidden", !isActive);
       if (!isActive) return;
+
       list.innerHTML = changes.length
-        ? changes.map((item) => '<li class="item-row"><div class="item-head"><div><div class="item-title">' + esc((item.kind || 'M') + ' ' + item.path) + '</div><div class="item-meta">' + esc(item.summary || item.reason || item.status || 'Proposed change') + '</div></div><span class="mini-tag">' + esc(String(item.status || '').toUpperCase()) + '</span></div><div class="item-actions"><button class="secondary" data-open-file="' + esc(item.path) + '">Open</button><button class="secondary" data-open-diff="' + esc(item.path) + '">Diff</button></div></li>').join('')
+        ? changes.map((item) =>
+            '<li class="item-row">' +
+              '<div class="item-head">' +
+                '<div>' +
+                  '<div class="item-title">' + esc((item.kind || "M") + " " + item.path) + '</div>' +
+                  '<div class="item-meta">' + esc(item.summary || item.reason || item.status || "Proposed change") + '</div>' +
+                '</div>' +
+                '<div class="item-actions">' +
+                  '<span class="mini-tag">' + esc(String(item.status || "pending")) + '</span>' +
+                  '<button class="secondary" data-open-file="' + esc(item.path) + '">Open</button>' +
+                  '<button class="secondary" data-open-diff="' + esc(item.path) + '">Diff</button>' +
+                '</div>' +
+              '</div>' +
+            '</li>'
+          ).join("")
         : '<li class="item-row"><div class="empty">Modified files will appear here once GitPilot prepares edits.</div></li>';
     };
 
     const renderChat = (state, isActive) => {
-      const list = byId('chat-list');
-      const actionsSection = byId('actions-section');
-      actionsSection.classList.toggle('hidden', !isActive);
+      const list = byId("chat-list");
+      const actionsSection = byId("actions-section");
       const messages = getChatMessages(state);
-      list.innerHTML = messages.map((msg) => '<li class="chat-item ' + esc(msg.role) + '"><div class="chat-role">' + esc(msg.role) + '</div><div class="chat-content">' + esc(msg.content) + '</div></li>').join('');
+
+      actionsSection.classList.toggle("hidden", !isActive);
+
+      list.innerHTML = messages.map((msg) =>
+        '<li class="chat-item ' + esc(msg.role) + '">' +
+          '<div class="chat-role-row">' +
+            '<div class="chat-role">' + esc(msg.role) + '</div>' +
+            '<div class="chat-time">' + esc(formatTime(msg.createdAt)) + '</div>' +
+          '</div>' +
+          '<div class="chat-content">' + esc(msg.content) + '</div>' +
+        '</li>'
+      ).join("");
+
+      requestAnimationFrame(() => {
+        list.scrollTop = list.scrollHeight;
+      });
     };
 
     const bindDynamicEvents = () => {
-      document.querySelectorAll('[data-open-file]').forEach((node) => {
-        node.onclick = () => post({ type: 'OPEN_CHANGED_FILE', payload: { path: node.getAttribute('data-open-file') } });
+      if (dynamicHandlerAbortController) {
+        dynamicHandlerAbortController.abort();
+      }
+
+      dynamicHandlerAbortController = new AbortController();
+      const signal = dynamicHandlerAbortController.signal;
+
+      document.querySelectorAll("[data-open-file]").forEach((node) => {
+        node.addEventListener("click", () => {
+          post({ type: "OPEN_CHANGED_FILE", payload: { path: node.getAttribute("data-open-file") } });
+        }, { signal });
       });
-      document.querySelectorAll('[data-open-diff]').forEach((node) => {
-        node.onclick = () => post({ type: 'OPEN_CHANGED_DIFF', payload: { path: node.getAttribute('data-open-diff') } });
+
+      document.querySelectorAll("[data-open-diff]").forEach((node) => {
+        node.addEventListener("click", () => {
+          post({ type: "OPEN_CHANGED_DIFF", payload: { path: node.getAttribute("data-open-diff") } });
+        }, { signal });
       });
-      document.querySelectorAll('[data-reveal-file]').forEach((node) => {
-        node.onclick = () => post({ type: 'REVEAL_FILE', payload: { path: node.getAttribute('data-reveal-file') } });
+
+      document.querySelectorAll("[data-reveal-file]").forEach((node) => {
+        node.addEventListener("click", () => {
+          post({ type: "REVEAL_FILE", payload: { path: node.getAttribute("data-reveal-file") } });
+        }, { signal });
+      });
+
+      document.querySelectorAll("[data-quick-action]").forEach((node) => {
+        node.addEventListener("click", () => {
+          const action = node.getAttribute("data-quick-action");
+          if (!action) return;
+
+          setBusy(true, "Running " + action.replace(/_/g, " ") + "…");
+          post({ type: "RUN_QUICK_ACTION", payload: { action } });
+        }, { signal });
       });
     };
 
+    const createRenderSignature = (state) => JSON.stringify({
+      provider: state && state.provider,
+      server: state && state.server,
+      workflow: state && state.workflow,
+      projectContextSummary: state && state.projectContextSummary,
+      activeTask: state && state.activeTask,
+      chat: ((state || {}).chat || {}).messages || [],
+      ui: state && state.ui,
+      lastError,
+    });
+
     const render = (state) => {
-      currentState = state;
-      const isActive = taskIsActive(state);
-      renderHeader(state);
-      renderError(state);
-      renderIdleSections(state, isActive);
-      renderActiveTask(state, isActive);
-      renderPlan(state, isActive);
-      renderScope(state, isActive);
-      renderChanges(state, isActive);
-      renderChat(state, isActive);
+      const signature = createRenderSignature(state);
+      if (signature === lastRenderedSignature) return;
+      lastRenderedSignature = signature;
+
+      currentState = state || {};
+      const isActive = taskIsActive(currentState);
+
+      renderHeader(currentState);
+      renderError(currentState);
+      renderIdleOverview(currentState, isActive);
+      renderActiveTask(currentState, isActive);
+      renderPlan(currentState, isActive);
+      renderScope(currentState, isActive);
+      renderChanges(currentState, isActive);
+      renderChat(currentState, isActive);
       bindDynamicEvents();
     };
 
     const sendChat = () => {
-      const input = byId('chat-input');
+      const input = byId("chat-input");
       const text = input.value.trim();
       if (!text) return;
-      input.value = '';
-      post({ type: 'SEND_CHAT', payload: { text } });
+
+      input.value = "";
+      pushOptimisticUserMessage(text);
+      setBusy(true, "Sending request…");
+      post({ type: "SEND_CHAT", payload: { text } });
+    };
+
+    const requestRefreshContext = () => {
+      setBusy(true, "Refreshing repository context…");
+      post({ type: "REFRESH_PROJECT_CONTEXT" });
     };
 
     const bindStaticEvents = () => {
-      byId('send-btn').addEventListener('click', sendChat);
-      byId('chat-input').addEventListener('keydown', (event) => {
-        if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendChat(); }
+      byId("send-btn").addEventListener("click", sendChat);
+
+      byId("chat-input").addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          sendChat();
+        }
       });
-      byId('refresh-context-btn').addEventListener('click', () => post({ type: 'REFRESH_PROJECT_CONTEXT' }));
-      byId('setup-context-btn').addEventListener('click', () => post({ type: 'REFRESH_PROJECT_CONTEXT' }));
-      byId('provider-setup-btn').addEventListener('click', () => post({ type: 'OPEN_PROVIDER_SETUP' }));
-      byId('idle-setup-btn').addEventListener('click', () => post({ type: 'OPEN_SETUP_WIZARD' }));
-      byId('apply-btn').addEventListener('click', () => post({ type: 'APPLY_PROPOSED_CHANGES' }));
-      byId('revert-btn').addEventListener('click', () => post({ type: 'REVERT_PROPOSED_CHANGES' }));
-      byId('replan-btn').addEventListener('click', () => post({ type: 'REGENERATE_TASK_PLAN' }));
-      byId('setup-btn').addEventListener('click', () => post({ type: 'OPEN_SETUP_WIZARD' }));
-      byId('settings-btn').addEventListener('click', () => post({ type: 'OPEN_SETTINGS' }));
-      document.querySelectorAll('[data-quick-action]').forEach((node) => {
-        node.addEventListener('click', () => {
-          const action = node.getAttribute('data-quick-action');
-          if (!action) return;
-          post({ type: 'RUN_QUICK_ACTION', payload: { action } });
-        });
+
+      byId("refresh-context-btn").addEventListener("click", requestRefreshContext);
+      byId("setup-context-btn").addEventListener("click", requestRefreshContext);
+      byId("refresh-context-card").addEventListener("click", requestRefreshContext);
+
+      byId("provider-setup-btn").addEventListener("click", () => {
+        post({ type: "OPEN_PROVIDER_SETUP" });
+      });
+
+      byId("idle-setup-btn").addEventListener("click", () => {
+        post({ type: "OPEN_SETUP_WIZARD" });
+      });
+
+      byId("apply-btn").addEventListener("click", () => {
+        setBusy(true, "Applying proposed changes…");
+        post({ type: "APPLY_PROPOSED_CHANGES" });
+      });
+
+      byId("revert-btn").addEventListener("click", () => {
+        setBusy(true, "Reverting proposed changes…");
+        post({ type: "REVERT_PROPOSED_CHANGES" });
+      });
+
+      byId("replan-btn").addEventListener("click", () => {
+        setBusy(true, "Regenerating plan…");
+        post({ type: "REGENERATE_TASK_PLAN" });
+      });
+
+      byId("setup-btn").addEventListener("click", () => {
+        post({ type: "OPEN_SETUP_WIZARD" });
+      });
+
+      byId("settings-btn").addEventListener("click", () => {
+        post({ type: "OPEN_SETTINGS" });
       });
     };
 
-    window.addEventListener('message', (event) => {
+    window.addEventListener("message", (event) => {
       const msg = event.data;
-      if (!msg || typeof msg !== 'object') return;
-      if (msg.type === 'STATE_SYNC') { lastError = undefined; render(msg.payload); return; }
-      if (msg.type === 'CHAT_RESPONSE') { render(currentState || {}); return; }
-      if (msg.type === 'ERROR') { lastError = msg.payload; render(currentState || {}); }
+      if (!msg || typeof msg !== "object") return;
+
+      if (msg.type === "STATE_SYNC") {
+        lastError = undefined;
+        clearBusy();
+        render(msg.payload || {});
+        return;
+      }
+
+      if (msg.type === "CHAT_RESPONSE") {
+        clearBusy();
+        pushAssistantMessage(msg.payload);
+        return;
+      }
+
+      if (msg.type === "ERROR") {
+        clearBusy();
+        lastError = msg.payload || { title: "Error", message: "Unknown error" };
+        render(currentState || {});
+      }
     });
 
     bindStaticEvents();
-    post({ type: 'INIT' });
+    post({ type: "INIT" });
   </script>
 </body>
 </html>
