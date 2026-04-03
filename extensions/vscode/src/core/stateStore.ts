@@ -14,12 +14,44 @@ import {
   ReadinessState,
   WorkflowState,
   GitContext,
+  ProjectContextSummaryState,
+  ActiveTaskState,
+  TaskStatus,
+  FileInScope,
+  ChangedFile,
+  ProposedEdit,
 } from "./types";
 
 type StateChangeListener = (state: GitPilotState) => void;
 
 const DEFAULT_GIT_CONTEXT: GitContext = {
   isGitRepo: false,
+};
+
+const DEFAULT_PROJECT_CONTEXT_SUMMARY: ProjectContextSummaryState = {
+  mode: undefined,
+  repoName: undefined,
+  branch: undefined,
+  indexedFiles: 0,
+  languages: [],
+  manifests: [],
+  keyFiles: [],
+  indexedAt: undefined,
+};
+
+const DEFAULT_ACTIVE_TASK: ActiveTaskState = {
+  id: undefined,
+  title: undefined,
+  intent: undefined,
+  status: "idle",
+  summary: undefined,
+  filesInScope: [],
+  changedFiles: [],
+  edits: [],
+  plan: undefined,
+  startedAt: undefined,
+  updatedAt: undefined,
+  error: undefined,
 };
 
 const DEFAULT_STATE: GitPilotState = {
@@ -54,6 +86,8 @@ const DEFAULT_STATE: GitPilotState = {
     selectedMode: "auto",
     source: "auto",
   },
+  projectContextSummary: DEFAULT_PROJECT_CONTEXT_SUMMARY,
+  activeTask: DEFAULT_ACTIVE_TASK,
 };
 
 export class StateStore {
@@ -61,19 +95,16 @@ export class StateStore {
   private _listeners: StateChangeListener[] = [];
   private _onDidChangeState = new vscode.EventEmitter<GitPilotState>();
 
-  /** VS Code event for state changes */
   public readonly onDidChangeState = this._onDidChangeState.event;
 
   constructor() {
     this._state = JSON.parse(JSON.stringify(DEFAULT_STATE));
   }
 
-  /** Get a readonly snapshot of the current state */
   get state(): Readonly<GitPilotState> {
     return this._state;
   }
 
-  /** Subscribe to state changes */
   subscribe(listener: StateChangeListener): vscode.Disposable {
     this._listeners.push(listener);
     return new vscode.Disposable(() => {
@@ -84,12 +115,10 @@ export class StateStore {
     });
   }
 
-  /** Merge a partial state update */
   update(partial: Partial<GitPilotState>): void {
     this._state = {
       ...this._state,
       ...partial,
-      // Deep merge nested objects
       server: partial.server
         ? { ...this._state.server, ...partial.server }
         : this._state.server,
@@ -117,52 +146,179 @@ export class StateStore {
       workflow: partial.workflow
         ? { ...this._state.workflow, ...partial.workflow }
         : this._state.workflow,
+      projectContextSummary: partial.projectContextSummary
+        ? {
+            ...this._state.projectContextSummary,
+            ...partial.projectContextSummary,
+            languages:
+              partial.projectContextSummary.languages ??
+              this._state.projectContextSummary.languages,
+            manifests:
+              partial.projectContextSummary.manifests ??
+              this._state.projectContextSummary.manifests,
+            keyFiles:
+              partial.projectContextSummary.keyFiles ??
+              this._state.projectContextSummary.keyFiles,
+          }
+        : this._state.projectContextSummary,
+      activeTask: partial.activeTask
+        ? {
+            ...this._state.activeTask,
+            ...partial.activeTask,
+            filesInScope:
+              partial.activeTask.filesInScope ??
+              this._state.activeTask.filesInScope,
+            changedFiles:
+              partial.activeTask.changedFiles ??
+              this._state.activeTask.changedFiles,
+            edits: partial.activeTask.edits ?? this._state.activeTask.edits,
+            plan:
+              partial.activeTask.plan !== undefined
+                ? partial.activeTask.plan
+                : this._state.activeTask.plan,
+          }
+        : this._state.activeTask,
     };
+
     this._notify();
   }
 
-  /** Update server state */
   updateServer(server: Partial<ServerState>): void {
-    this.update({ server: { ...this._state.server, ...server } });
-  }
-
-  /** Update provider state */
-  updateProvider(provider: Partial<ProviderState>): void {
-    this.update({ provider: { ...this._state.provider, ...provider } });
-  }
-
-  /** Update GitHub state */
-  updateGithub(github: Partial<GithubState>): void {
-    this.update({ github: { ...this._state.github, ...github } });
-  }
-
-  /** Update workspace state */
-  updateWorkspace(workspace: Partial<WorkspaceState>): void {
     this.update({
-      workspace: { ...this._state.workspace, ...workspace },
+      server: { ...this._state.server, ...server },
     });
   }
 
-  /** Update session state */
-  updateSession(session: Partial<SessionState>): void {
-    this.update({ session: { ...this._state.session, ...session } });
+  updateProvider(provider: Partial<ProviderState>): void {
+    this.update({
+      provider: { ...this._state.provider, ...provider },
+    });
   }
 
-  /** Update readiness state */
+  updateGithub(github: Partial<GithubState>): void {
+    this.update({
+      github: { ...this._state.github, ...github },
+    });
+  }
+
+  updateWorkspace(workspace: Partial<WorkspaceState>): void {
+    this.update({
+      workspace: {
+        ...this._state.workspace,
+        ...workspace,
+        git: workspace.git
+          ? { ...this._state.workspace.git, ...workspace.git }
+          : this._state.workspace.git,
+      },
+    });
+  }
+
+  updateSession(session: Partial<SessionState>): void {
+    this.update({
+      session: { ...this._state.session, ...session },
+    });
+  }
+
   updateReadiness(readiness: Partial<ReadinessState>): void {
     this.update({
       readiness: { ...this._state.readiness, ...readiness },
     });
   }
 
-  /** Update workflow state */
   updateWorkflow(workflow: Partial<WorkflowState>): void {
     this.update({
       workflow: { ...this._state.workflow, ...workflow },
     });
   }
 
-  /** Reset to default state */
+  updateProjectContextSummary(
+    patch: Partial<ProjectContextSummaryState>
+  ): void {
+    this.update({
+      projectContextSummary: {
+        ...this._state.projectContextSummary,
+        ...patch,
+      },
+    });
+  }
+
+  updateActiveTask(patch: Partial<ActiveTaskState>): void {
+    this.update({
+      activeTask: {
+        ...this._state.activeTask,
+        ...patch,
+        updatedAt: patch.updatedAt ?? new Date().toISOString(),
+      },
+    });
+  }
+
+  setTaskStatus(status: TaskStatus, error?: string): void {
+    const now = new Date().toISOString();
+
+    this.update({
+      activeTask: {
+        ...this._state.activeTask,
+        status,
+        error:
+          error !== undefined
+            ? error
+            : status === "failed"
+              ? this._state.activeTask.error
+              : undefined,
+        startedAt:
+          this._state.activeTask.startedAt ??
+          (status !== "idle" ? now : undefined),
+        updatedAt: now,
+      },
+    });
+  }
+
+  setTaskPlan(plan: ActiveTaskState["plan"]): void {
+    this.update({
+      activeTask: {
+        ...this._state.activeTask,
+        plan,
+        updatedAt: new Date().toISOString(),
+      },
+    });
+  }
+
+  setFilesInScope(filesInScope: FileInScope[]): void {
+    this.update({
+      activeTask: {
+        ...this._state.activeTask,
+        filesInScope,
+        updatedAt: new Date().toISOString(),
+      },
+    });
+  }
+
+  setChangedFiles(changedFiles: ChangedFile[]): void {
+    this.update({
+      activeTask: {
+        ...this._state.activeTask,
+        changedFiles,
+        updatedAt: new Date().toISOString(),
+      },
+    });
+  }
+
+  setProposedEdits(edits: ProposedEdit[]): void {
+    this.update({
+      activeTask: {
+        ...this._state.activeTask,
+        edits,
+        updatedAt: new Date().toISOString(),
+      },
+    });
+  }
+
+  clearTaskState(): void {
+    this.update({
+      activeTask: JSON.parse(JSON.stringify(DEFAULT_ACTIVE_TASK)),
+    });
+  }
+
   reset(): void {
     this._state = JSON.parse(JSON.stringify(DEFAULT_STATE));
     this._notify();
@@ -174,7 +330,7 @@ export class StateStore {
       try {
         listener(this._state);
       } catch {
-        // Swallow listener errors
+        // swallow listener errors
       }
     }
   }

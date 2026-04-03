@@ -1,11 +1,14 @@
-import type { ProjectContext } from "./projectContextService";
-import type { WorkingSet } from "./workingSetService";
+import type {
+  StructuredProjectContext,
+  StructuredWorkingSet,
+  StructuredTaskContext,
+  StructuredContextBundle,
+  ChatScope,
+} from "../../core/types";
 
-export type TaskContext = {
-  intent: string;
-  scope: "workspace" | "selection" | "file";
-  summary: string;
-};
+export type TaskContext = StructuredTaskContext;
+export type ProjectContext = StructuredProjectContext;
+export type WorkingSet = StructuredWorkingSet;
 
 export class ContextAssembler {
   buildTaskContext(input: {
@@ -13,16 +16,18 @@ export class ContextAssembler {
     rawMessage: string;
     workingSet?: WorkingSet;
   }): TaskContext {
-    const scope: "workspace" | "selection" | "file" = input.workingSet?.currentSelection
+    const scope: ChatScope = input.workingSet?.currentSelection
       ? "selection"
       : input.workingSet?.currentFile
-      ? "file"
-      : "workspace";
+        ? "file"
+        : "workspace";
 
     const summaryParts = [
       `intent=${input.intent}`,
       scope !== "workspace" ? `scope=${scope}` : undefined,
-      input.workingSet?.currentFile ? `current_file=${input.workingSet.currentFile}` : undefined,
+      input.workingSet?.currentFile
+        ? `current_file=${input.workingSet.currentFile}`
+        : undefined,
     ].filter(Boolean);
 
     return {
@@ -32,35 +37,85 @@ export class ContextAssembler {
     };
   }
 
-  buildLegacyPrompt(project?: ProjectContext, working?: WorkingSet, task?: TaskContext, userMessage?: string): string {
+  buildStructuredContextBundle(input: {
+    project_context?: ProjectContext;
+    working_set?: WorkingSet;
+    task_context?: TaskContext;
+    userMessage: string;
+  }): StructuredContextBundle {
+    return {
+      project_context: input.project_context,
+      working_set: input.working_set,
+      task_context: input.task_context,
+      legacy_prompt: this.buildLegacyPrompt(
+        input.project_context,
+        input.working_set,
+        input.task_context,
+        input.userMessage
+      ),
+    };
+  }
+
+  buildLegacyPrompt(
+    project?: ProjectContext,
+    working?: WorkingSet,
+    task?: TaskContext,
+    userMessage?: string
+  ): string {
     const sections: string[] = [];
 
     if (project) {
-      sections.push([
-        "Project context:",
-        project.repoName ? `Repo: ${project.repoName}` : undefined,
-        project.branch ? `Branch: ${project.branch}` : undefined,
-        project.mode ? `Mode: ${project.mode}` : undefined,
-        project.languages.length ? `Languages: ${project.languages.join(", ")}` : undefined,
-        project.manifests.length ? `Manifests: ${project.manifests.join(", ")}` : undefined,
-        project.keyFiles.length ? `Key files: ${project.keyFiles.join(", ")}` : undefined,
-        project.treeSummary.length ? `Tree:\n${project.treeSummary.map((e) => `- ${e.type}: ${e.path}`).join("\n")}` : undefined,
-        project.readmePreview ? `README preview:\n${project.readmePreview}` : undefined,
-      ].filter(Boolean).join("\n"));
+      sections.push(
+        [
+          "Project context:",
+          project.repoName ? `Repo: ${project.repoName}` : undefined,
+          project.branch ? `Branch: ${project.branch}` : undefined,
+          project.mode ? `Mode: ${project.mode}` : undefined,
+          project.languages?.length
+            ? `Languages: ${project.languages.join(", ")}`
+            : undefined,
+          project.manifests?.length
+            ? `Manifests: ${project.manifests.join(", ")}`
+            : undefined,
+          project.keyFiles?.length
+            ? `Key files: ${project.keyFiles.join(", ")}`
+            : undefined,
+          project.treeSummary?.length
+            ? `Tree:\n${project.treeSummary
+                .map((entry) => `- ${entry.type}: ${entry.path}`)
+                .join("\n")}`
+            : undefined,
+          project.readmePreview
+            ? `README preview:\n${project.readmePreview}`
+            : undefined,
+        ]
+          .filter(Boolean)
+          .join("\n")
+      );
     }
 
     if (working) {
-      sections.push([
-        "Working set:",
-        working.currentFile ? `Current file: ${working.currentFile}` : undefined,
-        working.languageId ? `Language: ${working.languageId}` : undefined,
-        working.currentSelection ? `Selection:\n\`\`\`\n${working.currentSelection}\n\`\`\`` : undefined,
-        working.openTabs.length ? `Open tabs: ${working.openTabs.join(", ")}` : undefined,
-        working.relatedFiles.length ? `Related files: ${working.relatedFiles.join(", ")}` : undefined,
-      ].filter(Boolean).join("\n"));
+      sections.push(
+        [
+          "Working set:",
+          working.currentFile ? `Current file: ${working.currentFile}` : undefined,
+          working.languageId ? `Language: ${working.languageId}` : undefined,
+          working.currentSelection
+            ? `Selection:\n\`\`\`\n${working.currentSelection}\n\`\`\``
+            : undefined,
+          working.openTabs?.length
+            ? `Open tabs: ${working.openTabs.join(", ")}`
+            : undefined,
+          working.relatedFiles?.length
+            ? `Related files: ${working.relatedFiles.join(", ")}`
+            : undefined,
+        ]
+          .filter(Boolean)
+          .join("\n")
+      );
     }
 
-    if (task) {
+    if (task?.summary) {
       sections.push(`Task context:\n${task.summary}`);
     }
 

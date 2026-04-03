@@ -4,9 +4,10 @@ Centralized Pydantic models for the redesigned API contract.
 """
 
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
 
 # ─── Enums ────────────────────────────────────────────────
 
@@ -130,7 +131,7 @@ class StartSessionResponse(BaseModel):
     branch: str | None = None
 
 
-# ─── Chat Models ─────────────────────────────────────────
+# ─── Chat / Task Models ──────────────────────────────────
 
 class PlanStepSummary(BaseModel):
     step: int
@@ -152,6 +153,25 @@ class FileReference(BaseModel):
     line: int | None = None
 
 
+class FileTreeEntry(BaseModel):
+    path: str
+    type: Literal["file", "dir"]
+
+
+class FileInScope(BaseModel):
+    path: str
+    reason: str | None = None
+    confidence: Literal["low", "medium", "high"] | None = None
+
+
+class ProposedEdit(BaseModel):
+    file: str
+    kind: Literal["create", "replace", "patch"]
+    summary: str | None = None
+    diff: str | None = None
+    content: str | None = None
+
+
 class StructuredProjectContext(BaseModel):
     mode: str | None = None
     workspaceRoot: str | None = None
@@ -162,7 +182,7 @@ class StructuredProjectContext(BaseModel):
     manifests: list[str] = Field(default_factory=list)
     keyFiles: list[str] = Field(default_factory=list)
     readmePreview: str | None = None
-    treeSummary: list[dict] = Field(default_factory=list)
+    treeSummary: list[FileTreeEntry] = Field(default_factory=list)
     indexedAt: str | None = None
 
 
@@ -197,6 +217,8 @@ class ChatMessageResponse(BaseModel):
     answer: str
     message_id: str | None = None
     plan: PlanSummary | None = None
+    filesInScope: list[FileInScope] = Field(default_factory=list)
+    edits: list[ProposedEdit] = Field(default_factory=list)
     references: list[FileReference] = Field(default_factory=list)
 
 

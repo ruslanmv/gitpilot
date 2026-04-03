@@ -1103,6 +1103,47 @@ export function activate(context: vscode.ExtensionContext): void {
             await vscode.commands.executeCommand("gitpilot.refreshStatus");
             return;
 
+          case "OPEN_SETUP_WIZARD":
+            await vscode.commands.executeCommand("gitpilot.setupWizard");
+            return;
+
+          case "REFRESH_PROJECT_CONTEXT":
+            await vscode.commands.executeCommand(
+              "gitpilot.refreshProjectContext"
+            );
+            return;
+
+          case "OPEN_CHANGED_FILE": {
+            const folderPath = stateStore.state.workspace.folderPath;
+            if (!folderPath) {
+              vscode.window.showWarningMessage(
+                "No workspace folder is currently open."
+              );
+              return;
+            }
+
+            const fileUri = vscode.Uri.file(
+              path.join(folderPath, msg.payload.path)
+            );
+            await vscode.commands.executeCommand("vscode.open", fileUri);
+            return;
+          }
+
+          case "OPEN_CHANGED_DIFF":
+            await vscode.commands.executeCommand(
+              "gitpilot.openChangedDiff",
+              msg.payload.path
+            );
+            return;
+
+          case "APPLY_PROPOSED_CHANGES":
+            await vscode.commands.executeCommand("gitpilot.applyProposedChanges");
+            return;
+
+          case "REGENERATE_TASK_PLAN":
+            await vscode.commands.executeCommand("gitpilot.regenerateTaskPlan");
+            return;
+
           default: {
             const exhaustiveCheck: never = msg;
             void exhaustiveCheck;
@@ -1138,7 +1179,10 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
-    vscode.languages.registerCodeLensProvider({ scheme: "file" }, codeLensProvider),
+    vscode.languages.registerCodeLensProvider(
+      { scheme: "file" },
+      codeLensProvider
+    ),
     vscode.languages.registerCodeActionsProvider(
       { scheme: "file" },
       new GitPilotCodeActionProvider(),
@@ -1205,6 +1249,32 @@ export function activate(context: vscode.ExtensionContext): void {
     clearProjectCaches();
     await getProjectSnapshot(true);
     vscode.window.showInformationMessage("GitPilot project context refreshed.");
+  });
+
+  registerCommand("gitpilot.openChangedDiff", async (relativePath?: unknown) => {
+    const folderPath = stateStore.state.workspace.folderPath;
+    if (!folderPath || typeof relativePath !== "string" || !relativePath) {
+      vscode.window.showWarningMessage(
+        "Unable to open diff. No workspace folder or target file was provided."
+      );
+      return;
+    }
+
+    const filePath = path.join(folderPath, relativePath);
+    const fileUri = vscode.Uri.file(filePath);
+    await vscode.commands.executeCommand("vscode.open", fileUri);
+  });
+
+  registerCommand("gitpilot.applyProposedChanges", async () => {
+    vscode.window.showInformationMessage(
+      "Apply Proposed Changes is registered, but the patch-apply pipeline is not fully wired in this file yet."
+    );
+  });
+
+  registerCommand("gitpilot.regenerateTaskPlan", async () => {
+    vscode.window.showInformationMessage(
+      "Regenerate Task Plan is registered. Trigger task replanning from the Workspace Copilot flow."
+    );
   });
 
   registerCommand("gitpilot.explain_project", async () => {

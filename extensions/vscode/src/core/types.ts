@@ -58,6 +58,65 @@ export interface WorkflowState {
   reason?: string;
 }
 
+// ─── Task / Workspace Copilot State ─────────────────────
+
+export type TaskStatus =
+  | "idle"
+  | "planning"
+  | "generating"
+  | "reviewing"
+  | "ready_to_apply"
+  | "applying"
+  | "done"
+  | "failed";
+
+export interface FileInScope {
+  path: string;
+  reason?: string;
+  confidence?: "low" | "medium" | "high";
+}
+
+export interface ChangedFile {
+  path: string;
+  status: "proposed" | "applied" | "failed";
+  summary?: string;
+  hasDiff: boolean;
+}
+
+export interface ProposedEdit {
+  file: string;
+  kind: "create" | "replace" | "patch";
+  summary?: string;
+  diff?: string;
+  content?: string;
+}
+
+export interface ActiveTaskState {
+  id?: string;
+  title?: string;
+  intent?: ChatIntent | string;
+  status: TaskStatus;
+  summary?: string;
+  filesInScope: FileInScope[];
+  changedFiles: ChangedFile[];
+  edits: ProposedEdit[];
+  plan?: PlanSummary;
+  startedAt?: string;
+  updatedAt?: string;
+  error?: string;
+}
+
+export interface ProjectContextSummaryState {
+  mode?: WorkspaceMode;
+  repoName?: string;
+  branch?: string;
+  indexedFiles?: number;
+  languages?: string[];
+  manifests?: string[];
+  keyFiles?: string[];
+  indexedAt?: string;
+}
+
 // ─── State Models ────────────────────────────────────────
 
 export interface GitContext {
@@ -140,6 +199,8 @@ export interface GitPilotState {
   session: SessionState;
   readiness: ReadinessState;
   workflow: WorkflowState;
+  projectContextSummary: ProjectContextSummaryState;
+  activeTask: ActiveTaskState;
 }
 
 // ─── Shared Context Types ────────────────────────────────
@@ -230,7 +291,8 @@ export type ExtensionToWebviewMessage =
   | { type: "CHAT_RESPONSE"; payload: ChatMessagePayload }
   | { type: "ACTION_RESULT"; payload: ActionResultPayload }
   | { type: "ERROR"; payload: UiErrorPayload }
-  | { type: "SESSION_UPDATED"; payload: SessionState };
+  | { type: "SESSION_UPDATED"; payload: SessionState }
+  | { type: "TASK_STATE_UPDATED"; payload: ActiveTaskState };
 
 // Webview → Extension
 export type WebviewToExtensionMessage =
@@ -256,7 +318,13 @@ export type WebviewToExtensionMessage =
   | { type: "OPEN_LLM_SETTINGS" }
   | { type: "OPEN_WORKSPACE" }
   | { type: "SET_WORKFLOW_MODE"; payload: { mode: WorkflowMode } }
-  | { type: "REFRESH_STATUS" };
+  | { type: "REFRESH_STATUS" }
+  | { type: "OPEN_SETUP_WIZARD" }
+  | { type: "REFRESH_PROJECT_CONTEXT" }
+  | { type: "OPEN_CHANGED_FILE"; payload: { path: string } }
+  | { type: "OPEN_CHANGED_DIFF"; payload: { path: string } }
+  | { type: "APPLY_PROPOSED_CHANGES" }
+  | { type: "REGENERATE_TASK_PLAN" };
 
 // ─── Backend API Types ───────────────────────────────────
 
@@ -323,6 +391,8 @@ export interface ChatMessageResponse {
   answer: string;
   message_id?: string;
   plan?: PlanSummary;
+  filesInScope?: FileInScope[];
+  edits?: ProposedEdit[];
   references?: Array<{
     path: string;
     line?: number;
