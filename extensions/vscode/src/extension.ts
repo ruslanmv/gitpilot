@@ -9,6 +9,8 @@
  * - automatic session creation
  * - deterministic "Explain project" behavior
  * - safer message handling and diagnostics
+ * - state-driven chat synchronization for the Workspace webview
+ * - reduced duplicate refresh/bootstrap churn
  */
 
 import * as fs from "fs";
@@ -76,6 +78,7 @@ import type {
   StructuredProjectContext,
   StructuredWorkingSet,
   StructuredTaskContext,
+  PlanSummary,
 } from "./core/types";
 
 type DisposableLike = { dispose(): void };
@@ -109,6 +112,14 @@ type StructuredContextBundle = {
   working_set?: StructuredWorkingSet;
   task_context?: StructuredTaskContext;
   legacy_prompt: string;
+};
+
+type ChatMessageState = {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  createdAt: string;
+  plan?: PlanSummary;
 };
 
 const OUTPUT_CHANNEL_NAME = "GitPilot";
@@ -275,6 +286,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (parent === current) {
         return undefined;
       }
+
       current = parent;
     }
   };
@@ -659,6 +671,135 @@ export function activate(context: vscode.ExtensionContext): void {
     };
   };
 
+  const toPlanSummary = (plan: unknown): PlanSummary | undefined => {
+    if (!plan || typeof plan !== "object") {
+      return undefined;
+    }
+
+    const raw = plan as {
+      goal?: unknown;
+      summary?: unknown;
+      steps?: unknown;
+    };
+
+    const rawSteps = Array.isArray(raw.steps) ? raw.steps : [];
+
+    const normalizePlanStepStatus = (
+      status: unknown
+    ): PlanSummary["steps"][number]["status"] => {
+      if (status === "failed" || status === "applied" || status === "pending" || status === "ready") {
+        return status;
+      }
+      return "pending";
+    };
+
+    return {
+      goal:
+        typeof raw.goal === "string" && raw.goal.trim()
+          ? raw.goal
+          : "Complete the requested task",
+      summary:
+        typeof raw.summary === "string" && raw.summary.trim()
+          ? raw.summary
+          : "GitPilot generated a task plan.",
+      steps: rawSteps.map((step, index) => {
+        const item =
+          step && typeof step === "object"
+            ? (step as {
+                id?: unknown;
+                title?: unknown;
+                description?: unknown;
+                status?: unknown;
+                file?: unknown;
+                action?: unknown;
+              })
+            : {};
+
+        return {
+          step: index + 1,
+          id:
+            typeof item.id === "string" && item.id.trim()
+              ? item.id
+              : `step-${index + 1}`,
+          title:
+            typeof item.title === "string" && item.title.trim()
+              ? item.title
+              : typeof item.action === "string" && item.action.trim()
+                ? item.action
+                : `Step ${index + 1}`,
+          description:
+            typeof item.description === "string"
+              ? item.description
+              : typeof item.file === "string"
+                ? item.file
+                : "Planned task step",
+          status: normalizePlanStepStatus(item.status),
+          file:
+            typeof item.file === "string" && item.file.trim()
+              ? item.file
+              : undefined,
+          action:
+            typeof item.action === "string" && item.action.trim()
+              ? item.action
+              : "planned_action",
+        };
+      }),
+    };
+  };
+
+  const appendChatMessageToState = (message: ChatMessageState): void => {
+    const store = stateStore as unknown as {
+      appendChatMessage?: (msg: ChatMessageState) => void;
+      updateChat?: (patch: { messages: ChatMessageState[] }) => void;
+      state: {
+        chat?: {
+          messages?: ChatMessageState[];
+        };
+      };
+    };
+
+    if (typeof store.appendChatMessage === "function") {
+      store.appendChatMessage(message);
+      return;
+    }
+
+    const currentMessages = store.state.chat?.messages ?? [];
+    if (typeof store.updateChat === "function") {
+      store.updateChat({
+        messages: [...currentMessages, message],
+      });
+      return;
+    }
+
+    output.appendLine(
+      "[GitPilot] Warning: StateStore has no appendChatMessage/updateChat method."
+    );
+  };
+
+  const syncResponsePlanToState = (response: {
+    answer?: string;
+    plan?: unknown;
+    message_id?: string;
+  }): void => {
+    const normalizedPlan = toPlanSummary(response.plan);
+    if (!normalizedPlan) {
+      return;
+    }
+
+    const currentTask = stateStore.state.activeTask || {};
+
+    stateStore.updateActiveTask({
+      ...currentTask,
+      title: currentTask.title || normalizedPlan.goal || "Task in progress",
+      summary:
+        currentTask.summary ||
+        normalizedPlan.summary ||
+        "GitPilot generated a plan and is preparing scoped changes.",
+      status: currentTask.status === "idle" ? "planning" : currentTask.status,
+      plan: normalizedPlan,
+    });
+  };
+
   const registerCommand = (
     commandId: string,
     handler: (...args: unknown[]) => unknown | Promise<unknown>
@@ -691,6 +832,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const refreshStatusAndBootstrap = async (reason: string): Promise<void> => {
     if (autoBootstrapInFlight) {
+      output.appendLine(
+        `[GitPilot] Bootstrap skipped (already running): ${reason}`
+      );
       return;
     }
 
@@ -701,21 +845,28 @@ export function activate(context: vscode.ExtensionContext): void {
 
       await vscode.commands.executeCommand("gitpilot.refreshStatus");
 
+      let needsFinalRefresh = false;
       let state = stateStore.state;
+
       if (!state.workspace.folderOpen) {
         return;
       }
 
       const autoProvider =
         await settingsClient.bootstrapLocalProviderDefaults();
+
       if (autoProvider.changed) {
         output.appendLine(
           `[GitPilot] Auto-configured provider=${autoProvider.provider} model=${autoProvider.model}`
         );
-        await vscode.commands.executeCommand("gitpilot.refreshStatus");
+        needsFinalRefresh = true;
       }
 
-      state = stateStore.state;
+      if (needsFinalRefresh) {
+        await vscode.commands.executeCommand("gitpilot.refreshStatus");
+        state = stateStore.state;
+        needsFinalRefresh = false;
+      }
 
       if (
         state.readiness.canChat &&
@@ -724,6 +875,10 @@ export function activate(context: vscode.ExtensionContext): void {
       ) {
         output.appendLine("[GitPilot] Auto-starting session...");
         await sessionCoordinator.ensureActiveSession();
+        needsFinalRefresh = true;
+      }
+
+      if (needsFinalRefresh) {
         await vscode.commands.executeCommand("gitpilot.refreshStatus");
       }
 
@@ -736,13 +891,21 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
   const ensureSessionReady = async (): Promise<string | undefined> => {
-    if (
-      !stateStore.state.session.sessionId &&
-      stateStore.state.readiness.canChat
-    ) {
-      await sessionCoordinator.ensureActiveSession();
-      await vscode.commands.executeCommand("gitpilot.refreshStatus");
+    const state = stateStore.state;
+
+    if (state.session.sessionId) {
+      return state.session.sessionId;
     }
+
+    if (!state.readiness.canChat) {
+      return undefined;
+    }
+
+    if (!state.session.active && state.session.status !== "creating") {
+      await sessionCoordinator.ensureActiveSession();
+    }
+
+    await vscode.commands.executeCommand("gitpilot.refreshStatus");
     return stateStore.state.session.sessionId;
   };
 
@@ -842,6 +1005,27 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
 
+    const userMessage: ChatMessageState = {
+      id: `user:${Date.now()}`,
+      role: "user",
+      content: text,
+      createdAt: new Date().toISOString(),
+    };
+
+    appendChatMessageToState(userMessage);
+
+    const currentTask = stateStore.state.activeTask || {};
+    stateStore.updateActiveTask({
+      ...currentTask,
+      status:
+        currentTask.status && currentTask.status !== "idle"
+          ? currentTask.status
+          : "planning",
+      title: currentTask.title || "Working on your request",
+      summary:
+        currentTask.summary || "GitPilot is analyzing the repository context.",
+    });
+
     const sessionId = await ensureSessionReady();
 
     if (!sessionId) {
@@ -881,17 +1065,40 @@ export function activate(context: vscode.ExtensionContext): void {
         task_context: structuredContext.task_context,
       });
 
-      postMessageToPanel({
-        type: "CHAT_RESPONSE",
-        payload: {
-          id: response.message_id || Date.now().toString(),
-          role: "assistant",
-          content: response.answer,
-          createdAt: new Date().toISOString(),
-          plan: response.plan,
-        },
+      const normalizedPlan = toPlanSummary(response.plan);
+
+      const assistantMessage: ChatMessageState = {
+        id: response.message_id || `assistant:${Date.now()}`,
+        role: "assistant",
+        content: response.answer,
+        createdAt: new Date().toISOString(),
+        plan: normalizedPlan,
+      };
+
+      appendChatMessageToState(assistantMessage);
+      syncResponsePlanToState(response);
+
+      const updatedTask = stateStore.state.activeTask || {};
+      stateStore.updateActiveTask({
+        ...updatedTask,
+        status: normalizedPlan ? "ready_to_apply" : "done",
+        summary:
+          response.answer ||
+          updatedTask.summary ||
+          "GitPilot completed the request.",
       });
+
+      output.appendLine(
+        `[GitPilot] Chat response received. intent=${intent} session=${sessionId}`
+      );
     } catch (error: unknown) {
+      appendOutputError("[GitPilot] Chat request failed", error);
+
+      stateStore.updateActiveTask({
+        ...(stateStore.state.activeTask || {}),
+        status: "failed",
+      });
+
       postErrorToPanel({
         code: "CHAT_ERROR",
         title: "Chat Error",
@@ -1003,11 +1210,14 @@ export function activate(context: vscode.ExtensionContext): void {
     legacyChatProvider.updateConnectionState(connected);
     stateStore.updateServer({ connected });
 
-    if (connected) {
-      sessionsTree.refresh();
-      skillsTree.refresh();
-      void refreshStatusAndBootstrap("client-connected");
+    if (!connected) {
+      return;
     }
+
+    sessionsTree.refresh();
+    skillsTree.refresh();
+
+    void refreshStatusAndBootstrap("client-connected");
   });
 
   gitpilotPanel = new GitPilotPanel(
@@ -1154,7 +1364,10 @@ export function activate(context: vscode.ExtensionContext): void {
               });
               return;
             }
-            const fileUri = vscode.Uri.file(path.join(folderPath, msg.payload.path));
+
+            const fileUri = vscode.Uri.file(
+              path.join(folderPath, msg.payload.path)
+            );
             await vscode.commands.executeCommand("revealInExplorer", fileUri);
             return;
           }
