@@ -1,5 +1,5 @@
-// frontend/App.jsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import StartupScreen from "./components/StartupScreen.jsx";
 import LoginPage from "./components/LoginPage.jsx";
 import RepoSelector from "./components/RepoSelector.jsx";
 import ProjectContextPanel from "./components/ProjectContextPanel.jsx";
@@ -22,7 +22,24 @@ function uniq(arr) {
   return Array.from(new Set((arr || []).filter(Boolean)));
 }
 
+function getProviderLabel(status) {
+  if (!status) return "Checking...";
+  return (
+    status?.provider?.name ||
+    status?.provider_name ||
+    status?.provider?.provider ||
+    "Checking..."
+  );
+}
+
+function getBackendVersion(status) {
+  if (!status) return "Checking...";
+  return status?.version || status?.app_version || "Checking...";
+}
+
 export default function App() {
+  const frontendVersion = __APP_VERSION__ || "unknown";
+
   // ---- Multi-repo context state ----
   const [contextRepos, setContextRepos] = useState([]);
   // Each entry: { repoKey: "owner/repo", repo: {...}, branch: "main" }
@@ -33,6 +50,14 @@ export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [userInfo, setUserInfo] = useState(null);
+
+  // Startup / enterprise loader state
+  const [startupPhase, setStartupPhase] = useState("booting");
+  const [startupStatusMessage, setStartupStatusMessage] = useState("Starting application...");
+  const [startupDetailMessage, setStartupDetailMessage] = useState(
+    "Initializing authentication, provider, and workspace context."
+  );
+  const [startupStatusSnapshot, setStartupStatusSnapshot] = useState(null);
 
   // Repo + Session State Machine
   const [repoStateByKey, setRepoStateByKey] = useState({});
@@ -45,7 +70,7 @@ export default function App() {
   useEffect(() => {
     if (activePage === "admin" && adminTab === "overview") {
       fetchStatus()
-        .then(data => setAdminStatus(data))
+        .then((data) => setAdminStatus(data))
         .catch(() => setAdminStatus(null));
     }
   }, [activePage, adminTab]);
@@ -57,14 +82,19 @@ export default function App() {
 
   // Sidebar collapse state (persisted in localStorage)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    try { return localStorage.getItem("gitpilot_sidebar_collapsed") === "true"; }
-    catch { return false; }
+    try {
+      return localStorage.getItem("gitpilot_sidebar_collapsed") === "true";
+    } catch {
+      return false;
+    }
   });
 
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed((prev) => {
       const next = !prev;
-      try { localStorage.setItem("gitpilot_sidebar_collapsed", String(next)); } catch {}
+      try {
+        localStorage.setItem("gitpilot_sidebar_collapsed", String(next));
+      } catch {}
       return next;
     });
   }, []);
@@ -107,16 +137,14 @@ export default function App() {
     if (!key) return;
 
     setContextRepos((prev) => {
-      // Don't add duplicates
       if (prev.some((e) => e.repoKey === key)) {
-        // Already in context — just activate it
         setActiveRepoKey(key);
         return prev;
       }
       const entry = { repoKey: key, repo: r, branch: r.default_branch || "main" };
-      const next = [...prev, entry];
-      return next;
+      return [...prev, entry];
     });
+
     setActiveRepoKey(key);
     setAddRepoOpen(false);
   }, []);
@@ -124,7 +152,6 @@ export default function App() {
   const removeRepoFromContext = useCallback((key) => {
     setContextRepos((prev) => {
       const next = prev.filter((e) => e.repoKey !== key);
-      // Reassign active if we removed the active one
       setActiveRepoKey((curActive) => {
         if (curActive === key) {
           return next.length > 0 ? next[0].repoKey : null;
@@ -141,13 +168,12 @@ export default function App() {
   }, []);
 
   const handleContextBranchChange = useCallback((targetRepoKey, newBranch) => {
-    // Update branch in contextRepos
     setContextRepos((prev) =>
       prev.map((e) =>
         e.repoKey === targetRepoKey ? { ...e, branch: newBranch } : e
       )
     );
-    // Update branch in repoStateByKey
+
     setRepoStateByKey((prev) => {
       const cur = prev[targetRepoKey];
       if (!cur) return prev;
@@ -207,82 +233,74 @@ export default function App() {
   // Session management — every chat is backed by a Session (Claude Code parity)
   // ---------------------------------------------------------------------------
 
-  // Guard against double-creation during concurrent send() calls
   const _creatingSessionRef = useRef(false);
 
-  /**
-   * ensureSession — Create a session on-demand (implicit).
-   *
-   * Called by ChatPanel before the first message is sent.  If a session
-   * already exists it returns the current ID immediately.  Otherwise it
-   * creates one, seeds the initial messages into chatBySession so the
-   * useEffect reset doesn't wipe them, and returns the new ID.
-   *
-   * @param {string} [sessionName] — optional title (first user prompt, truncated)
-   * @param {Array}  [seedMessages] — messages to pre-populate into the new session
-   * @returns {Promise<string|null>} the session ID
-   */
-  const ensureSession = useCallback(async (sessionName, seedMessages) => {
-    if (activeSessionId) return activeSessionId;
-    if (!repo) return null;
-    if (_creatingSessionRef.current) return null; // already in flight
-    _creatingSessionRef.current = true;
+  const [chatBySession, setChatBySession] = useState({});
 
-    try {
-      const token = localStorage.getItem("github_token");
-      const headers = {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      };
-      const res = await fetch("/api/sessions", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          repo_full_name: repoKey,
-          branch: currentBranch,
-          name: sessionName || undefined,
-          repos: contextRepos.map((e) => ({
-            full_name: e.repoKey,
-            branch: e.branch,
-            mode: e.repoKey === activeRepoKey ? "write" : "read",
-          })),
-          active_repo: activeRepoKey,
-        }),
-      });
-      if (!res.ok) return null;
-      const data = await res.json();
-      const newId = data.session_id;
+  const ensureSession = useCallback(
+    async (sessionName, seedMessages) => {
+      if (activeSessionId) return activeSessionId;
+      if (!repo) return null;
+      if (_creatingSessionRef.current) return null;
+      _creatingSessionRef.current = true;
 
-      // Seed the session's chat state BEFORE setting activeSessionId so
-      // the ChatPanel useEffect sync picks up the messages instead of []
-      if (seedMessages && seedMessages.length > 0) {
-        setChatBySession((prev) => ({
-          ...prev,
-          [newId]: { messages: seedMessages, plan: null },
-        }));
+      try {
+        const token = localStorage.getItem("github_token");
+        const headers = {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        };
+
+        const res = await fetch("/api/sessions", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            repo_full_name: repoKey,
+            branch: currentBranch,
+            name: sessionName || undefined,
+            repos: contextRepos.map((e) => ({
+              full_name: e.repoKey,
+              branch: e.branch,
+              mode: e.repoKey === activeRepoKey ? "write" : "read",
+            })),
+            active_repo: activeRepoKey,
+          }),
+        });
+
+        if (!res.ok) return null;
+        const data = await res.json();
+        const newId = data.session_id;
+
+        if (seedMessages && seedMessages.length > 0) {
+          setChatBySession((prev) => ({
+            ...prev,
+            [newId]: { messages: seedMessages, plan: null },
+          }));
+        }
+
+        setActiveSessionId(newId);
+        setSessionRefreshNonce((n) => n + 1);
+        return newId;
+      } catch (err) {
+        console.warn("Failed to create session:", err);
+        return null;
+      } finally {
+        _creatingSessionRef.current = false;
       }
+    },
+    [activeSessionId, repo, repoKey, currentBranch, contextRepos, activeRepoKey]
+  );
 
-      setActiveSessionId(newId);
-      setSessionRefreshNonce((n) => n + 1);
-      return newId;
-    } catch (err) {
-      console.warn("Failed to create session:", err);
-      return null;
-    } finally {
-      _creatingSessionRef.current = false;
-    }
-  }, [activeSessionId, repo, repoKey, currentBranch, contextRepos, activeRepoKey]);
-
-  // Explicit "New Session" button — clears chat and starts fresh
   const handleNewSession = async () => {
-    // Clear the current session so ensureSession creates a new one
     setActiveSessionId(null);
+
     try {
       const token = localStorage.getItem("github_token");
       const headers = {
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       };
+
       const res = await fetch("/api/sessions", {
         method: "POST",
         headers,
@@ -297,11 +315,12 @@ export default function App() {
           active_repo: activeRepoKey,
         }),
       });
+
       if (!res.ok) return;
       const data = await res.json();
       setActiveSessionId(data.session_id);
       setSessionRefreshNonce((n) => n + 1);
-      showToast("Session Created", `New session started.`);
+      showToast("Session Created", "New session started.");
     } catch (err) {
       console.warn("Failed to create session:", err);
     }
@@ -314,39 +333,38 @@ export default function App() {
     }
   };
 
-  // When a session is deleted: if it was the active session, clear the
-  // chat so the user returns to a fresh "new conversation" state.
-  // Non-active session deletions only affect the sidebar (handled there).
-  const handleDeleteSession = useCallback((deletedId) => {
-    if (deletedId === activeSessionId) {
-      setActiveSessionId(null);
-      // Clean up the in-memory chat state for the deleted session
-      setChatBySession((prev) => {
-        const next = { ...prev };
-        delete next[deletedId];
-        return next;
-      });
-      // Also clear the branch-keyed chat (the persistence effect may have
-      // written the first user message there before the session was created)
-      if (repoKey) {
-        setRepoStateByKey((prev) => {
-          const cur = prev[repoKey];
-          if (!cur) return prev;
-          const branchKey = cur.currentBranch || cur.defaultBranch || defaultBranch;
-          return {
-            ...prev,
-            [repoKey]: {
-              ...cur,
-              chatByBranch: {
-                ...(cur.chatByBranch || {}),
-                [branchKey]: { messages: [], plan: null },
-              },
-            },
-          };
+  const handleDeleteSession = useCallback(
+    (deletedId) => {
+      if (deletedId === activeSessionId) {
+        setActiveSessionId(null);
+
+        setChatBySession((prev) => {
+          const next = { ...prev };
+          delete next[deletedId];
+          return next;
         });
+
+        if (repoKey) {
+          setRepoStateByKey((prev) => {
+            const cur = prev[repoKey];
+            if (!cur) return prev;
+            const branchKey = cur.currentBranch || cur.defaultBranch || defaultBranch;
+            return {
+              ...prev,
+              [repoKey]: {
+                ...cur,
+                chatByBranch: {
+                  ...(cur.chatByBranch || {}),
+                  [branchKey]: { messages: [], plan: null },
+                },
+              },
+            };
+          });
+        }
       }
-    }
-  }, [activeSessionId, repoKey, defaultBranch]);
+    },
+    [activeSessionId, repoKey, defaultBranch]
+  );
 
   // ---------------------------------------------------------------------------
   // Chat persistence helpers
@@ -383,16 +401,8 @@ export default function App() {
     return chatByBranch[b] || { messages: [], plan: null };
   }, [chatByBranch, currentBranch, defaultBranch]);
 
-  // ---------------------------------------------------------------------------
-  // Session-scoped chat state: isolate messages per (session + branch) instead
-  // of per-branch alone.  This prevents session A's messages from leaking into
-  // session B when both sessions share the same branch.
-  // ---------------------------------------------------------------------------
-  const [chatBySession, setChatBySession] = useState({});
-
   const sessionChatState = useMemo(() => {
     if (!activeSessionId) {
-      // No session — fall back to legacy branch-keyed chat
       return currentChatState;
     }
     return chatBySession[activeSessionId] || { messages: [], plan: null };
@@ -408,7 +418,6 @@ export default function App() {
         },
       }));
     } else {
-      // No active session — use legacy branch-keyed persistence
       updateChatForCurrentBranch(patch);
     }
   };
@@ -426,7 +435,6 @@ export default function App() {
 
       const nextState = { ...cur, currentBranch: nextBranch };
 
-      // If switching BACK to main/default -> clear main chat (new task start)
       if (nextBranch === cur.defaultBranch) {
         nextState.chatByBranch = {
           ...nextState.chatByBranch,
@@ -437,7 +445,6 @@ export default function App() {
       return { ...prev, [repoKey]: nextState };
     });
 
-    // Also update contextRepos branch tracking
     setContextRepos((prev) =>
       prev.map((e) =>
         e.repoKey === repoKey ? { ...e, branch: nextBranch } : e
@@ -458,7 +465,6 @@ export default function App() {
     branch,
     mode,
     commit_url,
-    message,
     completionMsg,
     sourceBranch,
   }) => {
@@ -494,7 +500,8 @@ export default function App() {
       };
 
       const normalizedCompletion =
-        completionMsg && (completionMsg.answer || completionMsg.content || completionMsg.executionLog)
+        completionMsg &&
+        (completionMsg.answer || completionMsg.content || completionMsg.executionLog)
           ? {
               from: completionMsg.from || "ai",
               role: completionMsg.role || "assistant",
@@ -527,7 +534,10 @@ export default function App() {
           };
         } else {
           const prevChat =
-            (cur.chatByBranch && cur.chatByBranch[prevBranchKey]) || { messages: [], plan: null };
+            (cur.chatByBranch && cur.chatByBranch[prevBranchKey]) || {
+              messages: [],
+              plan: null,
+            };
 
           next.chatByBranch[branch] = {
             messages: [
@@ -568,36 +578,87 @@ export default function App() {
   };
 
   // ---------------------------------------------------------------------------
-  // Auth & Render
+  // Auth & startup render
   // ---------------------------------------------------------------------------
   useEffect(() => {
     checkAuthentication();
   }, []);
 
   const checkAuthentication = async () => {
-    const token = localStorage.getItem("github_token");
-    const user = localStorage.getItem("github_user");
-    if (token && user) {
-      try {
-        const data = await safeFetchJSON(apiUrl("/api/auth/validate"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ access_token: token }),
-        });
-        if (data.authenticated) {
-          setIsAuthenticated(true);
-          setUserInfo(JSON.parse(user));
-          setIsLoading(false);
-          return;
-        }
-      } catch (err) {
-        console.error(err);
+    setStartupPhase("booting");
+    setStartupStatusMessage("Starting application...");
+    setStartupDetailMessage(
+      "Initializing authentication, provider, and workspace context."
+    );
+
+    try {
+      setStartupPhase("checking-backend");
+      setStartupStatusMessage("Checking backend status...");
+      setStartupDetailMessage(
+        "Verifying server health, provider readiness, and platform availability."
+      );
+
+      const status = await fetchStatus().catch(() => null);
+      if (status) {
+        setStartupStatusSnapshot(status);
+        setAdminStatus(status);
       }
-      localStorage.removeItem("github_token");
-      localStorage.removeItem("github_user");
+
+      const token = localStorage.getItem("github_token");
+      const user = localStorage.getItem("github_user");
+
+      if (token && user) {
+        setStartupPhase("validating-auth");
+        setStartupStatusMessage("Validating authentication...");
+        setStartupDetailMessage(
+          "Restoring your GitHub session and confirming access."
+        );
+
+        try {
+          const data = await safeFetchJSON(apiUrl("/api/auth/validate"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ access_token: token }),
+          });
+
+          if (data.authenticated) {
+            setStartupPhase("restoring-session");
+            setStartupStatusMessage("Restoring workspace...");
+            setStartupDetailMessage(
+              "Loading user profile, reconnecting provider state, and preparing the workspace."
+            );
+
+            setIsAuthenticated(true);
+            setUserInfo(JSON.parse(user));
+            setIsLoading(false);
+            return;
+          }
+        } catch (err) {
+          console.error(err);
+        }
+
+        localStorage.removeItem("github_token");
+        localStorage.removeItem("github_user");
+      }
+
+      setStartupPhase("ready");
+      setStartupStatusMessage("Preparing sign-in...");
+      setStartupDetailMessage(
+        "GitPilot is ready. Please authenticate to continue."
+      );
+
+      setIsAuthenticated(false);
+      setIsLoading(false);
+    } catch (err) {
+      console.error(err);
+      setStartupPhase("fallback");
+      setStartupStatusMessage("Starting application...");
+      setStartupDetailMessage(
+        "Continuing with basic startup while backend status is still loading."
+      );
+      setIsAuthenticated(false);
+      setIsLoading(false);
     }
-    setIsAuthenticated(false);
-    setIsLoading(false);
   };
 
   const handleAuthenticated = (session) => {
@@ -613,14 +674,24 @@ export default function App() {
     clearAllContext();
   };
 
-  if (isLoading)
+  if (isLoading) {
     return (
-      <div className="app-root">
-        <div className="loading-spinner"></div>
-      </div>
+      <StartupScreen
+        appName="GitPilot"
+        subtitle="Enterprise Workspace Copilot"
+        frontendVersion={frontendVersion}
+        backendVersion={getBackendVersion(startupStatusSnapshot)}
+        provider={getProviderLabel(startupStatusSnapshot)}
+        statusMessage={startupStatusMessage}
+        detailMessage={startupDetailMessage}
+        phase={startupPhase}
+      />
     );
+  }
 
-  if (!isAuthenticated) return <LoginPage onAuthenticated={handleAuthenticated} />;
+  if (!isAuthenticated) {
+    return <LoginPage onAuthenticated={handleAuthenticated} />;
+  }
 
   const hasContext = contextRepos.length > 0;
 
@@ -628,10 +699,14 @@ export default function App() {
     <div className="app-root">
       <div className="main-wrapper">
         <aside className={`sidebar${sidebarCollapsed ? " sidebar--collapsed" : ""}`}>
-          {/* ---- Brand + Toggle ---- */}
-          <div className="sidebar-top-row">
-            <div className="logo-row" onClick={sidebarCollapsed ? toggleSidebar : undefined}
-                 style={sidebarCollapsed ? { cursor: "pointer" } : undefined}>
+          <div
+            className="sidebar-top-row"
+          >
+            <div
+              className="logo-row"
+              onClick={sidebarCollapsed ? toggleSidebar : undefined}
+              style={sidebarCollapsed ? { cursor: "pointer" } : undefined}
+            >
               <div className="logo-square">GP</div>
               {!sidebarCollapsed && (
                 <div>
@@ -640,6 +715,7 @@ export default function App() {
                 </div>
               )}
             </div>
+
             {!sidebarCollapsed && (
               <button
                 className="sidebar-toggle-btn"
@@ -647,49 +723,72 @@ export default function App() {
                 title="Collapse sidebar (Ctrl+B)"
               >
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                  <path d="M10 3L5 8L10 13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path
+                    d="M10 3L5 8L10 13"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
                 </svg>
               </button>
             )}
           </div>
 
-          {/* ---- Navigation ---- */}
           <div className="main-nav">
             <button
               className={"nav-btn" + (activePage === "workspace" ? " nav-btn-active" : "")}
               onClick={() => setActivePage("workspace")}
               title="Workspace"
             >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.3"/><rect x="9" y="2" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.3"/><rect x="2" y="9" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.3"/><rect x="9" y="9" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.3"/></svg>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.3" />
+                <rect x="9" y="2" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.3" />
+                <rect x="2" y="9" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.3" />
+                <rect x="9" y="9" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.3" />
+              </svg>
               {!sidebarCollapsed && <span>Workspace</span>}
             </button>
+
             <button
               className={"nav-btn" + (activePage === "flow" ? " nav-btn-active" : "")}
               onClick={() => setActivePage("flow")}
               title="Agent Workflow"
             >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="4" cy="4" r="2" stroke="currentColor" strokeWidth="1.3"/><circle cx="12" cy="4" r="2" stroke="currentColor" strokeWidth="1.3"/><circle cx="8" cy="12" r="2" stroke="currentColor" strokeWidth="1.3"/><path d="M5.5 5.5L7 10.5" stroke="currentColor" strokeWidth="1.3"/><path d="M10.5 5.5L9 10.5" stroke="currentColor" strokeWidth="1.3"/></svg>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <circle cx="4" cy="4" r="2" stroke="currentColor" strokeWidth="1.3" />
+                <circle cx="12" cy="4" r="2" stroke="currentColor" strokeWidth="1.3" />
+                <circle cx="8" cy="12" r="2" stroke="currentColor" strokeWidth="1.3" />
+                <path d="M5.5 5.5L7 10.5" stroke="currentColor" strokeWidth="1.3" />
+                <path d="M10.5 5.5L9 10.5" stroke="currentColor" strokeWidth="1.3" />
+              </svg>
               {!sidebarCollapsed && <span>Agent Workflow</span>}
             </button>
+
             <button
               className={"nav-btn" + (activePage === "admin" ? " nav-btn-active" : "")}
               onClick={() => setActivePage("admin")}
               title="Admin"
             >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2C8 2 9.5 4 9.5 6C9.5 6.8 9.2 7.5 8.7 8L10 14H6L7.3 8C6.8 7.5 6.5 6.8 6.5 6C6.5 4 8 2 8 2Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><circle cx="8" cy="6" r="1.5" stroke="currentColor" strokeWidth="1.3"/></svg>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path
+                  d="M8 2C8 2 9.5 4 9.5 6C9.5 6.8 9.2 7.5 8.7 8L10 14H6L7.3 8C6.8 7.5 6.5 6.8 6.5 6C6.5 4 8 2 8 2Z"
+                  stroke="currentColor"
+                  strokeWidth="1.3"
+                  strokeLinejoin="round"
+                />
+                <circle cx="8" cy="6" r="1.5" stroke="currentColor" strokeWidth="1.3" />
+              </svg>
               {!sidebarCollapsed && <span>Admin</span>}
             </button>
           </div>
 
-          {/* ---- Content (hidden when collapsed) ---- */}
           {!sidebarCollapsed && (
             <>
-              {/* ---- Repository Switcher (shown when no context) ---- */}
               {!hasContext && (
                 <RepoSelector onSelect={(r) => addRepoToContext(r)} />
               )}
 
-              {/* ---- Sessions ---- */}
               {repo && (
                 <SessionSidebar
                   repo={repo}
@@ -703,7 +802,6 @@ export default function App() {
             </>
           )}
 
-          {/* ---- User ---- */}
           {userInfo && (
             <div className="user-profile">
               <div className="user-profile-header">
@@ -715,6 +813,7 @@ export default function App() {
                   </div>
                 )}
               </div>
+
               {!sidebarCollapsed && (
                 <button className="btn-logout" onClick={handleLogout}>
                   Logout
@@ -727,9 +826,8 @@ export default function App() {
         <main className="workspace">
           {activePage === "admin" && (
             <div style={{ padding: "24px", maxWidth: "960px", margin: "0 auto" }}>
-              {/* Admin Navigation */}
               <div style={{ display: "flex", gap: "8px", marginBottom: "24px", flexWrap: "wrap" }}>
-                {["overview", "providers", "workspace-modes", "integrations", "sessions", "skills", "security", "advanced"].map(tab => (
+                {["overview", "providers", "workspace-modes", "integrations", "sessions", "skills", "security", "advanced"].map((tab) => (
                   <button
                     key={tab}
                     onClick={() => setAdminTab(tab)}
@@ -749,42 +847,77 @@ export default function App() {
                 ))}
               </div>
 
-              {/* Overview */}
               {adminTab === "overview" && (
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "16px" }}>
                   <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "16px", border: "1px solid #2a2b36" }}>
                     <div style={{ fontSize: "12px", opacity: 0.6, marginBottom: "8px" }}>Server</div>
-                    <div style={{ fontSize: "16px", fontWeight: 600 }}>{adminStatus?.server_ready ? "Connected" : "Checking..."}</div>
+                    <div style={{ fontSize: "16px", fontWeight: 600 }}>
+                      {adminStatus?.server_ready ? "Connected" : "Checking..."}
+                    </div>
                     <div style={{ fontSize: "12px", opacity: 0.5 }}>127.0.0.1:8000</div>
                   </div>
+
                   <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "16px", border: "1px solid #2a2b36" }}>
                     <div style={{ fontSize: "12px", opacity: 0.6, marginBottom: "8px" }}>Provider</div>
-                    <div style={{ fontSize: "16px", fontWeight: 600 }}>{adminStatus?.provider?.name || "Loading..."}</div>
-                    <div style={{ fontSize: "12px", opacity: 0.5 }}>{adminStatus?.provider?.configured ? `${adminStatus.provider.model || "Ready"}` : "Not configured"}</div>
+                    <div style={{ fontSize: "16px", fontWeight: 600 }}>
+                      {adminStatus?.provider?.name || "Loading..."}
+                    </div>
+                    <div style={{ fontSize: "12px", opacity: 0.5 }}>
+                      {adminStatus?.provider?.configured
+                        ? `${adminStatus.provider.model || "Ready"}`
+                        : "Not configured"}
+                    </div>
                   </div>
+
                   <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "16px", border: "1px solid #2a2b36" }}>
                     <div style={{ fontSize: "12px", opacity: 0.6, marginBottom: "8px" }}>Workspace Modes</div>
-                    <div style={{ fontSize: "12px" }}>Folder: {adminStatus?.workspace?.folder_mode_available ? "Yes" : "—"}</div>
-                    <div style={{ fontSize: "12px" }}>Local Git: {adminStatus?.workspace?.local_git_available ? "Yes" : "—"}</div>
-                    <div style={{ fontSize: "12px" }}>GitHub: {adminStatus?.workspace?.github_mode_available ? "Yes" : "Optional"}</div>
+                    <div style={{ fontSize: "12px" }}>
+                      Folder: {adminStatus?.workspace?.folder_mode_available ? "Yes" : "—"}
+                    </div>
+                    <div style={{ fontSize: "12px" }}>
+                      Local Git: {adminStatus?.workspace?.local_git_available ? "Yes" : "—"}
+                    </div>
+                    <div style={{ fontSize: "12px" }}>
+                      GitHub: {adminStatus?.workspace?.github_mode_available ? "Yes" : "Optional"}
+                    </div>
                   </div>
+
                   <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "16px", border: "1px solid #2a2b36" }}>
                     <div style={{ fontSize: "12px", opacity: 0.6, marginBottom: "8px" }}>GitHub</div>
-                    <div style={{ fontSize: "14px" }}>{adminStatus?.github?.connected ? "Connected" : "Optional"}</div>
-                    <div style={{ fontSize: "12px", opacity: 0.5 }}>{adminStatus?.github?.username || "Not linked"}</div>
+                    <div style={{ fontSize: "14px" }}>
+                      {adminStatus?.github?.connected ? "Connected" : "Optional"}
+                    </div>
+                    <div style={{ fontSize: "12px", opacity: 0.5 }}>
+                      {adminStatus?.github?.username || "Not linked"}
+                    </div>
                   </div>
+
                   <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "16px", border: "1px solid #2a2b36" }}>
                     <div style={{ fontSize: "12px", opacity: 0.6, marginBottom: "8px" }}>Sessions</div>
                     <div style={{ fontSize: "14px" }}>—</div>
                   </div>
+
                   <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "16px", border: "1px solid #2a2b36" }}>
                     <div style={{ fontSize: "12px", opacity: 0.6, marginBottom: "8px" }}>Get Started</div>
-                    <button onClick={() => setAdminTab("providers")} style={{ padding: "6px 12px", background: "#3B82F6", color: "#fff", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px", marginRight: "4px" }}>Configure Provider</button>
+                    <button
+                      onClick={() => setAdminTab("providers")}
+                      style={{
+                        padding: "6px 12px",
+                        background: "#3B82F6",
+                        color: "#fff",
+                        border: "none",
+                        borderRadius: "4px",
+                        cursor: "pointer",
+                        fontSize: "12px",
+                        marginRight: "4px",
+                      }}
+                    >
+                      Configure Provider
+                    </button>
                   </div>
                 </div>
               )}
 
-              {/* Providers */}
               {adminTab === "providers" && (
                 <div>
                   <h3 style={{ marginBottom: "16px" }}>AI Providers</h3>
@@ -792,79 +925,127 @@ export default function App() {
                 </div>
               )}
 
-              {/* Workspace Modes */}
               {adminTab === "workspace-modes" && (
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "16px" }}>
                   <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "20px", border: "1px solid #2a2b36" }}>
                     <h4 style={{ marginBottom: "8px" }}>Folder Mode</h4>
-                    <p style={{ fontSize: "12px", opacity: 0.7, marginBottom: "12px" }}>Work with any local folder. No Git required.</p>
+                    <p style={{ fontSize: "12px", opacity: 0.7, marginBottom: "12px" }}>
+                      Work with any local folder. No Git required.
+                    </p>
                     <div style={{ fontSize: "12px" }}>Requires: Open folder</div>
                     <div style={{ fontSize: "12px" }}>Enables: Chat, explain, review</div>
                   </div>
+
                   <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "20px", border: "1px solid #2a2b36" }}>
                     <h4 style={{ marginBottom: "8px" }}>Local Git Mode</h4>
-                    <p style={{ fontSize: "12px", opacity: 0.7, marginBottom: "12px" }}>Full repo + branch context for AI assistance.</p>
+                    <p style={{ fontSize: "12px", opacity: 0.7, marginBottom: "12px" }}>
+                      Full repo + branch context for AI assistance.
+                    </p>
                     <div style={{ fontSize: "12px" }}>Requires: Git repository</div>
                     <div style={{ fontSize: "12px" }}>Enables: All local features</div>
                   </div>
+
                   <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "20px", border: "1px solid #2a2b36" }}>
                     <h4 style={{ marginBottom: "8px" }}>GitHub Mode</h4>
-                    <p style={{ fontSize: "12px", opacity: 0.7, marginBottom: "12px" }}>PRs, issues, remote workflows via GitHub API.</p>
+                    <p style={{ fontSize: "12px", opacity: 0.7, marginBottom: "12px" }}>
+                      PRs, issues, remote workflows via GitHub API.
+                    </p>
                     <div style={{ fontSize: "12px" }}>Requires: GitHub token</div>
                     <div style={{ fontSize: "12px" }}>Enables: Full platform features</div>
                   </div>
                 </div>
               )}
 
-              {/* Integrations */}
               {adminTab === "integrations" && (
                 <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "20px", border: "1px solid #2a2b36" }}>
                   <h4 style={{ marginBottom: "8px" }}>GitHub Integration</h4>
-                  <p style={{ fontSize: "12px", opacity: 0.7, marginBottom: "12px" }}>GitHub is optional. Connect to enable PRs, issues, and remote workflows.</p>
-                  <button style={{ padding: "8px 16px", background: "#3B82F6", color: "#fff", border: "none", borderRadius: "4px", cursor: "pointer" }}>Connect GitHub</button>
+                  <p style={{ fontSize: "12px", opacity: 0.7, marginBottom: "12px" }}>
+                    GitHub is optional. Connect to enable PRs, issues, and remote workflows.
+                  </p>
+                  <button
+                    style={{
+                      padding: "8px 16px",
+                      background: "#3B82F6",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: "4px",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Connect GitHub
+                  </button>
                 </div>
               )}
 
-              {/* Security */}
               {adminTab === "security" && (
                 <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "20px", border: "1px solid #2a2b36" }}>
                   <h4 style={{ marginBottom: "8px" }}>Security Scanning</h4>
-                  <p style={{ fontSize: "12px", opacity: 0.7, marginBottom: "12px" }}>Run security scans on your workspace to detect vulnerabilities, secrets, and code issues.</p>
-                  <button style={{ padding: "8px 16px", background: "#3B82F6", color: "#fff", border: "none", borderRadius: "4px", cursor: "pointer" }}>Scan Workspace</button>
+                  <p style={{ fontSize: "12px", opacity: 0.7, marginBottom: "12px" }}>
+                    Run security scans on your workspace to detect vulnerabilities, secrets, and code issues.
+                  </p>
+                  <button
+                    style={{
+                      padding: "8px 16px",
+                      background: "#3B82F6",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: "4px",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Scan Workspace
+                  </button>
                 </div>
               )}
 
-              {/* Sessions */}
               {adminTab === "sessions" && (
                 <div>
                   <h3 style={{ marginBottom: "16px" }}>Sessions</h3>
-                  <p style={{ fontSize: "12px", opacity: 0.7 }}>Session management is available in the main workspace view.</p>
+                  <p style={{ fontSize: "12px", opacity: 0.7 }}>
+                    Session management is available in the main workspace view.
+                  </p>
                 </div>
               )}
 
-              {/* Skills & Plugins */}
               {adminTab === "skills" && (
                 <div>
                   <h3 style={{ marginBottom: "16px" }}>Skills & Plugins</h3>
-                  <p style={{ fontSize: "12px", opacity: 0.7 }}>Skills and plugins extend GitPilot capabilities. View and manage them from the main workspace.</p>
+                  <p style={{ fontSize: "12px", opacity: 0.7 }}>
+                    Skills and plugins extend GitPilot capabilities. View and manage them from the main workspace.
+                  </p>
                 </div>
               )}
 
-              {/* Advanced */}
               {adminTab === "advanced" && (
                 <div>
                   <h3 style={{ marginBottom: "16px" }}>Advanced Settings</h3>
-                  <p style={{ fontSize: "12px", opacity: 0.7 }}>Advanced configuration options are available in the Settings modal.</p>
-                  <button onClick={() => setSettingsOpen(true)} style={{ padding: "8px 16px", background: "#3B82F6", color: "#fff", border: "none", borderRadius: "4px", cursor: "pointer", marginTop: "12px" }}>Open Settings</button>
+                  <p style={{ fontSize: "12px", opacity: 0.7 }}>
+                    Advanced configuration options are available in the Settings modal.
+                  </p>
+                  <button
+                    onClick={() => setSettingsOpen(true)}
+                    style={{
+                      padding: "8px 16px",
+                      background: "#3B82F6",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: "4px",
+                      cursor: "pointer",
+                      marginTop: "12px",
+                    }}
+                  >
+                    Open Settings
+                  </button>
                 </div>
               )}
             </div>
           )}
+
           {activePage === "flow" && <FlowViewer />}
+
           {activePage === "workspace" &&
             (repo ? (
               <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-                {/* ---- Context Bar (single source of truth for repo selection) ---- */}
                 <ContextBar
                   contextRepos={contextRepos}
                   activeRepoKey={activeRepoKey}
@@ -930,7 +1111,6 @@ export default function App() {
         />
       )}
 
-      {/* Add Repo Modal */}
       <AddRepoModal
         isOpen={addRepoOpen}
         onSelect={addRepoToContext}
