@@ -1083,7 +1083,7 @@ export function activate(context: vscode.ExtensionContext): void {
         ...updatedTask,
         status: normalizedPlan ? "ready_to_apply" : "done",
         summary:
-          response.answer ||
+          normalizedPlan?.summary ||
           updatedTask.summary ||
           "GitPilot completed the request.",
       });
