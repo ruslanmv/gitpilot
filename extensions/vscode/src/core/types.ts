@@ -7,9 +7,18 @@
 
 export type WorkspaceMode = "folder" | "local_git" | "github";
 
-export type ConnectionState = "connected" | "disconnected" | "connecting" | "error";
+export type ConnectionState =
+  | "connected"
+  | "disconnected"
+  | "connecting"
+  | "error";
 
-export type ProviderName = "openai" | "claude" | "watsonx" | "ollama" | "ollabridge";
+export type ProviderName =
+  | "openai"
+  | "claude"
+  | "watsonx"
+  | "ollama"
+  | "ollabridge";
 
 export type ProviderConnectionType =
   | "local"
@@ -18,18 +27,29 @@ export type ProviderConnectionType =
   | "cloud"
   | "managed";
 
+export type ChatScope = "workspace" | "selection" | "file";
+
+export type ChatIntent =
+  | "general_chat"
+  | "explain_project"
+  | "review_file"
+  | "fix_selection"
+  | "generate_tests"
+  | "security_scan"
+  | "implement_feature";
+
 // ─── Workflow / Topology ────────────────────────────────
 
 export type WorkflowMode =
   | "auto"
-  | "default"         // T1 Dispatch (CrewAI Routing)
-  | "gitpilot_code"   // T2 ReAct Loop
-  | "lite_mode"       // T3 Lite Mode
+  | "default" // T1 Dispatch (CrewAI Routing)
+  | "gitpilot_code" // T2 ReAct Loop
+  | "lite_mode" // T3 Lite Mode
   | "feature_builder" // T4 Feature Builder
-  | "bug_hunter"      // T5 Bug Hunter
-  | "code_inspector"  // T6 Code Inspector
-  | "architect_mode"  // T7 Architect Mode
-  | "quick_fix";      // T8 Quick Fix
+  | "bug_hunter" // T5 Bug Hunter
+  | "code_inspector" // T6 Code Inspector
+  | "architect_mode" // T7 Architect Mode
+  | "quick_fix"; // T8 Quick Fix
 
 export interface WorkflowState {
   selectedMode: WorkflowMode;
@@ -102,7 +122,12 @@ export interface ReadinessState {
   blockers: string[];
   warnings: string[];
   primaryCta?: {
-    id: "start_folder" | "start_local_git" | "connect_github" | "open_provider_setup" | "retry";
+    id:
+      | "start_folder"
+      | "start_local_git"
+      | "connect_github"
+      | "open_provider_setup"
+      | "retry";
     label: string;
   };
 }
@@ -115,6 +140,49 @@ export interface GitPilotState {
   session: SessionState;
   readiness: ReadinessState;
   workflow: WorkflowState;
+}
+
+// ─── Shared Context Types ────────────────────────────────
+
+export interface FileTreeEntry {
+  path: string;
+  type: "file" | "dir";
+}
+
+export interface StructuredProjectContext {
+  mode?: WorkspaceMode;
+  workspaceRoot?: string;
+  repoRoot?: string;
+  repoName?: string;
+  branch?: string;
+  languages?: string[];
+  manifests?: string[];
+  keyFiles?: string[];
+  readmePreview?: string;
+  treeSummary?: FileTreeEntry[];
+  indexedAt?: string;
+}
+
+export interface StructuredWorkingSet {
+  currentFile?: string;
+  languageId?: string;
+  currentSelection?: string;
+  openTabs?: string[];
+  recentFiles?: string[];
+  relatedFiles?: string[];
+}
+
+export interface StructuredTaskContext {
+  intent?: ChatIntent | string;
+  scope?: ChatScope;
+  summary?: string;
+}
+
+export interface StructuredContextBundle {
+  project_context?: StructuredProjectContext;
+  working_set?: StructuredWorkingSet;
+  task_context?: StructuredTaskContext;
+  legacy_prompt: string;
 }
 
 // ─── Message Contract ────────────────────────────────────
@@ -242,8 +310,12 @@ export interface StartSessionResponse {
 export interface ChatMessageRequest {
   session_id: string;
   message: string;
-  scope?: "workspace" | "selection" | "file";
+  scope?: ChatScope;
   topology_id?: string;
+  intent?: ChatIntent | string;
+  project_context?: StructuredProjectContext;
+  working_set?: StructuredWorkingSet;
+  task_context?: StructuredTaskContext;
 }
 
 export interface ChatMessageResponse {

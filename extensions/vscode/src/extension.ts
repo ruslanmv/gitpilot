@@ -16,6 +16,12 @@ import * as path from "path";
 import * as vscode from "vscode";
 
 import { GitPilotApiClient } from "./api/client";
+import { StatusClient } from "./api/statusClient";
+import { SessionClient } from "./api/sessionClient";
+import { ChatClient } from "./api/chatClient";
+import { SettingsClient } from "./api/settingsClient";
+import { RepoClient } from "./api/repoClient";
+
 import { getConfig, onConfigChange } from "./utils/config";
 import { getWorkspaceContext, ensureGitRepo } from "./utils/context";
 import { StatusBarManager } from "./utils/statusBar";
@@ -36,33 +42,40 @@ import { registerSecurityCommands } from "./commands/security";
 import { registerSkillCommands } from "./commands/skills";
 import { registerServerCommands } from "./commands/server";
 import { registerGitCommands } from "./commands/git";
+import { registerWorkspaceCommands } from "./commands/workspaceCommands";
+import { registerSetupCommands } from "./commands/setupCommands";
+import { registerProviderCommands } from "./commands/providerCommands";
+import { registerSessionCommands } from "./commands/sessionCommands";
+import { registerChatCommandsV2 } from "./commands/chatCommands";
 
 import { StateStore } from "./core/stateStore";
 import { GitPilotEvents } from "./core/events";
-import { StatusClient } from "./api/statusClient";
-import { SessionClient } from "./api/sessionClient";
-import { ChatClient } from "./api/chatClient";
-import { SettingsClient } from "./api/settingsClient";
-import { RepoClient } from "./api/repoClient";
+
 import { WorkspaceResolver } from "./services/workspace/workspaceResolver";
 import { GitContextService } from "./services/workspace/gitContextService";
 import { ModeResolver } from "./services/workspace/modeResolver";
 import { ReadinessEvaluator } from "./services/workspace/readinessEvaluator";
 import { SessionCoordinator } from "./services/workspace/sessionCoordinator";
 import { ErrorTranslator } from "./services/workspace/errorTranslator";
+
 import { GitPilotPanel } from "./ui/webview/GitPilotPanel";
-import { registerWorkspaceCommands } from "./commands/workspaceCommands";
-import { registerSetupCommands } from "./commands/setupCommands";
-import { registerProviderCommands } from "./commands/providerCommands";
-import { registerSessionCommands } from "./commands/sessionCommands";
-import { registerChatCommandsV2 } from "./commands/chatCommands";
+
+import { ProjectContextService } from "./services/context/projectContextService";
+import { WorkingSetService } from "./services/context/workingSetService";
+import { ContextAssembler } from "./services/context/contextAssembler";
+import { ProjectIndexCache } from "./services/context/projectIndexCache";
+
 import {
   detectIntent,
   buildIntentPrefix,
 } from "./services/chat/intentDetector";
+
 import type {
   ExtensionToWebviewMessage,
   WorkspaceMode,
+  StructuredProjectContext,
+  StructuredWorkingSet,
+  StructuredTaskContext,
 } from "./core/types";
 
 type DisposableLike = { dispose(): void };
@@ -89,6 +102,13 @@ type ProjectSnapshot = {
   keyFiles: string[];
   readmePreview?: string;
   tree: FileSummary[];
+};
+
+type StructuredContextBundle = {
+  project_context?: StructuredProjectContext;
+  working_set?: StructuredWorkingSet;
+  task_context?: StructuredTaskContext;
+  legacy_prompt: string;
 };
 
 const OUTPUT_CHANNEL_NAME = "GitPilot";
@@ -138,6 +158,11 @@ export function activate(context: vscode.ExtensionContext): void {
   const readinessEvaluator = new ReadinessEvaluator();
   const errorTranslator = new ErrorTranslator();
 
+  const projectContextService = new ProjectContextService();
+  const workingSetService = new WorkingSetService();
+  const contextAssembler = new ContextAssembler();
+  const projectIndexCache = new ProjectIndexCache<StructuredProjectContext>();
+
   const sessionCoordinator = new SessionCoordinator(
     sessionClient,
     stateStore,
@@ -170,6 +195,16 @@ export function activate(context: vscode.ExtensionContext): void {
   let projectSnapshotCacheKey: string | undefined;
 
   let gitpilotPanel!: GitPilotPanel;
+
+  const clearProjectCaches = (): void => {
+    projectSnapshotCache = undefined;
+    projectSnapshotCacheKey = undefined;
+
+    const maybeClear = projectIndexCache as unknown as { clear?: () => void };
+    if (typeof maybeClear.clear === "function") {
+      maybeClear.clear();
+    }
+  };
 
   const postMessageToPanel = (message: ExtensionToWebviewMessage): void => {
     gitpilotPanel.postMessage(message);
@@ -529,35 +564,6 @@ export function activate(context: vscode.ExtensionContext): void {
     return snapshot;
   };
 
-  const summarizeProjectSnapshot = (snapshot?: ProjectSnapshot): string => {
-    if (!snapshot) {
-      return "No repository snapshot is available yet.";
-    }
-
-    const topTree = snapshot.tree.slice(0, 80).map((entry) => entry.path);
-    const parts = [
-      `Repository: ${snapshot.repoName}`,
-      snapshot.branch ? `Branch: ${snapshot.branch}` : undefined,
-      snapshot.repoRoot ? `Repo root: ${snapshot.repoRoot}` : undefined,
-      snapshot.languages.length
-        ? `Languages: ${snapshot.languages.join(", ")}`
-        : "Languages: unknown",
-      snapshot.manifests.length
-        ? `Manifest files: ${snapshot.manifests.join(", ")}`
-        : "Manifest files: none detected",
-      snapshot.keyFiles.length
-        ? `Key files and folders: ${snapshot.keyFiles.join(", ")}`
-        : undefined,
-      "Project tree snapshot:",
-      topTree.length ? topTree.join("\n") : "(empty tree)",
-      snapshot.readmePreview
-        ? `README preview:\n${snapshot.readmePreview}`
-        : "README preview: none detected",
-    ].filter(Boolean);
-
-    return parts.join("\n\n");
-  };
-
   const getCurrentFileContext = (): {
     fileName?: string;
     languageId?: string;
@@ -573,45 +579,84 @@ export function activate(context: vscode.ExtensionContext): void {
     const selectionText = editor.selection?.isEmpty
       ? ""
       : document.getText(editor.selection);
+    const fullTextRaw = document.getText();
+    const fullText =
+      fullTextRaw.length <= FILE_READ_MAX_CHARS
+        ? fullTextRaw
+        : `${fullTextRaw.slice(0, FILE_READ_MAX_CHARS)}\n\n...[truncated]`;
 
     return {
       fileName: document.fileName,
       languageId: document.languageId,
       selectionText: selectionText || undefined,
-      fullText: document.getText(),
+      fullText,
     };
   };
 
-  const buildProjectAwareMessage = async (
-    userText: string
-  ): Promise<string> => {
-    const snapshot = await getProjectSnapshot(false);
-    const fileCtx = getCurrentFileContext();
+  const buildStructuredContext = async (
+    rawText: string,
+    intent: string
+  ): Promise<StructuredContextBundle> => {
+    const workspaceRoot = currentWorkspaceRoot();
+    const repoRoot = findGitRoot(workspaceRoot);
+    const state = stateStore.state;
+    const sessionMode = state.session.mode;
+    const resolvedMode: WorkspaceMode =
+      sessionMode || (repoRoot ? "local_git" : "folder");
 
-    const sections: string[] = [];
+    const repoName =
+      state.workspace.git.repoName ||
+      state.workspace.folderName ||
+      (repoRoot ? path.basename(repoRoot) : undefined);
 
-    if (snapshot) {
-      sections.push(`Project context:\n${summarizeProjectSnapshot(snapshot)}`);
+    const cacheKey = [
+      resolvedMode ?? "",
+      workspaceRoot ?? "",
+      repoRoot ?? "",
+      repoName ?? "",
+      state.workspace.git.branch ?? "",
+    ].join("::");
+
+    let projectContext = projectIndexCache.get(cacheKey);
+    if (!projectContext) {
+      projectContext = projectContextService.build({
+        workspaceRoot,
+        repoRoot,
+        repoName,
+        branch: state.workspace.git.branch,
+        mode:
+          resolvedMode === "github"
+            ? "github"
+            : repoRoot
+              ? "local_git"
+              : "folder",
+      });
+
+      if (projectContext) {
+        projectIndexCache.set(cacheKey, projectContext);
+      }
     }
 
-    if (fileCtx.fileName) {
-      sections.push(
-        [
-          "Current editor context:",
-          `File: ${fileCtx.fileName}`,
-          fileCtx.languageId ? `Language: ${fileCtx.languageId}` : undefined,
-          fileCtx.selectionText
-            ? `Selected code:\n\`\`\`${fileCtx.languageId || ""}\n${fileCtx.selectionText}\n\`\`\``
-            : undefined,
-        ]
-          .filter(Boolean)
-          .join("\n")
-      );
-    }
+    const workingSet = workingSetService.build(workspaceRoot);
+    const taskContext = contextAssembler.buildTaskContext({
+      intent,
+      rawMessage: rawText,
+      workingSet,
+    });
 
-    sections.push(`User request:\n${userText}`);
+    const legacy_prompt = contextAssembler.buildLegacyPrompt(
+      projectContext,
+      workingSet,
+      taskContext,
+      rawText
+    );
 
-    return sections.join("\n\n---\n\n");
+    return {
+      project_context: projectContext,
+      working_set: workingSet,
+      task_context: taskContext,
+      legacy_prompt,
+    };
   };
 
   const registerCommand = (
@@ -762,6 +807,7 @@ export function activate(context: vscode.ExtensionContext): void {
         label: "Refresh project scan",
         description: "Rebuild repo-aware context for the current workspace",
         run: async () => {
+          clearProjectCaches();
           await getProjectSnapshot(true);
           vscode.window.showInformationMessage(
             "GitPilot project scan refreshed."
@@ -809,15 +855,17 @@ export function activate(context: vscode.ExtensionContext): void {
 
     try {
       const { intent, cleanMessage } = detectIntent(text);
+      const normalizedMessage = cleanMessage || text;
       const intentPrefix = buildIntentPrefix(intent);
 
-      const projectAwareInput = await buildProjectAwareMessage(
-        cleanMessage || text
+      const structuredContext = await buildStructuredContext(
+        normalizedMessage,
+        intent
       );
 
       const enrichedMessage = intentPrefix
-        ? `[${intentPrefix}]\n\n${projectAwareInput}`
-        : projectAwareInput;
+        ? `[${intentPrefix}]\n\n${structuredContext.legacy_prompt}`
+        : structuredContext.legacy_prompt;
 
       const workflowMode = stateStore.state.workflow.selectedMode;
       const topologyId =
@@ -827,6 +875,10 @@ export function activate(context: vscode.ExtensionContext): void {
         session_id: sessionId,
         message: enrichedMessage,
         topology_id: topologyId,
+        intent,
+        project_context: structuredContext.project_context,
+        working_set: structuredContext.working_set,
+        task_context: structuredContext.task_context,
       });
 
       postMessageToPanel({
@@ -879,9 +931,7 @@ export function activate(context: vscode.ExtensionContext): void {
           return undefined;
         }
 
-        const fullText = ctx.fullText
-          ? ctx.fullText.slice(0, FILE_READ_MAX_CHARS)
-          : undefined;
+        const fullText = ctx.fullText;
 
         return [
           "Review the current file for bugs, maintainability issues, risky code paths, and refactoring opportunities.",
@@ -921,9 +971,7 @@ export function activate(context: vscode.ExtensionContext): void {
           ].join("\n\n");
         }
 
-        const fullText = ctx.fullText
-          ? ctx.fullText.slice(0, FILE_READ_MAX_CHARS)
-          : undefined;
+        const fullText = ctx.fullText;
 
         return [
           `Generate useful automated tests for ${ctx.fileName}.`,
@@ -981,6 +1029,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
           case "CHANGE_MODE":
             stateStore.updateWorkspace({ mode: msg.payload.mode });
+            clearProjectCaches();
             return;
 
           case "SEND_CHAT":
@@ -1081,7 +1130,10 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
-    vscode.window.registerTreeDataProvider("gitpilot.sessionsView", sessionsTree),
+    vscode.window.registerTreeDataProvider(
+      "gitpilot.sessionsView",
+      sessionsTree
+    ),
     vscode.window.registerTreeDataProvider("gitpilot.skillsView", skillsTree)
   );
 
@@ -1150,6 +1202,7 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   registerCommand("gitpilot.refreshProjectContext", async () => {
+    clearProjectCaches();
     await getProjectSnapshot(true);
     vscode.window.showInformationMessage("GitPilot project context refreshed.");
   });
@@ -1230,6 +1283,7 @@ export function activate(context: vscode.ExtensionContext): void {
     workspaceResolver,
     gitContextService,
   }).then(async () => {
+    clearProjectCaches();
     await getProjectSnapshot(true);
     void refreshStatusAndBootstrap("initial-workspace-sync");
   });
@@ -1242,8 +1296,7 @@ export function activate(context: vscode.ExtensionContext): void {
         folderName: info.folderName,
       });
 
-      projectSnapshotCache = undefined;
-      projectSnapshotCacheKey = undefined;
+      clearProjectCaches();
 
       if (info.folderPath) {
         try {
@@ -1262,9 +1315,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const workspaceContext = getWorkspaceContext();
 
   if (workspaceContext.workspaceRoot && !workspaceContext.isGitRepo) {
-    setTimeout(() => {
-      void ensureGitRepo();
-    }, 3000);
+    output.appendLine(
+      "[GitPilot] Folder mode detected. Git initialization is available from the Setup Wizard."
+    );
   }
 
   if (workspaceContext.workspaceRoot) {

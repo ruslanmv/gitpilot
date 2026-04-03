@@ -152,10 +152,44 @@ class FileReference(BaseModel):
     line: int | None = None
 
 
+class StructuredProjectContext(BaseModel):
+    mode: str | None = None
+    workspaceRoot: str | None = None
+    repoRoot: str | None = None
+    repoName: str | None = None
+    branch: str | None = None
+    languages: list[str] = Field(default_factory=list)
+    manifests: list[str] = Field(default_factory=list)
+    keyFiles: list[str] = Field(default_factory=list)
+    readmePreview: str | None = None
+    treeSummary: list[dict] = Field(default_factory=list)
+    indexedAt: str | None = None
+
+
+class StructuredWorkingSet(BaseModel):
+    currentFile: str | None = None
+    languageId: str | None = None
+    currentSelection: str | None = None
+    openTabs: list[str] = Field(default_factory=list)
+    recentFiles: list[str] = Field(default_factory=list)
+    relatedFiles: list[str] = Field(default_factory=list)
+
+
+class StructuredTaskContext(BaseModel):
+    intent: str | None = None
+    scope: Literal["workspace", "selection", "file"] | None = None
+    summary: str | None = None
+
+
 class ChatMessageRequest(BaseModel):
     session_id: str
     message: str
     scope: Literal["workspace", "selection", "file"] = "workspace"
+    topology_id: str | None = None
+    intent: str | None = None
+    project_context: StructuredProjectContext | None = None
+    working_set: StructuredWorkingSet | None = None
+    task_context: StructuredTaskContext | None = None
 
 
 class ChatMessageResponse(BaseModel):

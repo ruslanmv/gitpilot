@@ -207,6 +207,110 @@ app.add_middleware(
 )
 
 
+def _project_context_to_text(project_context) -> str:
+    if not project_context:
+        return ""
+
+    parts = []
+    mode = getattr(project_context, "mode", None)
+    repo_name = getattr(project_context, "repoName", None)
+    branch = getattr(project_context, "branch", None)
+    languages = getattr(project_context, "languages", []) or []
+    manifests = getattr(project_context, "manifests", []) or []
+    key_files = getattr(project_context, "keyFiles", []) or []
+    readme_preview = getattr(project_context, "readmePreview", None)
+    tree_summary = getattr(project_context, "treeSummary", []) or []
+
+    if mode:
+        parts.append(f"Mode: {mode}")
+    if repo_name:
+        parts.append(f"Repo: {repo_name}")
+    if branch:
+        parts.append(f"Branch: {branch}")
+    if languages:
+        parts.append("Languages: " + ", ".join(languages[:20]))
+    if manifests:
+        parts.append("Manifests: " + ", ".join(manifests[:20]))
+    if key_files:
+        parts.append("Key files: " + ", ".join(key_files[:30]))
+
+    if tree_summary:
+        rendered = []
+        for entry in tree_summary[:200]:
+            if isinstance(entry, dict):
+                rendered.append(f"- {entry.get('type', 'file')}: {entry.get('path', '')}")
+        if rendered:
+            parts.append("Project tree:\n" + "\n".join(rendered))
+
+    if readme_preview:
+        parts.append("README preview:\n" + readme_preview)
+
+    return "\n".join(parts)
+
+
+def _working_set_to_text(working_set) -> str:
+    if not working_set:
+        return ""
+
+    parts = []
+    current_file = getattr(working_set, "currentFile", None)
+    language_id = getattr(working_set, "languageId", None)
+    current_selection = getattr(working_set, "currentSelection", None)
+    open_tabs = getattr(working_set, "openTabs", []) or []
+    related_files = getattr(working_set, "relatedFiles", []) or []
+
+    if current_file:
+        parts.append(f"Current file: {current_file}")
+    if language_id:
+        parts.append(f"Language: {language_id}")
+    if open_tabs:
+        parts.append("Open tabs: " + ", ".join(open_tabs[:12]))
+    if related_files:
+        parts.append("Related files: " + ", ".join(related_files[:12]))
+    if current_selection:
+        parts.append("Selected code:\n```\n" + current_selection + "\n```")
+
+    return "\n".join(parts)
+
+
+def _build_local_repo_aware_prompt(req, session) -> str:
+    task_summary = getattr(getattr(req, "task_context", None), "summary", None)
+
+    sections = [
+        "You are GitPilot running in VS Code enterprise repo-aware mode.",
+        "Use the supplied repository metadata, working-set context, and user request to answer precisely.",
+        "When suggesting code changes, be explicit about which files to edit and why.",
+        "Prefer incremental, production-safe patches over large rewrites.",
+    ]
+
+    session_lines = [
+        f"Session mode: {getattr(session, 'mode', None)}",
+        f"Folder path: {getattr(session, 'folder_path', None)}",
+        f"Repo root: {getattr(session, 'repo_root', None)}",
+        f"Branch: {getattr(session, 'branch', None)}",
+    ]
+
+    valid_session_lines = [
+        line for line in session_lines if line and not line.endswith(": None")
+    ]
+    if valid_session_lines:
+        sections.append("Session context:\n" + "\n".join(valid_session_lines))
+
+    project_txt = _project_context_to_text(getattr(req, "project_context", None))
+    if project_txt:
+        sections.append("Project context:\n" + project_txt)
+
+    working_txt = _working_set_to_text(getattr(req, "working_set", None))
+    if working_txt:
+        sections.append("Working set:\n" + working_txt)
+
+    if task_summary:
+        sections.append("Task context:\n" + task_summary)
+
+    sections.append("User request:\n" + req.message)
+
+    return "\n\n---\n\n".join(sections)
+
 def get_github_token(authorization: Optional[str] = Header(None)) -> Optional[str]:
     """
     Extract GitHub token from Authorization header.
@@ -2828,8 +2932,9 @@ async def api_chat_message_v2(req: _ChatMessageRequest):
             # Folder-mode: use LLM directly for simple chat
             from gitpilot.llm_provider import build_llm
             llm = build_llm()
+            local_prompt = _build_local_repo_aware_prompt(req, session)
             answer = llm.call(
-                [{"role": "user", "content": req.message}]
+                [{"role": "user", "content": local_prompt}]
             )
     except Exception as e:
         err_str = str(e)
