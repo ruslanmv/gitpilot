@@ -1,0 +1,2417 @@
+# gitpilot/_api_core.py -- Original API module (re-exported by api.py)
+from __future__ import annotations
+
+from pathlib import Path
+from typing import List, Optional
+
+from fastapi import FastAPI, Query, Path as FPath, Header, HTTPException, UploadFile, File
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
+from .version import __version__
+from .github_api import (
+    list_user_repos,
+    list_user_repos_paginated,  # Pagination support
+    search_user_repos,  # Search across all repos
+    get_repo_tree,
+    get_file,
+    put_file,
+    execution_context,
+    github_request,
+)
+from .github_app import check_repo_write_access
+from .settings import AppSettings, get_settings, set_provider, update_settings, LLMProvider
+from .agentic import (
+    generate_plan,
+    execute_plan,
+    generate_plan_lite,
+    execute_plan_lite,
+    PlanResult,
+    get_flow_definition,
+    dispatch_request,
+    create_pr_after_execution,
+)
+from .agent_router import route as route_request
+from . import github_issues
+from . import github_pulls
+from . import github_search
+from .session import SessionManager, Session
+from .hooks import HookManager, HookEvent
+from .permissions import PermissionManager, PermissionMode
+from .memory import MemoryManager
+from .context_vault import ContextVault
+from .use_case import UseCaseManager
+from .mcp_client import MCPClient
+from .plugins import PluginManager
+from .skills import SkillManager
+from .smart_model_router import ModelRouter, ModelRouterConfig
+from .topology_registry import (
+    list_topologies as _list_topologies,
+    get_topology_graph as _get_topology_graph,
+    classify_message as _classify_message,
+    get_saved_topology_preference,
+    save_topology_preference,
+)
+from .agent_teams import AgentTeam
+
+
+def _is_lite_mode_active() -> bool:
+    """Check if Lite Mode should be used (setting OR topology)."""
+    s = get_settings()
+    if s.lite_mode:
+        return True
+    return get_saved_topology_preference() == "lite_mode"
+from .learning import LearningEngine
+from .cross_repo import CrossRepoAnalyzer
+from .predictions import PredictiveEngine
+from .security import SecurityScanner
+from .nl_database import NLQueryEngine, QueryDialect, SafetyLevel, TableSchema
+from .github_oauth import (
+    generate_authorization_url,
+    exchange_code_for_token,
+    validate_token,
+    initiate_device_flow,
+    poll_device_token,
+    AuthSession,
+    GitHubUser,
+)
+import os
+import logging
+from .model_catalog import list_models_for_provider
+
+# Optional A2A adapter (MCP ContextForge)
+from .a2a_adapter import router as a2a_router
+
+logger = logging.getLogger(__name__)
+
+# --- Phase 1 singletons ---
+_session_mgr = SessionManager()
+_hook_mgr = HookManager()
+_perm_mgr = PermissionManager()
+
+# --- Phase 2 singletons ---
+_mcp_client = MCPClient()
+_plugin_mgr = PluginManager()
+_skill_mgr = SkillManager()
+_model_router = ModelRouter()
+
+# --- Phase 3 singletons ---
+_agent_team = AgentTeam()
+_learning_engine = LearningEngine()
+_cross_repo = CrossRepoAnalyzer()
+_predictive_engine = PredictiveEngine()
+_security_scanner = SecurityScanner()
+_nl_engine = NLQueryEngine()
+
+app = FastAPI(
+    title="GitPilot API",
+    version=__version__,
+    description="Agentic AI assistant for GitHub repositories.",
+)
+
+# ==========================================================================
+# Optional A2A Adapter (MCP ContextForge)
+# ==========================================================================
+# This is feature-flagged and does not affect the existing UI/REST API unless
+# explicitly enabled.
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+if _env_bool("GITPILOT_ENABLE_A2A", False):
+    logger.info("A2A adapter enabled (mounting /a2a/* endpoints)")
+    app.include_router(a2a_router)
+else:
+    logger.info("A2A adapter disabled (set GITPILOT_ENABLE_A2A=true to enable)")
+
+# ============================================================================
+# CORS Configuration
+# ============================================================================
+# Enable CORS to allow frontend (local dev or Vercel) to connect to backend
+allowed_origins_str = os.getenv("CORS_ORIGINS", "http://localhost:5173")
+allowed_origins = [origin.strip() for origin in allowed_origins_str.split(",")]
+
+logger.info(f"CORS enabled for origins: {allowed_origins}")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+def get_github_token(authorization: Optional[str] = Header(None)) -> Optional[str]:
+    """
+    Extract GitHub token from Authorization header.
+
+    Supports formats:
+    - Bearer <token>
+    - token <token>
+    - <token>
+    """
+    if not authorization:
+        return None
+
+    if authorization.startswith("Bearer "):
+        return authorization[7:]
+    elif authorization.startswith("token "):
+        return authorization[6:]
+    else:
+        return authorization
+
+
+# --- FIXED: Added default_branch to model ---
+class RepoSummary(BaseModel):
+    id: int
+    name: str
+    full_name: str
+    private: bool
+    owner: str
+    default_branch: str = "main"  # <--- CRITICAL FIX: Defaults to main, but can be master/dev
+
+
+class PaginatedReposResponse(BaseModel):
+    """Response model for paginated repository listing."""
+    repositories: List[RepoSummary]
+    page: int
+    per_page: int
+    total_count: Optional[int] = None
+    has_more: bool
+    query: Optional[str] = None
+
+
+class FileEntry(BaseModel):
+    path: str
+    type: str
+
+
+class FileTreeResponse(BaseModel):
+    files: List[FileEntry] = Field(default_factory=list)
+
+
+class FileContent(BaseModel):
+    path: str
+    encoding: str = "utf-8"
+    content: str
+
+
+class CommitRequest(BaseModel):
+    path: str
+    content: str
+    message: str
+
+
+class CommitResponse(BaseModel):
+    path: str
+    commit_sha: str
+    commit_url: Optional[str] = None
+
+
+class SettingsResponse(BaseModel):
+    provider: LLMProvider
+    providers: List[LLMProvider]
+    openai: dict
+    claude: dict
+    watsonx: dict
+    ollama: dict
+    langflow_url: str
+    has_langflow_plan_flow: bool
+    lite_mode: bool = False
+
+
+class ProviderModelsResponse(BaseModel):
+    provider: LLMProvider
+    models: List[str] = Field(default_factory=list)
+    error: Optional[str] = None
+
+
+class ProviderUpdate(BaseModel):
+    provider: LLMProvider
+
+
+class ChatPlanRequest(BaseModel):
+    repo_owner: str
+    repo_name: str
+    goal: str
+    branch_name: Optional[str] = None
+
+
+class ExecutePlanRequest(BaseModel):
+    repo_owner: str
+    repo_name: str
+    plan: PlanResult
+    branch_name: Optional[str] = None
+
+
+class AuthUrlResponse(BaseModel):
+    authorization_url: str
+    state: str
+
+
+class AuthCallbackRequest(BaseModel):
+    code: str
+    state: str
+
+
+class TokenValidationRequest(BaseModel):
+    access_token: str
+
+
+class UserInfoResponse(BaseModel):
+    user: GitHubUser
+    authenticated: bool
+
+
+class RepoAccessResponse(BaseModel):
+    can_write: bool
+    app_installed: bool
+    auth_type: str
+
+
+# --- v2 Request/Response models ---
+
+class ChatRequest(BaseModel):
+    """Unified chat request for the conversational dispatcher."""
+    repo_owner: str
+    repo_name: str
+    message: str
+    branch_name: Optional[str] = None
+    auto_pr: bool = False
+    topology_id: Optional[str] = None  # Override topology for this request
+
+
+class IssueCreateRequest(BaseModel):
+    title: str
+    body: Optional[str] = None
+    labels: Optional[List[str]] = None
+    assignees: Optional[List[str]] = None
+    milestone: Optional[int] = None
+
+
+class IssueUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    body: Optional[str] = None
+    state: Optional[str] = None
+    labels: Optional[List[str]] = None
+    assignees: Optional[List[str]] = None
+    milestone: Optional[int] = None
+
+
+class IssueCommentRequest(BaseModel):
+    body: str
+
+
+class PRCreateRequest(BaseModel):
+    title: str
+    head: str
+    base: str
+    body: Optional[str] = None
+    draft: bool = False
+
+
+class PRMergeRequest(BaseModel):
+    merge_method: str = "merge"
+    commit_title: Optional[str] = None
+    commit_message: Optional[str] = None
+
+
+class SearchRequest(BaseModel):
+    query: str
+    per_page: int = 30
+    page: int = 1
+
+
+# ============================================================================
+# Repository Endpoints - Enterprise Grade with Pagination & Search
+# ============================================================================
+
+@app.get("/api/repos", response_model=PaginatedReposResponse)
+async def api_list_repos(
+    query: Optional[str] = Query(None, description="Search query (searches across ALL repositories)"),
+    page: int = Query(1, ge=1, description="Page number (starts at 1)"),
+    per_page: int = Query(100, ge=1, le=100, description="Results per page (max 100)"),
+    authorization: Optional[str] = Header(None),
+):
+    """
+    List user repositories with enterprise-grade pagination and search.
+    Includes default_branch information for correct frontend routing.
+    """
+    token = get_github_token(authorization)
+
+    try:
+        if query:
+            # SEARCH MODE: Search across ALL repositories
+            result = await search_user_repos(
+                query=query,
+                page=page,
+                per_page=per_page,
+                token=token
+            )
+        else:
+            # PAGINATION MODE: Return repos page by page
+            result = await list_user_repos_paginated(
+                page=page,
+                per_page=per_page,
+                token=token
+            )
+
+        # --- FIXED: Mapping default_branch ---
+        repos = [
+            RepoSummary(
+                id=r["id"],
+                name=r["name"],
+                full_name=r["full_name"],
+                private=r["private"],
+                owner=r["owner"],
+                default_branch=r.get("default_branch", "main"),  # <--- CRITICAL FIX
+            )
+            for r in result["repositories"]
+        ]
+
+        return PaginatedReposResponse(
+            repositories=repos,
+            page=result["page"],
+            per_page=result["per_page"],
+            total_count=result.get("total_count"),
+            has_more=result["has_more"],
+            query=query,
+        )
+
+    except Exception as e:
+        logging.exception("Error fetching repositories")
+        return JSONResponse(
+            content={
+                "error": f"Failed to fetch repositories: {str(e)}",
+                "repositories": [],
+                "page": page,
+                "per_page": per_page,
+                "has_more": False,
+            },
+            status_code=500
+        )
+
+
+@app.get("/api/repos/all")
+async def api_list_all_repos(
+    query: Optional[str] = Query(None, description="Search query"),
+    authorization: Optional[str] = Header(None),
+):
+    """
+    Fetch ALL user repositories at once (no pagination).
+    Useful for quick searches, but paginated endpoint is preferred.
+    """
+    token = get_github_token(authorization)
+
+    try:
+        # Fetch all repositories (this will make multiple API calls)
+        all_repos = []
+        page = 1
+        max_pages = 15  # Safety limit: 1500 repos max (15 * 100)
+
+        while page <= max_pages:
+            result = await list_user_repos_paginated(
+                page=page,
+                per_page=100,
+                token=token
+            )
+
+            all_repos.extend(result["repositories"])
+
+            if not result["has_more"]:
+                break
+
+            page += 1
+
+        # Filter by query if provided
+        if query:
+            query_lower = query.lower()
+            all_repos = [
+                r for r in all_repos
+                if query_lower in r["name"].lower() or query_lower in r["full_name"].lower()
+            ]
+
+        # --- FIXED: Mapping default_branch ---
+        repos = [
+            RepoSummary(
+                id=r["id"],
+                name=r["name"],
+                full_name=r["full_name"],
+                private=r["private"],
+                owner=r["owner"],
+                default_branch=r.get("default_branch", "main"),  # <--- CRITICAL FIX
+            )
+            for r in all_repos
+        ]
+
+        return {
+            "repositories": repos,
+            "total_count": len(repos),
+            "query": query,
+        }
+
+    except Exception as e:
+        logging.exception("Error fetching all repositories")
+        return JSONResponse(
+            content={"error": f"Failed to fetch repositories: {str(e)}"},
+            status_code=500
+        )
+
+
+@app.get("/api/repos/{owner}/{repo}/tree", response_model=FileTreeResponse)
+async def api_repo_tree(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    ref: Optional[str] = Query(
+        None,
+        description="Git reference (branch, tag, or commit SHA). If omitted, defaults to HEAD.",
+    ),
+    authorization: Optional[str] = Header(None),
+):
+    """
+    Get the file tree for a repository.
+    Handles 'main' vs 'master' discrepancies and empty repositories gracefully.
+    """
+    token = get_github_token(authorization)
+
+    # Keep legacy behavior: missing/empty ref behaves like HEAD.
+    ref_value = (ref or "").strip() or "HEAD"
+
+    try:
+        tree = await get_repo_tree(owner, repo, token=token, ref=ref_value)
+        return FileTreeResponse(files=[FileEntry(**f) for f in tree])
+
+    except HTTPException as e:
+        if e.status_code == 409:
+            return FileTreeResponse(files=[])
+
+        if e.status_code == 404:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "detail": f"Ref '{ref_value}' not found. The repository might be using a different default branch (e.g., 'master')."
+                }
+            )
+
+        raise e
+
+
+@app.get("/api/repos/{owner}/{repo}/file", response_model=FileContent)
+async def api_get_file(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    path: str = Query(...),
+    authorization: Optional[str] = Header(None),
+):
+    token = get_github_token(authorization)
+    content = await get_file(owner, repo, path, token=token)
+    return FileContent(path=path, content=content)
+
+
+@app.post("/api/repos/{owner}/{repo}/file", response_model=CommitResponse)
+async def api_put_file(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    payload: CommitRequest = ...,
+    authorization: Optional[str] = Header(None),
+):
+    token = get_github_token(authorization)
+    result = await put_file(
+        owner, repo, payload.path, payload.content, payload.message, token=token
+    )
+    return CommitResponse(**result)
+
+
+# ============================================================================
+# Settings Endpoints
+# ============================================================================
+
+@app.get("/api/settings", response_model=SettingsResponse)
+async def api_get_settings():
+    s: AppSettings = get_settings()
+    return SettingsResponse(
+        provider=s.provider,
+        providers=[LLMProvider.openai, LLMProvider.claude, LLMProvider.watsonx, LLMProvider.ollama],
+        openai=s.openai.model_dump(),
+        claude=s.claude.model_dump(),
+        watsonx=s.watsonx.model_dump(),
+        ollama=s.ollama.model_dump(),
+        langflow_url=s.langflow_url,
+        has_langflow_plan_flow=bool(s.langflow_plan_flow_id),
+        lite_mode=s.lite_mode,
+    )
+
+
+@app.get("/api/settings/models", response_model=ProviderModelsResponse)
+async def api_list_models(provider: Optional[LLMProvider] = Query(None)):
+    """
+    Return the list of LLM models available for a provider.
+
+    If 'provider' is not given, use the currently active provider from settings.
+    """
+    s: AppSettings = get_settings()
+    effective_provider = provider or s.provider
+
+    models, error = list_models_for_provider(effective_provider, s)
+
+    return ProviderModelsResponse(
+        provider=effective_provider,
+        models=models,
+        error=error,
+    )
+
+
+@app.post("/api/settings/provider", response_model=SettingsResponse)
+async def api_set_provider(update: ProviderUpdate):
+    s = set_provider(update.provider)
+    return SettingsResponse(
+        provider=s.provider,
+        providers=[LLMProvider.openai, LLMProvider.claude, LLMProvider.watsonx, LLMProvider.ollama],
+        openai=s.openai.model_dump(),
+        claude=s.claude.model_dump(),
+        watsonx=s.watsonx.model_dump(),
+        ollama=s.ollama.model_dump(),
+        langflow_url=s.langflow_url,
+        has_langflow_plan_flow=bool(s.langflow_plan_flow_id),
+        lite_mode=s.lite_mode,
+    )
+
+
+@app.put("/api/settings/llm", response_model=SettingsResponse)
+async def api_update_llm_settings(updates: dict):
+    """Update full LLM settings including provider-specific configs."""
+    s = update_settings(updates)
+    return SettingsResponse(
+        provider=s.provider,
+        providers=[LLMProvider.openai, LLMProvider.claude, LLMProvider.watsonx, LLMProvider.ollama],
+        openai=s.openai.model_dump(),
+        claude=s.claude.model_dump(),
+        watsonx=s.watsonx.model_dump(),
+        ollama=s.ollama.model_dump(),
+        langflow_url=s.langflow_url,
+        has_langflow_plan_flow=bool(s.langflow_plan_flow_id),
+        lite_mode=s.lite_mode,
+    )
+
+
+# ============================================================================
+# Chat Endpoints
+# ============================================================================
+
+@app.post("/api/chat/plan", response_model=PlanResult)
+async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Header(None)):
+    token = get_github_token(authorization)
+
+    # ✅ Added logging for branch_name received
+    logger.info(
+        "PLAN REQUEST: %s/%s | branch_name=%r",
+        req.repo_owner,
+        req.repo_name,
+        req.branch_name,
+    )
+
+    with execution_context(token, ref=req.branch_name):  # ✅ set ref context
+        full_name = f"{req.repo_owner}/{req.repo_name}"
+        plan = await generate_plan(req.goal, full_name, token=token, branch_name=req.branch_name)
+        return plan
+
+
+@app.post("/api/chat/execute")
+async def api_chat_execute(
+    req: ExecutePlanRequest,
+    authorization: Optional[str] = Header(None)
+):
+    token = get_github_token(authorization)
+
+    # ✅ FIX: use execution_context(token, ref=req.branch_name) so tool calls that rely on context
+    # never accidentally run on HEAD/default when branch_name is provided.
+    with execution_context(token, ref=req.branch_name):
+        full_name = f"{req.repo_owner}/{req.repo_name}"
+        # Use lite executor when Lite Mode is active
+        _executor = execute_plan_lite if _is_lite_mode_active() else execute_plan
+        result = await _executor(
+            req.plan, full_name, token=token, branch_name=req.branch_name
+        )
+        if isinstance(result, dict):
+            result.setdefault(
+                "mode",
+                "sticky" if req.branch_name else "hard-switch",
+            )
+        return result
+
+
+@app.get("/api/flow/current")
+async def api_get_flow(topology: Optional[str] = Query(None)):
+    """Return the agent flow definition as a graph.
+
+    If ``topology`` query param is provided, returns the graph for that
+    topology.  Otherwise falls back to the user's saved preference, and
+    finally to the legacy ``get_flow_definition()`` output for full
+    backward compatibility.
+    """
+    tid = topology or get_saved_topology_preference()
+    if tid:
+        return _get_topology_graph(tid)
+    # Legacy path — returns the original hardcoded graph
+    flow = await get_flow_definition()
+    return flow
+
+
+# ============================================================================
+# Topology Registry Endpoints (additive — no existing behaviour changed)
+# ============================================================================
+
+@app.get("/api/flow/topologies")
+async def api_list_topologies():
+    """Return lightweight summaries of all available topology presets."""
+    return _list_topologies()
+
+
+@app.get("/api/flow/topology/{topology_id}")
+async def api_get_topology(topology_id: str):
+    """Return the full flow graph for a specific topology."""
+    return _get_topology_graph(topology_id)
+
+
+class ClassifyRequest(BaseModel):
+    message: str
+
+
+@app.post("/api/flow/classify")
+async def api_classify_message(req: ClassifyRequest):
+    """Auto-detect the best topology for a given user message.
+
+    Returns the recommended topology, confidence score, and up to 4
+    alternatives ranked by relevance.
+    """
+    result = _classify_message(req.message)
+    return result.to_dict()
+
+
+class TopologyPrefRequest(BaseModel):
+    topology: str
+
+
+@app.get("/api/settings/topology")
+async def api_get_topology_pref():
+    """Return the user's saved topology preference (or null)."""
+    pref = get_saved_topology_preference()
+    return {"topology": pref}
+
+
+@app.post("/api/settings/topology")
+async def api_set_topology_pref(req: TopologyPrefRequest):
+    """Save the user's preferred topology."""
+    save_topology_preference(req.topology)
+    return {"status": "ok", "topology": req.topology}
+
+
+class LiteModeRequest(BaseModel):
+    lite_mode: bool
+
+
+@app.get("/api/settings/lite-mode")
+async def api_get_lite_mode():
+    """Return current Lite Mode status."""
+    s = get_settings()
+    return {"lite_mode": s.lite_mode}
+
+
+@app.post("/api/settings/lite-mode")
+async def api_set_lite_mode(req: LiteModeRequest):
+    """Toggle Lite Mode on or off."""
+    s = update_settings({"lite_mode": req.lite_mode})
+    return {"status": "ok", "lite_mode": s.lite_mode}
+
+
+# ============================================================================
+# Conversational Chat Endpoint (v2 upgrade)
+# ============================================================================
+
+@app.post("/api/chat/message")
+async def api_chat_message(req: ChatRequest, authorization: Optional[str] = Header(None)):
+    """
+    Unified conversational endpoint.  The router analyses the message and
+    dispatches to the appropriate agent (issue, PR, search, review, learning,
+    or the existing plan+execute pipeline).
+    """
+    token = get_github_token(authorization)
+
+    logger.info(
+        "CHAT MESSAGE: %s/%s | message=%r | branch=%r",
+        req.repo_owner,
+        req.repo_name,
+        req.message[:80],
+        req.branch_name,
+    )
+
+    with execution_context(token, ref=req.branch_name):
+        full_name = f"{req.repo_owner}/{req.repo_name}"
+        result = await dispatch_request(
+            req.message, full_name, token=token, branch_name=req.branch_name,
+            topology_id=req.topology_id,
+        )
+
+        # If auto_pr is requested and execution completed, create PR
+        if (
+            req.auto_pr
+            and isinstance(result, dict)
+            and result.get("category") == "plan_execute"
+            and result.get("plan")
+        ):
+            result["auto_pr_hint"] = (
+                "Plan generated. Execute it first, then auto-PR will be created."
+            )
+
+        return result
+
+
+@app.post("/api/chat/execute-with-pr")
+async def api_chat_execute_with_pr(
+    req: ExecutePlanRequest,
+    authorization: Optional[str] = Header(None),
+):
+    """Execute a plan AND automatically create a pull request afterwards."""
+    token = get_github_token(authorization)
+
+    with execution_context(token, ref=req.branch_name):
+        full_name = f"{req.repo_owner}/{req.repo_name}"
+        _executor = execute_plan_lite if _is_lite_mode_active() else execute_plan
+        result = await _executor(
+            req.plan, full_name, token=token, branch_name=req.branch_name,
+        )
+
+        if isinstance(result, dict) and result.get("status") == "completed":
+            branch = result.get("branch", req.branch_name)
+            if branch:
+                pr = await create_pr_after_execution(
+                    full_name,
+                    branch,
+                    req.plan.goal,
+                    result.get("executionLog", {}),
+                    token=token,
+                )
+                if pr:
+                    result["pull_request"] = {
+                        "number": pr.get("number"),
+                        "url": pr.get("html_url"),
+                        "title": pr.get("title"),
+                    }
+
+            result.setdefault(
+                "mode",
+                "sticky" if req.branch_name else "hard-switch",
+            )
+
+        return result
+
+
+# ============================================================================
+# Issue Endpoints (v2 upgrade)
+# ============================================================================
+
+@app.get("/api/repos/{owner}/{repo}/issues")
+async def api_list_issues(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    state: str = Query("open"),
+    labels: Optional[str] = Query(None),
+    per_page: int = Query(30, ge=1, le=100),
+    page: int = Query(1, ge=1),
+    authorization: Optional[str] = Header(None),
+):
+    """List issues for a repository."""
+    token = get_github_token(authorization)
+    issues = await github_issues.list_issues(
+        owner, repo, state=state, labels=labels,
+        per_page=per_page, page=page, token=token,
+    )
+    return {"issues": issues, "page": page, "per_page": per_page}
+
+
+@app.get("/api/repos/{owner}/{repo}/issues/{issue_number}")
+async def api_get_issue(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    issue_number: int = FPath(...),
+    authorization: Optional[str] = Header(None),
+):
+    """Get a single issue."""
+    token = get_github_token(authorization)
+    return await github_issues.get_issue(owner, repo, issue_number, token=token)
+
+
+@app.post("/api/repos/{owner}/{repo}/issues")
+async def api_create_issue(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    payload: IssueCreateRequest = ...,
+    authorization: Optional[str] = Header(None),
+):
+    """Create a new issue."""
+    token = get_github_token(authorization)
+    return await github_issues.create_issue(
+        owner, repo, payload.title,
+        body=payload.body, labels=payload.labels,
+        assignees=payload.assignees, milestone=payload.milestone,
+        token=token,
+    )
+
+
+@app.patch("/api/repos/{owner}/{repo}/issues/{issue_number}")
+async def api_update_issue(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    issue_number: int = FPath(...),
+    payload: IssueUpdateRequest = ...,
+    authorization: Optional[str] = Header(None),
+):
+    """Update an existing issue."""
+    token = get_github_token(authorization)
+    return await github_issues.update_issue(
+        owner, repo, issue_number,
+        title=payload.title, body=payload.body, state=payload.state,
+        labels=payload.labels, assignees=payload.assignees,
+        milestone=payload.milestone, token=token,
+    )
+
+
+@app.get("/api/repos/{owner}/{repo}/issues/{issue_number}/comments")
+async def api_list_issue_comments(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    issue_number: int = FPath(...),
+    authorization: Optional[str] = Header(None),
+):
+    """List comments on an issue."""
+    token = get_github_token(authorization)
+    return await github_issues.list_issue_comments(owner, repo, issue_number, token=token)
+
+
+@app.post("/api/repos/{owner}/{repo}/issues/{issue_number}/comments")
+async def api_add_issue_comment(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    issue_number: int = FPath(...),
+    payload: IssueCommentRequest = ...,
+    authorization: Optional[str] = Header(None),
+):
+    """Add a comment to an issue."""
+    token = get_github_token(authorization)
+    return await github_issues.add_issue_comment(
+        owner, repo, issue_number, payload.body, token=token,
+    )
+
+
+# ============================================================================
+# Pull Request Endpoints (v2 upgrade)
+# ============================================================================
+
+@app.get("/api/repos/{owner}/{repo}/pulls")
+async def api_list_pulls(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    state: str = Query("open"),
+    per_page: int = Query(30, ge=1, le=100),
+    page: int = Query(1, ge=1),
+    authorization: Optional[str] = Header(None),
+):
+    """List pull requests."""
+    token = get_github_token(authorization)
+    prs = await github_pulls.list_pull_requests(
+        owner, repo, state=state, per_page=per_page, page=page, token=token,
+    )
+    return {"pull_requests": prs, "page": page, "per_page": per_page}
+
+
+@app.get("/api/repos/{owner}/{repo}/pulls/{pull_number}")
+async def api_get_pull(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    pull_number: int = FPath(...),
+    authorization: Optional[str] = Header(None),
+):
+    """Get a single pull request."""
+    token = get_github_token(authorization)
+    return await github_pulls.get_pull_request(owner, repo, pull_number, token=token)
+
+
+@app.post("/api/repos/{owner}/{repo}/pulls")
+async def api_create_pull(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    payload: PRCreateRequest = ...,
+    authorization: Optional[str] = Header(None),
+):
+    """Create a new pull request."""
+    token = get_github_token(authorization)
+    return await github_pulls.create_pull_request(
+        owner, repo, title=payload.title, head=payload.head,
+        base=payload.base, body=payload.body, draft=payload.draft,
+        token=token,
+    )
+
+
+@app.put("/api/repos/{owner}/{repo}/pulls/{pull_number}/merge")
+async def api_merge_pull(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    pull_number: int = FPath(...),
+    payload: PRMergeRequest = ...,
+    authorization: Optional[str] = Header(None),
+):
+    """Merge a pull request."""
+    token = get_github_token(authorization)
+    return await github_pulls.merge_pull_request(
+        owner, repo, pull_number,
+        merge_method=payload.merge_method,
+        commit_title=payload.commit_title,
+        commit_message=payload.commit_message,
+        token=token,
+    )
+
+
+@app.get("/api/repos/{owner}/{repo}/pulls/{pull_number}/files")
+async def api_list_pr_files(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    pull_number: int = FPath(...),
+    authorization: Optional[str] = Header(None),
+):
+    """List files changed in a pull request."""
+    token = get_github_token(authorization)
+    return await github_pulls.list_pr_files(owner, repo, pull_number, token=token)
+
+
+# ============================================================================
+# Search Endpoints (v2 upgrade)
+# ============================================================================
+
+@app.get("/api/search/code")
+async def api_search_code(
+    q: str = Query(..., description="Search query"),
+    owner: Optional[str] = Query(None),
+    repo: Optional[str] = Query(None),
+    language: Optional[str] = Query(None),
+    per_page: int = Query(30, ge=1, le=100),
+    page: int = Query(1, ge=1),
+    authorization: Optional[str] = Header(None),
+):
+    """Search for code across GitHub."""
+    token = get_github_token(authorization)
+    return await github_search.search_code(
+        q, owner=owner, repo=repo, language=language,
+        per_page=per_page, page=page, token=token,
+    )
+
+
+@app.get("/api/search/issues")
+async def api_search_issues(
+    q: str = Query(..., description="Search query"),
+    owner: Optional[str] = Query(None),
+    repo: Optional[str] = Query(None),
+    state: Optional[str] = Query(None),
+    label: Optional[str] = Query(None),
+    per_page: int = Query(30, ge=1, le=100),
+    page: int = Query(1, ge=1),
+    authorization: Optional[str] = Header(None),
+):
+    """Search issues and pull requests."""
+    token = get_github_token(authorization)
+    return await github_search.search_issues(
+        q, owner=owner, repo=repo, state=state, label=label,
+        per_page=per_page, page=page, token=token,
+    )
+
+
+@app.get("/api/search/repositories")
+async def api_search_repositories(
+    q: str = Query(..., description="Search query"),
+    language: Optional[str] = Query(None),
+    sort: Optional[str] = Query(None),
+    per_page: int = Query(30, ge=1, le=100),
+    page: int = Query(1, ge=1),
+    authorization: Optional[str] = Header(None),
+):
+    """Search for repositories."""
+    token = get_github_token(authorization)
+    return await github_search.search_repositories(
+        q, language=language, sort=sort,
+        per_page=per_page, page=page, token=token,
+    )
+
+
+@app.get("/api/search/users")
+async def api_search_users(
+    q: str = Query(..., description="Search query"),
+    type_filter: Optional[str] = Query(None, alias="type"),
+    location: Optional[str] = Query(None),
+    language: Optional[str] = Query(None),
+    per_page: int = Query(30, ge=1, le=100),
+    page: int = Query(1, ge=1),
+    authorization: Optional[str] = Header(None),
+):
+    """Search for GitHub users and organizations."""
+    token = get_github_token(authorization)
+    return await github_search.search_users(
+        q, type_filter=type_filter, location=location, language=language,
+        per_page=per_page, page=page, token=token,
+    )
+
+
+# ============================================================================
+# Route Analysis Endpoint (v2 upgrade)
+# ============================================================================
+
+@app.post("/api/chat/route")
+async def api_chat_route(payload: dict):
+    """Preview how a message would be routed without executing it.
+
+    Useful for the frontend to display which agent(s) will handle the request.
+    """
+    message = payload.get("message", "")
+    if not message:
+        return JSONResponse({"error": "message is required"}, status_code=400)
+
+    workflow = route_request(message)
+    return {
+        "category": workflow.category.value,
+        "agents": [a.value for a in workflow.agents],
+        "description": workflow.description,
+        "requires_repo_context": workflow.requires_repo_context,
+        "entity_number": workflow.entity_number,
+        "metadata": workflow.metadata,
+    }
+
+
+# ============================================================================
+# Authentication Endpoints (Web Flow + Device Flow)
+# ============================================================================
+
+@app.get("/api/auth/url", response_model=AuthUrlResponse)
+async def api_get_auth_url():
+    """
+    Generate GitHub OAuth authorization URL (Web Flow).
+    Requires Client Secret to be configured.
+    """
+    auth_url, state = generate_authorization_url()
+    return AuthUrlResponse(authorization_url=auth_url, state=state)
+
+
+@app.post("/api/auth/callback", response_model=AuthSession)
+async def api_auth_callback(request: AuthCallbackRequest):
+    """
+    Handle GitHub OAuth callback (Web Flow).
+    Exchange the authorization code for an access token.
+    """
+    try:
+        session = await exchange_code_for_token(request.code, request.state)
+        return session
+    except ValueError as e:
+        return JSONResponse(
+            {"error": str(e)},
+            status_code=400,
+        )
+
+
+@app.post("/api/auth/validate", response_model=UserInfoResponse)
+async def api_validate_token(request: TokenValidationRequest):
+    """
+    Validate a GitHub access token and return user information.
+    """
+    user = await validate_token(request.access_token)
+    if user:
+        return UserInfoResponse(user=user, authenticated=True)
+    return UserInfoResponse(
+        user=GitHubUser(login="", id=0, avatar_url=""),
+        authenticated=False,
+    )
+
+
+@app.post("/api/auth/device/code")
+async def api_device_code():
+    """
+    Start the device login flow (Step 1).
+    Does NOT require a client secret.
+    """
+    try:
+        data = await initiate_device_flow()
+        return data
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/auth/device/poll")
+async def api_device_poll(payload: dict):
+    """
+    Poll GitHub to check if user authorized the device (Step 2).
+    """
+    device_code = payload.get("device_code")
+    if not device_code:
+        return JSONResponse({"error": "Missing device_code"}, status_code=400)
+
+    try:
+        session = await poll_device_token(device_code)
+        if session:
+            return session
+
+        return JSONResponse({"status": "pending"}, status_code=202)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
+@app.get("/api/auth/status")
+async def api_auth_status():
+    """
+    Smart check: Do we have a secret (Web Flow) or just ID (Device Flow)?
+    This tells the frontend which UI to render.
+    """
+    has_secret = bool(os.getenv("GITHUB_CLIENT_SECRET"))
+    has_id = bool(os.getenv("GITHUB_CLIENT_ID", "Iv23litmRp80Z6wmlyRn"))
+
+    return {
+        "mode": "web" if has_secret else "device",
+        "configured": has_id,
+        "oauth_configured": has_secret,
+        "pat_configured": bool(os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")),
+    }
+
+
+@app.get("/api/auth/app-url")
+async def api_get_app_url():
+    """Get GitHub App installation URL."""
+    app_slug = os.getenv("GITHUB_APP_SLUG", "gitpilota")
+    app_url = f"https://github.com/apps/{app_slug}"
+    return {
+        "app_url": app_url,
+        "app_slug": app_slug,
+    }
+
+
+@app.get("/api/auth/installation-status")
+async def api_check_installation_status():
+    """Check if GitHub App is installed for the current user."""
+    pat_token = os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
+
+    if pat_token:
+        user = await validate_token(pat_token)
+        if user:
+            return {
+                "installed": True,
+                "access_token": pat_token,
+                "user": user,
+                "auth_type": "pat",
+            }
+
+    github_app_id = os.getenv("GITHUB_APP_ID", "2313985")
+    if not github_app_id:
+        return {
+            "installed": False,
+            "message": "GitHub authentication not configured.",
+            "auth_type": "none",
+        }
+
+    return {
+        "installed": False,
+        "message": "GitHub App not installed.",
+        "auth_type": "github_app",
+    }
+
+
+@app.get("/api/auth/repo-access", response_model=RepoAccessResponse)
+async def api_check_repo_access(
+    owner: str = Query(...),
+    repo: str = Query(...),
+    authorization: Optional[str] = Header(None),
+):
+    """
+    Check if we have write access to a repository via User token or GitHub App.
+
+    This endpoint helps the frontend determine if it should show
+    installation prompts or if the user already has sufficient permissions.
+    """
+    token = get_github_token(authorization)
+    access_info = await check_repo_write_access(owner, repo, user_token=token)
+
+    return RepoAccessResponse(
+        can_write=access_info["can_write"],
+        app_installed=access_info["app_installed"],
+        auth_type=access_info["auth_type"],
+    )
+
+
+# ============================================================================
+# Session Endpoints (Phase 1)
+# ============================================================================
+
+@app.get("/api/sessions")
+async def api_list_sessions():
+    """List all saved sessions."""
+    return {"sessions": _session_mgr.list_sessions()}
+
+
+@app.post("/api/sessions")
+async def api_create_session(payload: dict):
+    """Create a new session.
+
+    Accepts either legacy single-repo or multi-repo format:
+      Legacy: {"repo_full_name": "owner/repo", "branch": "main"}
+      Multi:  {"repos": [{full_name, branch, mode}], "active_repo": "owner/repo"}
+    """
+    repo = payload.get("repo_full_name", "")
+    branch = payload.get("branch")
+    name = payload.get("name")  # optional — derived from first user prompt
+    session = _session_mgr.create(repo_full_name=repo, branch=branch, name=name)
+
+    # Multi-repo context support
+    if payload.get("repos"):
+        session.repos = payload["repos"]
+        session.active_repo = payload.get("active_repo", repo)
+    elif repo:
+        session.repos = [{"full_name": repo, "branch": branch or "main", "mode": "write"}]
+        session.active_repo = repo
+
+    _session_mgr.save(session)
+    return {"session_id": session.id, "status": session.status}
+
+
+@app.get("/api/sessions/{session_id}")
+async def api_get_session(session_id: str):
+    """Get session details."""
+    session = _session_mgr.load(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {
+        "id": session.id,
+        "status": session.status,
+        "repo_full_name": session.repo_full_name,
+        "branch": session.branch,
+        "created_at": session.created_at,
+        "message_count": len(session.messages),
+        "checkpoint_count": len(session.checkpoints),
+        "repos": session.repos,
+        "active_repo": session.active_repo,
+    }
+
+
+@app.delete("/api/sessions/{session_id}")
+async def api_delete_session(session_id: str):
+    """Delete a session."""
+    deleted = _session_mgr.delete(session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"deleted": True}
+
+
+@app.patch("/api/sessions/{session_id}/context")
+async def api_update_session_context(session_id: str, payload: dict):
+    """Add, remove, or activate repos in a session's multi-repo context.
+
+    Actions:
+      {"action": "add", "repo_full_name": "owner/repo", "branch": "main"}
+      {"action": "remove", "repo_full_name": "owner/repo"}
+      {"action": "set_active", "repo_full_name": "owner/repo"}
+    """
+    session = _session_mgr.load(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    action = payload.get("action")
+    repo_name = payload.get("repo_full_name")
+    if not action or not repo_name:
+        raise HTTPException(status_code=400, detail="action and repo_full_name required")
+
+    if action == "add":
+        branch = payload.get("branch", "main")
+        if not any(r.get("full_name") == repo_name for r in session.repos):
+            session.repos.append({
+                "full_name": repo_name,
+                "branch": branch,
+                "mode": "read",
+            })
+        if not session.active_repo:
+            session.active_repo = repo_name
+    elif action == "remove":
+        session.repos = [r for r in session.repos if r.get("full_name") != repo_name]
+        if session.active_repo == repo_name:
+            session.active_repo = session.repos[0]["full_name"] if session.repos else None
+    elif action == "set_active":
+        if any(r.get("full_name") == repo_name for r in session.repos):
+            # Update mode flags
+            for r in session.repos:
+                r["mode"] = "write" if r.get("full_name") == repo_name else "read"
+            session.active_repo = repo_name
+        else:
+            raise HTTPException(status_code=400, detail="Repo not in session context")
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
+
+    _session_mgr.save(session)
+    return {
+        "repos": session.repos,
+        "active_repo": session.active_repo,
+    }
+
+
+@app.post("/api/sessions/{session_id}/checkpoint")
+async def api_create_checkpoint(session_id: str, payload: dict):
+    """Create a checkpoint for a session."""
+    session = _session_mgr.load(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    label = payload.get("label", "checkpoint")
+    cp = _session_mgr.create_checkpoint(session, label=label)
+    return {"checkpoint_id": cp.id, "label": cp.label, "created_at": cp.created_at}
+
+
+# ============================================================================
+# Hooks Endpoints (Phase 1)
+# ============================================================================
+
+@app.get("/api/hooks")
+async def api_list_hooks():
+    """List registered hooks."""
+    return {"hooks": _hook_mgr.list_hooks()}
+
+
+@app.post("/api/hooks")
+async def api_register_hook(payload: dict):
+    """Register a new hook."""
+    from .hooks import HookDefinition
+    try:
+        hook = HookDefinition(
+            event=HookEvent(payload["event"]),
+            name=payload["name"],
+            command=payload.get("command"),
+            blocking=payload.get("blocking", False),
+            timeout=payload.get("timeout", 30),
+        )
+        _hook_mgr.register(hook)
+        return {"registered": True, "name": hook.name, "event": hook.event.value}
+    except (KeyError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/hooks/{event}/{name}")
+async def api_unregister_hook(event: str, name: str):
+    """Unregister a hook by event and name."""
+    try:
+        _hook_mgr.unregister(HookEvent(event), name)
+        return {"unregistered": True}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ============================================================================
+# Permissions Endpoints (Phase 1)
+# ============================================================================
+
+@app.get("/api/permissions")
+async def api_get_permissions():
+    """Get current permission policy."""
+    return _perm_mgr.to_dict()
+
+
+@app.put("/api/permissions/mode")
+async def api_set_permission_mode(payload: dict):
+    """Set the permission mode (normal, plan, auto)."""
+    mode_str = payload.get("mode", "normal")
+    try:
+        _perm_mgr.policy.mode = PermissionMode(mode_str)
+        return {"mode": _perm_mgr.policy.mode.value}
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid mode: {mode_str}")
+
+
+# ============================================================================
+# Project Context / Memory Endpoints (Phase 1)
+# ============================================================================
+
+@app.get("/api/repos/{owner}/{repo}/context")
+async def api_get_project_context(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+):
+    """Get project conventions and memory for a repository workspace."""
+    from pathlib import Path as StdPath
+    workspace_path = StdPath.home() / ".gitpilot" / "workspaces" / owner / repo
+    if not workspace_path.exists():
+        return {"conventions": "", "rules": [], "auto_memory": {}, "system_prompt": ""}
+    mgr = MemoryManager(workspace_path)
+    ctx = mgr.load_context()
+    return {
+        "conventions": ctx.conventions,
+        "rules": ctx.rules,
+        "auto_memory": ctx.auto_memory,
+        "system_prompt": ctx.to_system_prompt(),
+    }
+
+
+@app.post("/api/repos/{owner}/{repo}/context/init")
+async def api_init_project_context(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+):
+    """Initialize .gitpilot/ directory with template GITPILOT.md."""
+    from pathlib import Path as StdPath
+    workspace_path = StdPath.home() / ".gitpilot" / "workspaces" / owner / repo
+    workspace_path.mkdir(parents=True, exist_ok=True)
+    mgr = MemoryManager(workspace_path)
+    md_path = mgr.init_project()
+    return {"initialized": True, "path": str(md_path)}
+
+
+@app.post("/api/repos/{owner}/{repo}/context/pattern")
+async def api_add_learned_pattern(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    payload: dict = ...,
+):
+    """Add a learned pattern to auto-memory."""
+    from pathlib import Path as StdPath
+    pattern = payload.get("pattern", "")
+    if not pattern:
+        raise HTTPException(status_code=400, detail="pattern is required")
+    workspace_path = StdPath.home() / ".gitpilot" / "workspaces" / owner / repo
+    workspace_path.mkdir(parents=True, exist_ok=True)
+    mgr = MemoryManager(workspace_path)
+    mgr.add_learned_pattern(pattern)
+    return {"added": True, "pattern": pattern}
+
+
+# ============================================================================
+# Context Vault Endpoints (additive — Context + Use Case system)
+# ============================================================================
+
+def _workspace_path(owner: str, repo: str) -> Path:
+    """Resolve the local workspace path for a repo."""
+    return Path.home() / ".gitpilot" / "workspaces" / owner / repo
+
+
+@app.get("/api/repos/{owner}/{repo}/context/assets")
+async def api_list_context_assets(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+):
+    """List all uploaded context assets for a repository."""
+    vault = ContextVault(_workspace_path(owner, repo))
+    assets = vault.list_assets()
+    return {"assets": [a.to_dict() for a in assets]}
+
+
+@app.post("/api/repos/{owner}/{repo}/context/assets/upload")
+async def api_upload_context_asset(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    file: UploadFile = File(...),
+):
+    """Upload a file to the project context vault."""
+    vault = ContextVault(_workspace_path(owner, repo))
+    content = await file.read()
+    mime = file.content_type or ""
+    filename = file.filename or "upload"
+
+    try:
+        meta = vault.upload_asset(filename, content, mime=mime)
+        return {"asset": meta.to_dict()}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/repos/{owner}/{repo}/context/assets/{asset_id}")
+async def api_delete_context_asset(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    asset_id: str = FPath(...),
+):
+    """Delete a context asset."""
+    vault = ContextVault(_workspace_path(owner, repo))
+    vault.delete_asset(asset_id)
+    return {"deleted": True, "asset_id": asset_id}
+
+
+@app.get("/api/repos/{owner}/{repo}/context/assets/{asset_id}/download")
+async def api_download_context_asset(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    asset_id: str = FPath(...),
+):
+    """Download a raw context asset file."""
+    vault = ContextVault(_workspace_path(owner, repo))
+    asset_path = vault.get_asset_path(asset_id)
+    if not asset_path:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    filename = vault.get_asset_filename(asset_id)
+    return FileResponse(asset_path, filename=filename)
+
+
+# ============================================================================
+# Use Case Endpoints (additive — guided requirement clarification)
+# ============================================================================
+
+@app.get("/api/repos/{owner}/{repo}/use-cases")
+async def api_list_use_cases(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+):
+    """List all use cases for a repository."""
+    mgr = UseCaseManager(_workspace_path(owner, repo))
+    return {"use_cases": mgr.list_use_cases()}
+
+
+@app.post("/api/repos/{owner}/{repo}/use-cases")
+async def api_create_use_case(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    payload: dict = ...,
+):
+    """Create a new use case."""
+    title = payload.get("title", "New Use Case")
+    initial_notes = payload.get("initial_notes", "")
+    mgr = UseCaseManager(_workspace_path(owner, repo))
+    uc = mgr.create_use_case(title=title, initial_notes=initial_notes)
+    return {"use_case": uc.to_dict()}
+
+
+@app.get("/api/repos/{owner}/{repo}/use-cases/{use_case_id}")
+async def api_get_use_case(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    use_case_id: str = FPath(...),
+):
+    """Get a single use case with messages and spec."""
+    mgr = UseCaseManager(_workspace_path(owner, repo))
+    uc = mgr.get_use_case(use_case_id)
+    if not uc:
+        raise HTTPException(status_code=404, detail="Use case not found")
+    return {"use_case": uc.to_dict()}
+
+
+@app.post("/api/repos/{owner}/{repo}/use-cases/{use_case_id}/chat")
+async def api_use_case_chat(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    use_case_id: str = FPath(...),
+    payload: dict = ...,
+):
+    """Send a guided chat message and get assistant response + updated spec."""
+    message = payload.get("message", "")
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+    mgr = UseCaseManager(_workspace_path(owner, repo))
+    uc = mgr.chat(use_case_id, message)
+    if not uc:
+        raise HTTPException(status_code=404, detail="Use case not found")
+    return {"use_case": uc.to_dict()}
+
+
+@app.post("/api/repos/{owner}/{repo}/use-cases/{use_case_id}/finalize")
+async def api_finalize_use_case(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    use_case_id: str = FPath(...),
+):
+    """Finalize a use case: mark active, export markdown spec."""
+    mgr = UseCaseManager(_workspace_path(owner, repo))
+    uc = mgr.finalize(use_case_id)
+    if not uc:
+        raise HTTPException(status_code=404, detail="Use case not found")
+    return {"use_case": uc.to_dict()}
+
+
+# ============================================================================
+# MCP Endpoints (Phase 2)
+# ============================================================================
+
+@app.get("/api/mcp/servers")
+async def api_mcp_list_servers():
+    """List configured MCP servers and their connection status."""
+    return _mcp_client.to_dict()
+
+
+@app.post("/api/mcp/connect/{server_name}")
+async def api_mcp_connect(server_name: str):
+    """Connect to a named MCP server."""
+    try:
+        conn = await _mcp_client.connect(server_name)
+        return {
+            "connected": True,
+            "server": server_name,
+            "tools": [{"name": t.name, "description": t.description} for t in conn.tools],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/mcp/disconnect/{server_name}")
+async def api_mcp_disconnect(server_name: str):
+    """Disconnect from a named MCP server."""
+    await _mcp_client.disconnect(server_name)
+    return {"disconnected": True, "server": server_name}
+
+
+@app.post("/api/mcp/call")
+async def api_mcp_call_tool(payload: dict):
+    """Call a tool on a connected MCP server."""
+    server = payload.get("server", "")
+    tool_name = payload.get("tool", "")
+    params = payload.get("params", {})
+    if not server or not tool_name:
+        raise HTTPException(status_code=400, detail="server and tool are required")
+    conn = _mcp_client._connections.get(server)
+    if not conn:
+        raise HTTPException(status_code=404, detail=f"Not connected to server: {server}")
+    try:
+        result = await _mcp_client.call_tool(conn, tool_name, params)
+        return {"result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Plugin Endpoints (Phase 2)
+# ============================================================================
+
+@app.get("/api/plugins")
+async def api_list_plugins():
+    """List installed plugins."""
+    plugins = _plugin_mgr.list_installed()
+    return {"plugins": [p.to_dict() for p in plugins]}
+
+
+@app.post("/api/plugins/install")
+async def api_install_plugin(payload: dict):
+    """Install a plugin from a git URL or local path."""
+    source = payload.get("source", "")
+    if not source:
+        raise HTTPException(status_code=400, detail="source is required")
+    try:
+        info = _plugin_mgr.install(source)
+        return {"installed": True, "plugin": info.to_dict()}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/plugins/{name}")
+async def api_uninstall_plugin(name: str):
+    """Uninstall a plugin by name."""
+    removed = _plugin_mgr.uninstall(name)
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"Plugin not found: {name}")
+    return {"uninstalled": True, "name": name}
+
+
+# ============================================================================
+# Skills Endpoints (Phase 2)
+# ============================================================================
+
+@app.get("/api/skills")
+async def api_list_skills():
+    """List all available skills."""
+    return {"skills": _skill_mgr.list_skills()}
+
+
+@app.post("/api/skills/invoke")
+async def api_invoke_skill(payload: dict):
+    """Invoke a skill by name."""
+    name = payload.get("name", "")
+    context = payload.get("context", {})
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    prompt = _skill_mgr.invoke(name, context)
+    if prompt is None:
+        raise HTTPException(status_code=404, detail=f"Skill not found: {name}")
+    return {"skill": name, "rendered_prompt": prompt}
+
+
+@app.post("/api/skills/reload")
+async def api_reload_skills():
+    """Reload skills from all sources."""
+    count = _skill_mgr.load_all()
+    return {"reloaded": True, "count": count}
+
+
+# ============================================================================
+# Vision Endpoints (Phase 2)
+# ============================================================================
+
+@app.post("/api/vision/analyze")
+async def api_vision_analyze(payload: dict):
+    """Analyze an image with a text prompt."""
+    from .vision import VisionAnalyzer
+    image_path = payload.get("image_path", "")
+    prompt = payload.get("prompt", "Describe this image.")
+    provider = payload.get("provider", "openai")
+    if not image_path:
+        raise HTTPException(status_code=400, detail="image_path is required")
+    try:
+        analyzer = VisionAnalyzer(provider=provider)
+        result = await analyzer.analyze_image(Path(image_path), prompt)
+        return result.to_dict()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ============================================================================
+# Model Router Endpoints (Phase 2)
+# ============================================================================
+
+@app.post("/api/model-router/select")
+async def api_model_select(payload: dict):
+    """Preview which model would be selected for a request."""
+    request = payload.get("request", "")
+    category = payload.get("category")
+    if not request:
+        raise HTTPException(status_code=400, detail="request is required")
+    selection = _model_router.select(request, category)
+    return {
+        "model": selection.model,
+        "tier": selection.tier.value,
+        "complexity": selection.complexity.value,
+        "provider": selection.provider,
+        "reason": selection.reason,
+    }
+
+
+@app.get("/api/model-router/usage")
+async def api_model_usage():
+    """Get model usage summary and budget status."""
+    return _model_router.get_usage_summary()
+
+
+# ============================================================================
+# Agent Teams Endpoints (Phase 3)
+# ============================================================================
+
+@app.post("/api/agent-teams/plan")
+async def api_team_plan(payload: dict):
+    """Split a complex task into parallel subtasks."""
+    task = payload.get("task", "")
+    if not task:
+        raise HTTPException(status_code=400, detail="task is required")
+    subtasks = _agent_team.plan_and_split(task)
+    return {"subtasks": [{"id": s.id, "title": s.title, "description": s.description} for s in subtasks]}
+
+
+@app.post("/api/agent-teams/execute")
+async def api_team_execute(payload: dict):
+    """Execute subtasks in parallel and merge results."""
+    task = payload.get("task", "")
+    if not task:
+        raise HTTPException(status_code=400, detail="task is required")
+    subtasks = _agent_team.plan_and_split(task)
+    result = await _agent_team.execute_parallel(subtasks)
+    return result.to_dict()
+
+
+# ============================================================================
+# Learning Engine Endpoints (Phase 3)
+# ============================================================================
+
+@app.post("/api/learning/evaluate")
+async def api_learning_evaluate(payload: dict):
+    """Evaluate an action outcome for learning."""
+    action = payload.get("action", "")
+    outcome = payload.get("outcome", {})
+    repo = payload.get("repo", "")
+    if not action:
+        raise HTTPException(status_code=400, detail="action is required")
+    evaluation = _learning_engine.evaluate_outcome(action, outcome, repo=repo)
+    return {
+        "action": evaluation.action,
+        "success": evaluation.success,
+        "score": evaluation.score,
+        "feedback": evaluation.feedback,
+    }
+
+
+@app.get("/api/learning/insights/{owner}/{repo}")
+async def api_learning_insights(owner: str = FPath(...), repo: str = FPath(...)):
+    """Get learned insights for a repository."""
+    repo_name = f"{owner}/{repo}"
+    insights = _learning_engine.get_repo_insights(repo_name)
+    return {
+        "repo": repo_name,
+        "patterns": insights.patterns,
+        "preferred_style": insights.preferred_style,
+        "success_rate": insights.success_rate,
+        "total_evaluations": insights.total_evaluations,
+    }
+
+
+@app.post("/api/learning/style")
+async def api_learning_set_style(payload: dict):
+    """Set preferred coding style for a repository."""
+    repo = payload.get("repo", "")
+    style = payload.get("style", {})
+    if not repo:
+        raise HTTPException(status_code=400, detail="repo is required")
+    _learning_engine.set_preferred_style(repo, style)
+    return {"repo": repo, "style": style}
+
+
+# ============================================================================
+# Cross-Repo Intelligence Endpoints (Phase 3)
+# ============================================================================
+
+@app.post("/api/cross-repo/dependencies")
+async def api_cross_repo_dependencies(payload: dict):
+    """Analyze dependencies from provided file contents."""
+    files = payload.get("files", {})
+    if not files:
+        raise HTTPException(status_code=400, detail="files dict is required (filename -> content)")
+    graph = _cross_repo.analyze_dependencies_from_files(files)
+    return graph.to_dict()
+
+
+@app.post("/api/cross-repo/impact")
+async def api_cross_repo_impact(payload: dict):
+    """Analyze impact of updating a package."""
+    files = payload.get("files", {})
+    package_name = payload.get("package", "")
+    new_version = payload.get("new_version")
+    if not package_name:
+        raise HTTPException(status_code=400, detail="package is required")
+    graph = _cross_repo.analyze_dependencies_from_files(files)
+    report = _cross_repo.impact_analysis(graph, package_name, new_version)
+    return report.to_dict()
+
+
+# ============================================================================
+# Predictions Endpoints (Phase 3)
+# ============================================================================
+
+@app.post("/api/predictions/suggest")
+async def api_predictions_suggest(payload: dict):
+    """Get proactive suggestions based on context."""
+    context = payload.get("context", "")
+    if not context:
+        raise HTTPException(status_code=400, detail="context is required")
+    suggestions = _predictive_engine.predict(context)
+    return {"suggestions": [s.to_dict() for s in suggestions]}
+
+
+@app.get("/api/predictions/rules")
+async def api_predictions_rules():
+    """List all prediction rules."""
+    return {"rules": _predictive_engine.list_rules()}
+
+
+# ============================================================================
+# Security Scanner Endpoints (Phase 3)
+# ============================================================================
+
+@app.post("/api/security/scan-file")
+async def api_security_scan_file(payload: dict):
+    """Scan a single file for security issues."""
+    file_path = payload.get("file_path", "")
+    if not file_path:
+        raise HTTPException(status_code=400, detail="file_path is required")
+    findings = _security_scanner.scan_file(file_path)
+    return {"findings": [f.to_dict() for f in findings], "count": len(findings)}
+
+
+@app.post("/api/security/scan-directory")
+async def api_security_scan_directory(payload: dict):
+    """Recursively scan a directory for security issues."""
+    directory = payload.get("directory", "")
+    if not directory:
+        raise HTTPException(status_code=400, detail="directory is required")
+    result = _security_scanner.scan_directory(directory)
+    return result.to_dict()
+
+
+@app.post("/api/security/scan-diff")
+async def api_security_scan_diff(payload: dict):
+    """Scan a git diff for security issues in added lines."""
+    diff_text = payload.get("diff", "")
+    if not diff_text:
+        raise HTTPException(status_code=400, detail="diff is required")
+    findings = _security_scanner.scan_diff(diff_text)
+    return {"findings": [f.to_dict() for f in findings], "count": len(findings)}
+
+
+# ============================================================================
+# Natural Language Database Endpoints (Phase 3)
+# ============================================================================
+
+@app.post("/api/nl-database/translate")
+async def api_nl_translate(payload: dict):
+    """Translate natural language to SQL."""
+    question = payload.get("question", "")
+    dialect = payload.get("dialect", "postgresql")
+    tables = payload.get("tables", [])
+    if not question:
+        raise HTTPException(status_code=400, detail="question is required")
+    engine = NLQueryEngine(dialect=QueryDialect(dialect))
+    for t in tables:
+        engine.add_table(TableSchema(
+            name=t["name"],
+            columns=t.get("columns", []),
+            primary_key=t.get("primary_key"),
+        ))
+    sql = engine.translate(question)
+    error = engine.validate_query(sql)
+    return {"question": question, "sql": sql, "valid": error is None, "error": error}
+
+
+@app.post("/api/nl-database/explain")
+async def api_nl_explain(payload: dict):
+    """Explain what a SQL query does in plain English."""
+    sql = payload.get("sql", "")
+    if not sql:
+        raise HTTPException(status_code=400, detail="sql is required")
+    explanation = _nl_engine.explain(sql)
+    return {"sql": sql, "explanation": explanation}
+
+
+# ============================================================================
+# Branch Listing Endpoint (Claude-Code-on-Web Parity)
+# ============================================================================
+
+class BranchInfo(BaseModel):
+    name: str
+    is_default: bool = False
+    protected: bool = False
+    commit_sha: Optional[str] = None
+
+
+class BranchListResponse(BaseModel):
+    repository: str
+    default_branch: str
+    page: int
+    per_page: int
+    has_more: bool
+    branches: List[BranchInfo]
+
+
+@app.get("/api/repos/{owner}/{repo}/branches", response_model=BranchListResponse)
+async def api_list_branches(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(100, ge=1, le=100),
+    query: Optional[str] = Query(None, description="Substring filter"),
+    authorization: Optional[str] = Header(None),
+):
+    """List branches for a repository with optional search filtering."""
+    import httpx as _httpx
+
+    token = get_github_token(authorization)
+    if not token:
+        raise HTTPException(status_code=401, detail="GitHub token required")
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "gitpilot",
+    }
+    timeout = _httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=10.0)
+
+    async with _httpx.AsyncClient(
+        base_url="https://api.github.com", headers=headers, timeout=timeout
+    ) as client:
+        # Fetch repo info for default_branch
+        repo_resp = await client.get(f"/repos/{owner}/{repo}")
+        if repo_resp.status_code >= 400:
+            logging.warning(
+                "branches: repo lookup failed %s/%s → %s %s",
+                owner, repo, repo_resp.status_code, repo_resp.text[:200],
+            )
+            raise HTTPException(
+                status_code=repo_resp.status_code,
+                detail=f"Cannot access repository: {repo_resp.status_code}",
+            )
+
+        repo_data = repo_resp.json()
+        default_branch_name = repo_data.get("default_branch", "main")
+
+        # Fetch ALL branch pages (GitHub caps at 100 per page)
+        all_raw = []
+        current_page = page
+        while True:
+            branch_resp = await client.get(
+                f"/repos/{owner}/{repo}/branches",
+                params={"page": current_page, "per_page": per_page},
+            )
+            if branch_resp.status_code >= 400:
+                logging.warning(
+                    "branches: list failed %s/%s page=%s → %s %s",
+                    owner, repo, current_page, branch_resp.status_code, branch_resp.text[:200],
+                )
+                raise HTTPException(
+                    status_code=branch_resp.status_code,
+                    detail=f"Failed to list branches: {branch_resp.status_code}",
+                )
+
+            page_data = branch_resp.json() if isinstance(branch_resp.json(), list) else []
+            all_raw.extend(page_data)
+
+            # Check if there are more pages
+            link_header = branch_resp.headers.get("Link", "") or ""
+            if 'rel="next"' not in link_header or len(page_data) < per_page:
+                break
+            current_page += 1
+            # Safety: cap at 10 pages (1000 branches)
+            if current_page - page >= 10:
+                break
+
+    q = (query or "").strip().lower()
+
+    branches = []
+    for b in all_raw:
+        name = (b.get("name") or "").strip()
+        if not name:
+            continue
+        if q and q not in name.lower():
+            continue
+        branches.append(BranchInfo(
+            name=name,
+            is_default=(name == default_branch_name),
+            protected=bool(b.get("protected", False)),
+            commit_sha=(b.get("commit") or {}).get("sha"),
+        ))
+
+    # Sort: default branch first, then alphabetical
+    branches.sort(key=lambda x: (0 if x.is_default else 1, x.name.lower()))
+
+    return BranchListResponse(
+        repository=f"{owner}/{repo}",
+        default_branch=default_branch_name,
+        page=page,
+        per_page=per_page,
+        has_more=False,
+        branches=branches,
+    )
+
+
+# ============================================================================
+# Environment Configuration Endpoints (Claude-Code-on-Web Parity)
+# ============================================================================
+
+import json as _json
+_ENV_ROOT = Path.home() / ".gitpilot" / "environments"
+
+
+class EnvironmentConfig(BaseModel):
+    id: Optional[str] = None
+    name: str = "Default"
+    network_access: str = Field("limited", description="limited | full | none")
+    env_vars: dict = Field(default_factory=dict)
+
+
+class EnvironmentListResponse(BaseModel):
+    environments: List[EnvironmentConfig]
+
+
+@app.get("/api/environments", response_model=EnvironmentListResponse)
+async def api_list_environments():
+    """List all environment configurations."""
+    _ENV_ROOT.mkdir(parents=True, exist_ok=True)
+    envs = []
+    for path in sorted(_ENV_ROOT.glob("*.json")):
+        try:
+            data = _json.loads(path.read_text())
+            envs.append(EnvironmentConfig(**data))
+        except Exception:
+            continue
+    if not envs:
+        envs.append(EnvironmentConfig(id="default", name="Default", network_access="limited"))
+    return EnvironmentListResponse(environments=envs)
+
+
+@app.post("/api/environments")
+async def api_create_environment(config: EnvironmentConfig):
+    """Create a new environment configuration."""
+    import uuid
+    _ENV_ROOT.mkdir(parents=True, exist_ok=True)
+    config.id = config.id or uuid.uuid4().hex[:12]
+    path = _ENV_ROOT / f"{config.id}.json"
+    path.write_text(_json.dumps(config.model_dump(), indent=2))
+    return config.model_dump()
+
+
+@app.put("/api/environments/{env_id}")
+async def api_update_environment(env_id: str, config: EnvironmentConfig):
+    """Update an environment configuration."""
+    _ENV_ROOT.mkdir(parents=True, exist_ok=True)
+    path = _ENV_ROOT / f"{env_id}.json"
+    config.id = env_id
+    path.write_text(_json.dumps(config.model_dump(), indent=2))
+    return config.model_dump()
+
+
+@app.delete("/api/environments/{env_id}")
+async def api_delete_environment(env_id: str):
+    """Delete an environment configuration."""
+    path = _ENV_ROOT / f"{env_id}.json"
+    if path.exists():
+        path.unlink()
+        return {"deleted": True}
+    raise HTTPException(status_code=404, detail="Environment not found")
+
+
+# ============================================================================
+# Session Messages + Diff Endpoints (Claude-Code-on-Web Parity)
+# ============================================================================
+
+@app.post("/api/sessions/{session_id}/message")
+async def api_add_session_message(session_id: str, payload: dict):
+    """Add a message to a session's conversation history."""
+    try:
+        session = _session_mgr.load(session_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Session not found")
+    role = payload.get("role", "user")
+    content = payload.get("content", "")
+    session.add_message(role, content, **payload.get("metadata", {}))
+    _session_mgr.save(session)
+    return {"message_count": len(session.messages)}
+
+
+@app.get("/api/sessions/{session_id}/messages")
+async def api_get_session_messages(session_id: str):
+    """Get all messages for a session."""
+    try:
+        session = _session_mgr.load(session_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {
+        "session_id": session.id,
+        "messages": [
+            {
+                "role": m.role,
+                "content": m.content,
+                "timestamp": m.timestamp,
+                "metadata": m.metadata,
+            }
+            for m in session.messages
+        ],
+    }
+
+
+@app.get("/api/sessions/{session_id}/diff")
+async def api_get_session_diff(session_id: str):
+    """Get diff stats for a session (placeholder for sandbox integration)."""
+    try:
+        session = _session_mgr.load(session_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Session not found")
+    diff = session.metadata.get("diff", {
+        "files_changed": 0,
+        "additions": 0,
+        "deletions": 0,
+        "files": [],
+    })
+    return {"session_id": session.id, "diff": diff}
+
+
+@app.post("/api/sessions/{session_id}/status")
+async def api_update_session_status(session_id: str, payload: dict):
+    """Update session status (active, completed, failed, waiting)."""
+    try:
+        session = _session_mgr.load(session_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Session not found")
+    new_status = payload.get("status", "active")
+    if new_status not in ("active", "paused", "completed", "failed", "waiting"):
+        raise HTTPException(status_code=400, detail="Invalid status")
+    session.status = new_status
+    _session_mgr.save(session)
+    return {"session_id": session.id, "status": session.status}
+
+
+# ============================================================================
+# WebSocket Streaming Endpoint (Claude-Code-on-Web Parity)
+# ============================================================================
+
+from fastapi import WebSocket, WebSocketDisconnect
+
+
+@app.websocket("/ws/sessions/{session_id}")
+async def session_websocket(websocket: WebSocket, session_id: str):
+    """
+    Real-time bidirectional communication for a coding session.
+
+    Server events:
+      { type: "agent_message", content: "..." }
+      { type: "tool_use", tool: "bash", input: "npm test" }
+      { type: "tool_result", tool: "bash", output: "All tests passed" }
+      { type: "diff_update", stats: { additions: N, deletions: N, files: N } }
+      { type: "status_change", status: "completed" }
+      { type: "error", message: "..." }
+
+    Client events:
+      { type: "user_message", content: "..." }
+      { type: "cancel" }
+    """
+    await websocket.accept()
+
+    # Verify session exists
+    try:
+        session = _session_mgr.load(session_id)
+    except FileNotFoundError:
+        await websocket.send_json({"type": "error", "message": "Session not found"})
+        await websocket.close()
+        return
+
+    # Send session history on connect
+    await websocket.send_json({
+        "type": "session_restored",
+        "session_id": session.id,
+        "status": session.status,
+        "message_count": len(session.messages),
+    })
+
+    try:
+        while True:
+            data = await websocket.receive_json()
+            event_type = data.get("type", "")
+
+            if event_type == "user_message":
+                content = data.get("content", "")
+                session.add_message("user", content)
+                _session_mgr.save(session)
+
+                # Acknowledge receipt
+                await websocket.send_json({
+                    "type": "message_received",
+                    "message_index": len(session.messages) - 1,
+                })
+
+                # Stream agent response (integration point for agentic.py)
+                await websocket.send_json({
+                    "type": "status_change",
+                    "status": "active",
+                })
+
+                # Agent processing hook — when the agent orchestrator is wired,
+                # replace this with actual streaming from agentic.py
+                try:
+                    repo_full = session.repo_full_name or ""
+                    parts = repo_full.split("/", 1)
+                    if len(parts) == 2 and content.strip():
+                        # Use canonical dispatcher signature
+                        result = await dispatch_request(
+                            user_request=content,
+                            repo_full_name=f"{parts[0]}/{parts[1]}",
+                            branch_name=session.branch,
+                        )
+                        answer = ""
+                        if isinstance(result, dict):
+                            answer = (
+                                result.get("result")
+                                or result.get("answer")
+                                or result.get("message")
+                                or result.get("summary")
+                                or (result.get("plan", {}) or {}).get("summary")
+                                or str(result)
+                            )
+                        else:
+                            answer = str(result)
+
+                        # Stream the response
+                        await websocket.send_json({
+                            "type": "agent_message",
+                            "content": answer,
+                        })
+
+                        session.add_message("assistant", answer)
+                        _session_mgr.save(session)
+                    else:
+                        await websocket.send_json({
+                            "type": "agent_message",
+                            "content": "Session is not connected to a repository.",
+                        })
+                except Exception as agent_err:
+                    logger.error(f"Agent error in WS session {session_id}: {agent_err}")
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": str(agent_err),
+                    })
+
+                await websocket.send_json({
+                    "type": "status_change",
+                    "status": "waiting",
+                })
+
+            elif event_type == "cancel":
+                await websocket.send_json({
+                    "type": "status_change",
+                    "status": "waiting",
+                })
+
+            elif event_type == "ping":
+                await websocket.send_json({"type": "pong"})
+
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected for session {session_id}")
+    except Exception as e:
+        logger.error(f"WebSocket error for session {session_id}: {e}")
+        try:
+            await websocket.send_json({"type": "error", "message": str(e)})
+        except Exception:
+            pass
+
+
+# ============================================================================
+# Static Files & Frontend Serving (SPA Support)
+# ============================================================================
+
+STATIC_DIR = Path(__file__).resolve().parent / "web"
+ASSETS_DIR = STATIC_DIR / "assets"
+
+if ASSETS_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
+
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.get("/api/health")
+async def health_check():
+    """Health check endpoint for monitoring and diagnostics."""
+    return {"status": "healthy", "service": "gitpilot-backend"}
+
+
+@app.get("/healthz")
+async def healthz():
+    """Health check endpoint (Render/Kubernetes standard)."""
+    return {"status": "healthy", "service": "gitpilot-backend"}
+
+
+@app.get("/", include_in_schema=False)
+async def index():
+    """Serve the React App entry point."""
+    index_file = STATIC_DIR / "index.html"
+    if index_file.exists():
+        return FileResponse(index_file)
+    return JSONResponse(
+        {"message": "GitPilot UI not built. The static files directory is missing."},
+        status_code=500,
+    )
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+async def catch_all_spa_routes(full_path: str):
+    """
+    Catch-all route to serve index.html for frontend routing.
+    Excludes '/api' paths to ensure genuine API 404s are returned as JSON.
+    """
+    if full_path.startswith("api/"):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+
+    index_file = STATIC_DIR / "index.html"
+    if index_file.exists():
+        return FileResponse(index_file)
+
+    return JSONResponse(
+        {"message": "GitPilot UI not built. The static files directory is missing."},
+        status_code=500,
+    )

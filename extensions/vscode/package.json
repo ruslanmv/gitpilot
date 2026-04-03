@@ -1,0 +1,704 @@
+{
+  "name": "gitpilot-vscode",
+  "displayName": "GitPilot \u2014 AI Agent for GitHub",
+  "description": "Enterprise agentic AI assistant for GitHub repositories \u2014 multi-agent orchestration, security scanning, MCP support, local editing, and multi-model AI powered by CrewAI",
+  "version": "0.1.6",
+  "publisher": "ruslanmv",
+  "license": "MIT",
+  "icon": "resources/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ruslanmv/gitpilot"
+  },
+  "homepage": "https://github.com/ruslanmv/gitpilot#readme",
+  "bugs": {
+    "url": "https://github.com/ruslanmv/gitpilot/issues"
+  },
+  "engines": {
+    "vscode": "^1.110.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Machine Learning",
+    "SCM Providers",
+    "Linters",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "github",
+    "copilot",
+    "agent",
+    "crewai",
+    "mcp",
+    "security",
+    "code-review",
+    "multi-agent",
+    "llm",
+    "openai",
+    "claude",
+    "ollama"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onView:gitpilot.chatView",
+    "onCommand:gitpilot.openChat",
+    "onCommand:gitpilot.sendMessage",
+    "onCommand:gitpilot.reviewFile",
+    "onCommand:gitpilot.explainSelection",
+    "onCommand:gitpilot.reviewSelection",
+    "onCommand:gitpilot.fixSelection",
+    "onCommand:gitpilot.testSelection",
+    "onCommand:gitpilot.scanFile",
+    "onCommand:gitpilot.scanWorkspace",
+    "onCommand:gitpilot.showAgentFlow",
+    "onCommand:gitpilot.newSession",
+    "onCommand:gitpilot.refreshSessions",
+    "onCommand:gitpilot.refreshSkills",
+    "onCommand:gitpilot.selectProvider",
+    "onCommand:gitpilot.selectModel",
+    "onCommand:gitpilot.selectProviderV2",
+    "onCommand:gitpilot.selectModelV2",
+    "onCommand:gitpilot.showServerInfo",
+    "onCommand:gitpilot.refreshStatus",
+    "onCommand:gitpilot.setupWizard",
+    "onCommand:gitpilot.refreshProjectContext",
+    "onCommand:gitpilot.explain_project",
+    "onCommand:gitpilot.review_file",
+    "onCommand:gitpilot.fix_selection",
+    "onCommand:gitpilot.generate_tests",
+    "onCommand:gitpilot.security_scan"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "gitpilot",
+          "title": "GitPilot",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "gitpilot": [
+        {
+          "type": "webview",
+          "id": "gitpilot.chatView",
+          "name": "GitPilot Workspace"
+        },
+        {
+          "id": "gitpilot.sessionsView",
+          "name": "Sessions"
+        },
+        {
+          "id": "gitpilot.skillsView",
+          "name": "Skills & Plugins"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "gitpilot.openChat",
+        "title": "Open GitPilot Workspace",
+        "category": "GitPilot",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "gitpilot.sendMessage",
+        "title": "Send Message",
+        "category": "GitPilot"
+      },
+      {
+        "command": "gitpilot.reviewFile",
+        "title": "Review Current File",
+        "category": "GitPilot",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "gitpilot.explainSelection",
+        "title": "Explain Selection",
+        "category": "GitPilot",
+        "icon": "$(lightbulb)"
+      },
+      {
+        "command": "gitpilot.reviewSelection",
+        "title": "Review Selection",
+        "category": "GitPilot"
+      },
+      {
+        "command": "gitpilot.fixSelection",
+        "title": "Fix Selection",
+        "category": "GitPilot"
+      },
+      {
+        "command": "gitpilot.testSelection",
+        "title": "Generate Tests for Selection",
+        "category": "GitPilot"
+      },
+      {
+        "command": "gitpilot.runCommand",
+        "title": "Run Terminal Command",
+        "category": "GitPilot",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "gitpilot.setServer",
+        "title": "Set Server URL",
+        "category": "GitPilot",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "gitpilot.reconnect",
+        "title": "Reconnect to Server",
+        "category": "GitPilot",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "gitpilot.showServerInfo",
+        "title": "Show Server Info",
+        "category": "GitPilot",
+        "icon": "$(info)"
+      },
+      {
+        "command": "gitpilot.invokeSkill",
+        "title": "Invoke Skill",
+        "category": "GitPilot",
+        "icon": "$(zap)"
+      },
+      {
+        "command": "gitpilot.installPlugin",
+        "title": "Install Plugin",
+        "category": "GitPilot",
+        "icon": "$(add)"
+      },
+      {
+        "command": "gitpilot.scanFile",
+        "title": "Security Scan Current File",
+        "category": "GitPilot",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "gitpilot.scanWorkspace",
+        "title": "Security Scan Workspace",
+        "category": "GitPilot",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "gitpilot.clearSecurityDiagnostics",
+        "title": "Clear Security Diagnostics",
+        "category": "GitPilot"
+      },
+      {
+        "command": "gitpilot.showAgentFlow",
+        "title": "Show Agent Flow Viewer",
+        "category": "GitPilot",
+        "icon": "$(type-hierarchy)"
+      },
+      {
+        "command": "gitpilot.selectProvider",
+        "title": "Select LLM Provider",
+        "category": "GitPilot",
+        "icon": "$(server-environment)"
+      },
+      {
+        "command": "gitpilot.selectModel",
+        "title": "Select Model",
+        "category": "GitPilot",
+        "icon": "$(symbol-enum)"
+      },
+      {
+        "command": "gitpilot.selectProviderV2",
+        "title": "Select Provider",
+        "category": "GitPilot",
+        "icon": "$(server-environment)"
+      },
+      {
+        "command": "gitpilot.selectModelV2",
+        "title": "Select Model (V2)",
+        "category": "GitPilot",
+        "icon": "$(symbol-enum)"
+      },
+      {
+        "command": "gitpilot.openLlmSettings",
+        "title": "Open LLM Settings",
+        "category": "GitPilot",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "gitpilot.ollaBridgePair",
+        "title": "Pair with OllaBridge Cloud",
+        "category": "GitPilot",
+        "icon": "$(link)"
+      },
+      {
+        "command": "gitpilot.setLlmApiKey",
+        "title": "Set LLM API Key",
+        "category": "GitPilot",
+        "icon": "$(key)"
+      },
+      {
+        "command": "gitpilot.setLlmBaseUrl",
+        "title": "Set LLM Base URL",
+        "category": "GitPilot",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "gitpilot.selectTopology",
+        "title": "Select Agent Topology",
+        "category": "GitPilot"
+      },
+      {
+        "command": "gitpilot.toggleLiteMode",
+        "title": "Toggle Lite Mode (Small LLM Optimization)",
+        "category": "GitPilot"
+      },
+      {
+        "command": "gitpilot.setPermissionMode",
+        "title": "Set Permission Mode",
+        "category": "GitPilot"
+      },
+      {
+        "command": "gitpilot.newSession",
+        "title": "New Chat Session",
+        "category": "GitPilot",
+        "icon": "$(add)"
+      },
+      {
+        "command": "gitpilot.refreshSessions",
+        "title": "Refresh Sessions",
+        "category": "GitPilot",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "gitpilot.refreshSkills",
+        "title": "Refresh Skills",
+        "category": "GitPilot",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "gitpilot.deleteSession",
+        "title": "Delete Session",
+        "category": "GitPilot",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "gitpilot.loadSession",
+        "title": "Load Session",
+        "category": "GitPilot"
+      },
+      {
+        "command": "gitpilot.uninstallPlugin",
+        "title": "Uninstall Plugin",
+        "category": "GitPilot",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "gitpilot.explainSymbol",
+        "title": "Explain Symbol",
+        "category": "GitPilot"
+      },
+      {
+        "command": "gitpilot.reviewSymbol",
+        "title": "Review Symbol",
+        "category": "GitPilot"
+      },
+      {
+        "command": "gitpilot.gitStatus",
+        "title": "Git Status",
+        "category": "GitPilot",
+        "icon": "$(git-commit)"
+      },
+      {
+        "command": "gitpilot.gitDiffAnalysis",
+        "title": "Analyze Git Diff",
+        "category": "GitPilot",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "gitpilot.smartCommit",
+        "title": "Smart Commit (AI Message)",
+        "category": "GitPilot",
+        "icon": "$(check)"
+      },
+      {
+        "command": "gitpilot.createPR",
+        "title": "Create Pull Request",
+        "category": "GitPilot",
+        "icon": "$(git-pull-request)"
+      },
+      {
+        "command": "gitpilot.branchManager",
+        "title": "Branch Manager",
+        "category": "GitPilot",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "gitpilot.conflictResolver",
+        "title": "Resolve Merge Conflicts",
+        "category": "GitPilot",
+        "icon": "$(git-merge)"
+      },
+      {
+        "command": "gitpilot.stashManager",
+        "title": "Stash Manager",
+        "category": "GitPilot",
+        "icon": "$(archive)"
+      },
+      {
+        "command": "gitpilot.repoHealthCheck",
+        "title": "Repository Health Check",
+        "category": "GitPilot",
+        "icon": "$(heart)"
+      },
+      {
+        "command": "gitpilot.commitSearch",
+        "title": "Semantic Commit Search",
+        "category": "GitPilot",
+        "icon": "$(search)"
+      },
+      {
+        "command": "gitpilot.impactAnalysis",
+        "title": "Impact Analysis",
+        "category": "GitPilot",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "gitpilot.naturalLanguageGit",
+        "title": "Natural Language Git",
+        "category": "GitPilot",
+        "icon": "$(comment)"
+      },
+      {
+        "command": "gitpilot.setupWizard",
+        "title": "Setup Wizard",
+        "category": "GitPilot",
+        "icon": "$(wand)"
+      },
+      {
+        "command": "gitpilot.refreshProjectContext",
+        "title": "Refresh Project Context",
+        "category": "GitPilot",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "gitpilot.explain_project",
+        "title": "Explain Project",
+        "category": "GitPilot",
+        "icon": "$(book)"
+      },
+      {
+        "command": "gitpilot.review_file",
+        "title": "Review File",
+        "category": "GitPilot",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "gitpilot.fix_selection",
+        "title": "Fix Selection",
+        "category": "GitPilot",
+        "icon": "$(wrench)"
+      },
+      {
+        "command": "gitpilot.generate_tests",
+        "title": "Generate Tests",
+        "category": "GitPilot",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "gitpilot.security_scan",
+        "title": "Security Scan",
+        "category": "GitPilot",
+        "icon": "$(shield)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "gitpilot.openChat",
+        "key": "ctrl+shift+g",
+        "mac": "cmd+shift+g"
+      },
+      {
+        "command": "gitpilot.sendMessage",
+        "key": "ctrl+enter",
+        "mac": "cmd+enter",
+        "when": "gitpilot.chatFocused"
+      },
+      {
+        "command": "gitpilot.scanFile",
+        "key": "ctrl+shift+s",
+        "mac": "cmd+shift+s",
+        "when": "editorFocus"
+      }
+    ],
+    "configuration": {
+      "title": "GitPilot",
+      "properties": {
+        "gitpilot.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8000",
+          "description": "URL of the GitPilot API server",
+          "order": 1
+        },
+        "gitpilot.autoConnect": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically connect to GitPilot server on startup",
+          "order": 2
+        },
+        "gitpilot.githubToken": {
+          "type": "string",
+          "default": "",
+          "description": "GitHub personal access token (falls back to GITPILOT_GITHUB_TOKEN or GITHUB_TOKEN env vars)",
+          "order": 3
+        },
+        "gitpilot.showInlineHints": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show CodeLens hints (Explain/Review) above functions and classes",
+          "order": 4
+        },
+        "gitpilot.permissionMode": {
+          "type": "string",
+          "enum": [
+            "normal",
+            "plan",
+            "auto"
+          ],
+          "default": "normal",
+          "enumDescriptions": [
+            "Ask before risky operations (recommended)",
+            "Read-only mode \u2014 all writes blocked",
+            "Allow all operations without confirmation"
+          ],
+          "description": "Agent permission mode",
+          "order": 5
+        },
+        "gitpilot.defaultTopology": {
+          "type": "string",
+          "default": "default",
+          "description": "Default agent topology to use",
+          "order": 6
+        },
+        "gitpilot.showSecurityDiagnostics": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show security scan findings in the Problems panel",
+          "order": 7
+        },
+        "gitpilot.scanOnSave": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically run security scan when saving files",
+          "order": 8
+        },
+        "gitpilot.chatFontSize": {
+          "type": "number",
+          "default": 13,
+          "minimum": 10,
+          "maximum": 24,
+          "description": "Font size for the chat panel",
+          "order": 9
+        },
+        "gitpilot.maxChatHistory": {
+          "type": "number",
+          "default": 100,
+          "minimum": 10,
+          "maximum": 1000,
+          "description": "Maximum number of chat messages to keep in memory",
+          "order": 10
+        },
+        "gitpilot.liteMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Lite Mode: optimized for small LLMs (< 7B params). Uses simplified prompts and single-agent execution instead of multi-agent pipelines. Recommended for qwen2.5:1.5b, phi-3-mini, gemma-2b, tinyllama.",
+          "order": 11
+        }
+      }
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "gitpilot.explainSelection",
+          "when": "editorHasSelection",
+          "group": "gitpilot@1"
+        },
+        {
+          "command": "gitpilot.reviewSelection",
+          "when": "editorHasSelection",
+          "group": "gitpilot@2"
+        },
+        {
+          "command": "gitpilot.fixSelection",
+          "when": "editorHasSelection",
+          "group": "gitpilot@3"
+        },
+        {
+          "command": "gitpilot.reviewFile",
+          "group": "gitpilot@4"
+        },
+        {
+          "command": "gitpilot.scanFile",
+          "group": "gitpilot@5"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "gitpilot.reviewFile",
+          "when": "editorFocus",
+          "group": "navigation"
+        },
+        {
+          "command": "gitpilot.scanFile",
+          "when": "editorFocus",
+          "group": "navigation"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "gitpilot.newSession",
+          "when": "view == gitpilot.sessionsView",
+          "group": "navigation"
+        },
+        {
+          "command": "gitpilot.refreshSessions",
+          "when": "view == gitpilot.sessionsView",
+          "group": "navigation"
+        },
+        {
+          "command": "gitpilot.refreshSkills",
+          "when": "view == gitpilot.skillsView",
+          "group": "navigation"
+        },
+        {
+          "command": "gitpilot.installPlugin",
+          "when": "view == gitpilot.skillsView",
+          "group": "navigation"
+        },
+        {
+          "command": "gitpilot.setupWizard",
+          "when": "view == gitpilot.chatView",
+          "group": "navigation"
+        },
+        {
+          "command": "gitpilot.refreshProjectContext",
+          "when": "view == gitpilot.chatView",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "gitpilot.deleteSession",
+          "when": "viewItem == session",
+          "group": "inline"
+        },
+        {
+          "command": "gitpilot.uninstallPlugin",
+          "when": "viewItem == plugin",
+          "group": "inline"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "gitpilot.explainSymbol",
+          "when": "false"
+        },
+        {
+          "command": "gitpilot.reviewSymbol",
+          "when": "false"
+        },
+        {
+          "command": "gitpilot.loadSession",
+          "when": "false"
+        }
+      ]
+    },
+    "walkthroughs": [
+      {
+        "id": "gitpilot.gettingStarted",
+        "title": "Get Started with GitPilot",
+        "description": "Set up your AI-powered GitHub assistant in VS Code",
+        "steps": [
+          {
+            "id": "startServer",
+            "title": "Start the GitPilot Server",
+            "description": "Install GitPilot and start the API server:\n```bash\npip install gitcopilot\ngitpilot serve\n```\n[Open Terminal](command:workbench.action.terminal.new)",
+            "media": {
+              "markdown": ""
+            }
+          },
+          {
+            "id": "connectServer",
+            "title": "Connect to Server",
+            "description": "Configure the server URL (default: http://127.0.0.1:8000).\n[Set Server URL](command:gitpilot.setServer)",
+            "media": {
+              "markdown": ""
+            }
+          },
+          {
+            "id": "setupWizard",
+            "title": "Run the Setup Wizard",
+            "description": "Let GitPilot detect your workspace, Git repository, provider, and model.\n[Run Setup Wizard](command:gitpilot.setupWizard)",
+            "media": {
+              "markdown": ""
+            }
+          },
+          {
+            "id": "openChat",
+            "title": "Open Chat Panel",
+            "description": "Start chatting with GitPilot using the sidebar or keyboard shortcut.\n[Open Chat (Ctrl+Shift+G)](command:gitpilot.openChat)",
+            "media": {
+              "markdown": ""
+            }
+          },
+          {
+            "id": "tryReview",
+            "title": "Try Code Review",
+            "description": "Open any file, select code, right-click and choose GitPilot actions.\n[Review Current File](command:gitpilot.reviewFile)",
+            "media": {
+              "markdown": ""
+            }
+          },
+          {
+            "id": "trySecurity",
+            "title": "Run a Security Scan",
+            "description": "Scan your workspace for vulnerabilities using AI-powered analysis.\n[Scan Workspace](command:gitpilot.scanWorkspace)",
+            "media": {
+              "markdown": ""
+            }
+          },
+          {
+            "id": "refreshProjectContext",
+            "title": "Refresh Project Context",
+            "description": "Refresh the repository-aware context used by GitPilot.\n[Refresh Project Context](command:gitpilot.refreshProjectContext)",
+            "media": {
+              "markdown": ""
+            }
+          },
+          {
+            "id": "exploreTopologies",
+            "title": "Explore Agent Topologies",
+            "description": "GitPilot uses multi-agent workflows. Explore and switch between them.\n[Show Agent Flow](command:gitpilot.showAgentFlow)",
+            "media": {
+              "markdown": ""
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.37",
+    "@types/vscode": "^1.110.0",
+    "@vscode/vsce": "^2.22.0",
+    "typescript": "^5.3.0"
+  }
+}
