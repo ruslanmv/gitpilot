@@ -1,0 +1,41 @@
+# Backend Dockerfile for GitPilot
+# Python FastAPI application with uv package manager
+
+FROM python:3.12-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv (The recommended Docker method)
+# Copy the executable directly from the official image to /usr/local/bin
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Make sure the environment uses the virtual environment by default
+ENV UV_PROJECT_ENVIRONMENT="/app/.venv"
+
+# Copy project files
+COPY pyproject.toml README.md ./
+COPY gitpilot ./gitpilot
+
+# Install Python dependencies using uv
+# Use 'uv pip install' for production (no lock file needed, main deps only)
+RUN uv venv /app/.venv && uv pip install --no-cache .
+
+# Expose port
+EXPOSE 8000
+
+# Health check
+# Use PORT variable with fallback to 8000
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:${PORT:-8000}/api/health || exit 1
+
+# Run the application
+# Use 'uv run' which handles the venv activation automatically
+# Respect Render's PORT environment variable (defaults to 8000 for local dev)
+CMD ["sh", "-c", "uv run gitpilot serve --host 0.0.0.0 --port ${PORT:-8000}"]

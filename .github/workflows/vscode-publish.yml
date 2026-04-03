@@ -1,0 +1,84 @@
+# =============================================================================
+# Publish VS Code Extension
+# =============================================================================
+# Builds and publishes the GitPilot VS Code extension to the Visual Studio
+# Code Marketplace. Version is derived from the GitHub release tag.
+#
+# Required Repository Secrets:
+#   VSCE_PAT - Visual Studio Marketplace Personal Access Token
+# =============================================================================
+name: Publish VS Code Extension
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (e.g. 0.2.4). Leave empty to use package.json version."
+        required: false
+        type: string
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extensions/vscode
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: extensions/vscode/package-lock.json
+
+      - name: Derive version from release tag
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            RAW="${GITHUB_REF#refs/tags/}"
+            VERSION="${RAW#v}"
+          elif [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="$(node -p "require('./package.json').version")"
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "📦 Publishing version: $VERSION"
+
+      - name: Patch package.json version
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = process.env.VERSION;
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          echo "✅ package.json → $VERSION"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile TypeScript
+        run: npm run compile
+
+      - name: Run linter
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Package extension
+        run: npx vsce package
+
+      - name: Upload .vsix artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitpilot-vscode-${{ env.VERSION }}.vsix
+          path: extensions/vscode/*.vsix
+
+      - name: Publish to VS Code Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx vsce publish

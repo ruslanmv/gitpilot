@@ -1,0 +1,105 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# PyPI project name – MUST match what you configured in PyPI Trusted Publishers
+name = "gitcopilot"
+version = "0.1.5"
+description = "Production-ready agentic AI assistant for GitHub repositories with multi-LLM support and visual workflow insights"
+requires-python = ">=3.11,<3.13"
+readme = "README.md"
+
+# Use a simple SPDX license string, not a table
+license = "MIT"
+
+authors = [{ name = "Ruslan Magana Vsevolodovna" }]
+keywords = [
+    "ai",
+    "github",
+    "copilot",
+    "agentic",
+    "crewai",
+    "llm",
+    "openai",
+    "claude",
+    "watsonx",
+    "ollama",
+    "fastapi",
+    "react",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    # License classifier removed to avoid deprecation warning
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: JavaScript",
+    "Framework :: FastAPI",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Version Control :: Git",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+  "fastapi>=0.111.0",
+  "uvicorn[standard]>=0.30.0",
+  "httpx>=0.27.0",
+  "python-dotenv>=1.1.0",
+  "typer>=0.12.0",
+  "pydantic>=2.7.0",
+  "crewai[anthropic]>=0.76.9",  
+  "anthropic>=0.39.0",           
+  "crewai-tools>=0.13.4",
+  "ibm-watsonx-ai>=1.1.0",
+  "langchain-ibm>=0.3.0",
+  "rich>=13.0.0",
+  "pyjwt[crypto]>=2.8.0",
+  "litellm>=1.80.5", 
+]
+
+[project.urls]
+Homepage = "https://github.com/ruslanmv/gitpilot"
+Documentation = "https://github.com/ruslanmv/gitpilot#readme"
+Repository = "https://github.com/ruslanmv/gitpilot"
+Issues = "https://github.com/ruslanmv/gitpilot/issues"
+
+[project.optional-dependencies]
+dev = [
+  "ruff>=0.6",
+  "pytest>=8.2",
+  "pytest-asyncio>=0.23",
+  "build>=1.2.1",
+  "twine>=5.0.0",
+]
+
+[project.scripts]
+# CLI entry points: these remain based on the python package `gitpilot`
+gitpilot = "gitpilot.cli:main"
+gitpilot-api = "gitpilot.cli:serve_only"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["gitpilot*"]  # package directory is gitpilot/
+
+[tool.setuptools.package-data]
+gitpilot = ["web/*", "web/**/*", "py.typed"]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "S", "B", "A", "C4", "DTZ", "ICN", "PIE", "PT", "RET", "SIM", "ARG", "PL"]
+ignore = ["S101", "PLR0913", "PLR2004"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
