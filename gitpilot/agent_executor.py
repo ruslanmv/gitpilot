@@ -79,7 +79,7 @@ class StreamingAgentExecutor:
 
         Args:
             user_message: The user's request
-            repo_full_name: "owner/repo"
+            repo_full_name: "owner/repo" (required for multi-agent path)
             branch: Git branch (default HEAD)
             token: GitHub token (for remote repos)
             mode: "auto" | "plan_only"
@@ -87,6 +87,32 @@ class StreamingAgentExecutor:
         Returns:
             The plan dict on success, None on failure.
         """
+        # Validate repo_full_name BEFORE hitting CrewAI/generate_plan_lite.
+        # The legacy planners do `owner, repo = repo_full_name.split("/")`
+        # which raises ValueError("not enough values to unpack") on empty
+        # or slashless strings. Catch this at the boundary.
+        #
+        # For folder-only / local-git sessions (no GitHub remote) the
+        # multi-agent CrewAI planner is simply not applicable. Instead of
+        # emitting a scary `agent_error` (which every SSE consumer renders
+        # as a user-visible notice), close the stream cleanly with an
+        # empty `done` event. Callers that support a batch fallback — e.g.
+        # the VS Code extension's sendChatToBackend() flow — will treat
+        # the empty stream as "streaming unavailable" and transparently
+        # fall through to /api/chat/send, which is the correct path for
+        # folder-only sessions. No regression for strict clients: they
+        # still observe a terminal event and the method returns None.
+        if not self._is_valid_repo_full_name(repo_full_name):
+            logger.debug(
+                "StreamingAgentExecutor: skipping CrewAI planner for "
+                "non-GitHub session (repo_full_name=%r); clients should "
+                "fall back to batch chat.",
+                repo_full_name,
+            )
+            await self._bus.emit(evt.status_change("done"))
+            await self._bus.emit(evt.agent_done(summary=""))
+            return None
+
         try:
             # ── Phase 1: Plan ──
             await self._bus.emit(evt.status_change("planning", "Analyzing your request..."))
@@ -153,6 +179,18 @@ class StreamingAgentExecutor:
             return None
 
     # ── Internal helpers ──
+
+    @staticmethod
+    def _is_valid_repo_full_name(name: object) -> bool:
+        """True iff `name` is a non-empty 'owner/repo' string with both parts.
+
+        Rejects: None, empty strings, strings without '/', strings with
+        empty owner or repo, and strings containing more than one '/'.
+        """
+        if not isinstance(name, str) or not name.strip():
+            return False
+        parts = name.strip().split("/")
+        return len(parts) == 2 and all(p.strip() for p in parts)
 
     async def _generate_plan(self, goal, repo_full_name, token, branch):
         """Wrap existing plan generators with event streaming."""

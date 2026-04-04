@@ -69,10 +69,8 @@
 
     <section class="surface card" id="overview-section">
       <div class="section-head">
-        <h2 class="section-title">Project Overview</h2>
+        <h2 class="section-title">Quick Actions</h2>
       </div>
-
-      <div class="context-chips" id="project-context-chips"></div>
 
       <details class="disclosure" id="advanced-tools">
         <summary>
@@ -645,17 +643,6 @@
 
     const renderOverview = (state) => {
       const project = state.projectContextSummary || {};
-      const chips = [
-        { label: "Languages", value: (project.languages || []).length ? project.languages.join(", ") : "unknown" },
-        { label: "README", value: project.readmeFound ? "detected" : "not detected" },
-        { label: "Manifests", value: (project.manifests || []).length ? project.manifests.join(", ") : "not detected" },
-        { label: "Indexed", value: String(project.indexedFiles || 0) + " files" }
-      ];
-
-      byId("project-context-chips").innerHTML = chips.map((chip) =>
-        `<div class="context-chip"><strong>${esc(chip.label)}:</strong> ${esc(chip.value)}</div>`
-      ).join("");
-
       const recentFiles = (project.recentFiles || project.keyFiles || []).slice(0, 6);
       const recentSection = byId("idle-recent-section");
 

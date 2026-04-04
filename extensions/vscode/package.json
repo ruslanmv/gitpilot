@@ -623,7 +623,7 @@
           {
             "id": "startServer",
             "title": "Start the GitPilot Server",
-            "description": "Install GitPilot and start the API server:\n```bash\npip install gitcopilot\ngitpilot serve\n```\n[Open Terminal](command:workbench.action.terminal.new)",
+            "description": "Install the GitPilot backend (PyPI: `gitcopilot`) and start the API server. Requires Python 3.11 or 3.12.\n\n```bash\npip install 'gitcopilot>=0.1.5,<0.2.0'\ngitpilot serve\n```\n\nThe package on PyPI is **gitcopilot**; the command is **gitpilot**.\n\n[Open Terminal](command:workbench.action.terminal.new)",
             "media": {
               "markdown": ""
             }

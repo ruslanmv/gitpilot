@@ -13,5 +13,14 @@
     "resolveJsonModule": true,
     "skipLibCheck": true
   },
-  "exclude": ["node_modules", "out", ".vscode-test"]
+  "exclude": [
+    "node_modules",
+    "out",
+    ".vscode-test",
+    "**/* copy*.ts",
+    "**/* copy*.tsx",
+    "**/*.copy.ts",
+    "**/*.backup.ts",
+    "**/*.bak.ts"
+  ]
 }

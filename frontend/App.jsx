@@ -11,6 +11,16 @@ import ProjectSettingsModal from "./components/ProjectSettingsModal.jsx";
 import SessionSidebar from "./components/SessionSidebar.jsx";
 import ContextBar from "./components/ContextBar.jsx";
 import AddRepoModal from "./components/AddRepoModal.jsx";
+import UserMenu from "./components/UserMenu.jsx";
+import AboutModal from "./components/AboutModal.jsx";
+import {
+  WorkspaceModesTab,
+  SecurityTab,
+  IntegrationsTab,
+  SkillsTab,
+  SessionsTab,
+  AdvancedTab,
+} from "./components/AdminTabs";
 import { apiUrl, safeFetchJSON, fetchStatus } from "./utils/api.js";
 import { initApp } from "./utils/appInit.js";
 
@@ -64,6 +74,7 @@ export default function App() {
   const [repoStateByKey, setRepoStateByKey] = useState({});
   const [toast, setToast] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const [adminTab, setAdminTab] = useState("overview");
   const [adminStatus, setAdminStatus] = useState(null);
 
@@ -892,21 +903,16 @@ export default function App() {
 
           {userInfo && (
             <div className="user-profile">
-              <div className="user-profile-header">
-                <img src={userInfo.avatar_url} alt={userInfo.login} className="user-avatar" />
-                {!sidebarCollapsed && (
-                  <div className="user-info">
-                    <div className="user-name">{userInfo.name || userInfo.login}</div>
-                    <div className="user-login">@{userInfo.login}</div>
-                  </div>
-                )}
-              </div>
-
-              {!sidebarCollapsed && (
-                <button className="btn-logout" onClick={handleLogout}>
-                  Logout
-                </button>
-              )}
+              <UserMenu
+                userInfo={userInfo}
+                sidebarCollapsed={sidebarCollapsed}
+                onOpenSettings={() => {
+                  setActivePage("admin");
+                  setAdminTab("advanced");
+                }}
+                onOpenAbout={() => setAboutOpen(true)}
+                onLogout={handleLogout}
+              />
             </div>
           )}
         </aside>
@@ -1014,117 +1020,45 @@ export default function App() {
               )}
 
               {adminTab === "workspace-modes" && (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "16px" }}>
-                  <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "20px", border: "1px solid #2a2b36" }}>
-                    <h4 style={{ marginBottom: "8px" }}>Folder Mode</h4>
-                    <p style={{ fontSize: "12px", opacity: 0.7, marginBottom: "12px" }}>
-                      Work with any local folder. No Git required.
-                    </p>
-                    <div style={{ fontSize: "12px" }}>Requires: Open folder</div>
-                    <div style={{ fontSize: "12px" }}>Enables: Chat, explain, review</div>
-                  </div>
-
-                  <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "20px", border: "1px solid #2a2b36" }}>
-                    <h4 style={{ marginBottom: "8px" }}>Local Git Mode</h4>
-                    <p style={{ fontSize: "12px", opacity: 0.7, marginBottom: "12px" }}>
-                      Full repo + branch context for AI assistance.
-                    </p>
-                    <div style={{ fontSize: "12px" }}>Requires: Git repository</div>
-                    <div style={{ fontSize: "12px" }}>Enables: All local features</div>
-                  </div>
-
-                  <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "20px", border: "1px solid #2a2b36" }}>
-                    <h4 style={{ marginBottom: "8px" }}>GitHub Mode</h4>
-                    <p style={{ fontSize: "12px", opacity: 0.7, marginBottom: "12px" }}>
-                      PRs, issues, remote workflows via GitHub API.
-                    </p>
-                    <div style={{ fontSize: "12px" }}>Requires: GitHub token</div>
-                    <div style={{ fontSize: "12px" }}>Enables: Full platform features</div>
-                  </div>
-                </div>
+                <WorkspaceModesTab
+                  showToast={showToast}
+                  onSessionStarted={(result) => {
+                    setActiveSessionId(result.session_id);
+                    setSessionRefreshNonce((n) => n + 1);
+                    setActivePage("workspace");
+                  }}
+                />
               )}
 
               {adminTab === "integrations" && (
-                <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "20px", border: "1px solid #2a2b36" }}>
-                  <h4 style={{ marginBottom: "8px" }}>GitHub Integration</h4>
-                  <p style={{ fontSize: "12px", opacity: 0.7, marginBottom: "12px" }}>
-                    GitHub is optional. Connect to enable PRs, issues, and remote workflows.
-                  </p>
-                  <button
-                    style={{
-                      padding: "8px 16px",
-                      background: "#3B82F6",
-                      color: "#fff",
-                      border: "none",
-                      borderRadius: "4px",
-                      cursor: "pointer",
-                    }}
-                  >
-                    Connect GitHub
-                  </button>
-                </div>
+                <IntegrationsTab
+                  userInfo={userInfo}
+                  onDisconnect={handleLogout}
+                  showToast={showToast}
+                />
               )}
 
               {adminTab === "security" && (
-                <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "20px", border: "1px solid #2a2b36" }}>
-                  <h4 style={{ marginBottom: "8px" }}>Security Scanning</h4>
-                  <p style={{ fontSize: "12px", opacity: 0.7, marginBottom: "12px" }}>
-                    Run security scans on your workspace to detect vulnerabilities, secrets, and code issues.
-                  </p>
-                  <button
-                    style={{
-                      padding: "8px 16px",
-                      background: "#3B82F6",
-                      color: "#fff",
-                      border: "none",
-                      borderRadius: "4px",
-                      cursor: "pointer",
-                    }}
-                  >
-                    Scan Workspace
-                  </button>
-                </div>
+                <SecurityTab showToast={showToast} />
               )}
 
               {adminTab === "sessions" && (
-                <div>
-                  <h3 style={{ marginBottom: "16px" }}>Sessions</h3>
-                  <p style={{ fontSize: "12px", opacity: 0.7 }}>
-                    Session management is available in the main workspace view.
-                  </p>
-                </div>
+                <SessionsTab
+                  showToast={showToast}
+                  onSelectSession={(s) => {
+                    handleSelectSession(s);
+                    setActivePage("workspace");
+                  }}
+                />
               )}
 
-              {adminTab === "skills" && (
-                <div>
-                  <h3 style={{ marginBottom: "16px" }}>Skills & Plugins</h3>
-                  <p style={{ fontSize: "12px", opacity: 0.7 }}>
-                    Skills and plugins extend GitPilot capabilities. View and manage them from the main workspace.
-                  </p>
-                </div>
-              )}
+              {adminTab === "skills" && <SkillsTab showToast={showToast} />}
 
               {adminTab === "advanced" && (
-                <div>
-                  <h3 style={{ marginBottom: "16px" }}>Advanced Settings</h3>
-                  <p style={{ fontSize: "12px", opacity: 0.7 }}>
-                    Advanced configuration options are available in the Settings modal.
-                  </p>
-                  <button
-                    onClick={() => setSettingsOpen(true)}
-                    style={{
-                      padding: "8px 16px",
-                      background: "#3B82F6",
-                      color: "#fff",
-                      border: "none",
-                      borderRadius: "4px",
-                      cursor: "pointer",
-                      marginTop: "12px",
-                    }}
-                  >
-                    Open Settings
-                  </button>
-                </div>
+                <AdvancedTab
+                  showToast={showToast}
+                  onOpenFullSettings={() => setSettingsOpen(true)}
+                />
               )}
             </div>
           )}
@@ -1204,6 +1138,11 @@ export default function App() {
         onSelect={addRepoToContext}
         onClose={() => setAddRepoOpen(false)}
         excludeKeys={contextRepos.map((e) => e.repoKey)}
+      />
+
+      <AboutModal
+        isOpen={aboutOpen}
+        onClose={() => setAboutOpen(false)}
       />
 
       {toast && (

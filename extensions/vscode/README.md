@@ -10,12 +10,19 @@
 
 ## Quick Start
 
-1. **Install** the extension from the VS Code Marketplace
-2. **Click** the GitPilot icon in the left sidebar
-3. **Choose** your AI provider (Ollama is free and local)
-4. **Ask** anything: "Explain this project", "Fix the bug in login.ts", "Write tests"
+1. **Install the GitPilot backend** (runs locally, hosts the AI):
+   ```bash
+   pip install gitcopilot
+   gitpilot serve
+   ```
+2. **Install the VS Code extension** from the Marketplace
+3. **Click** the GitPilot icon in the left sidebar
+4. **Choose** your AI provider (Ollama is free and local)
+5. **Ask** anything: *"Explain this project"*, *"Fix the bug in login.ts"*, *"Write tests"*
 
-That's it. No account needed. No server to run (unless you want the web app too).
+That's it. No account needed. No cloud required.
+
+> **Requirements**: Python 3.11 or 3.12 for the backend · VS Code 1.110 or later · **GitPilot backend 0.1.x** (`gitcopilot` on PyPI)
 
 ---
 
@@ -119,9 +126,17 @@ Open settings: `Ctrl+Shift+P` > "Preferences: Open Settings" > search "gitpilot"
 Click the "Provider" button in the sidebar header and select your AI provider.
 
 **"Disconnected"**
-GitPilot needs a backend server. Either:
-- Use the built-in local provider (Ollama / OllaBridge)
-- Or start the server: `pip install gitpilot && gitpilot serve`
+GitPilot needs a backend server running at `http://127.0.0.1:8000`.
+Install and start it with:
+```bash
+pip install gitcopilot
+gitpilot serve
+```
+The PyPI package is **`gitcopilot`** (the CLI is `gitpilot`). Requires Python 3.11 or 3.12.
+
+**"Version mismatch"**
+This VS Code extension (v0.1.x) requires **GitPilot backend v0.1.x** (`gitcopilot>=0.1.5,<0.2.0`).
+Upgrade both together: `pip install --upgrade 'gitcopilot>=0.1.5,<0.2.0'`.
 
 **Extension not loading?**
 Open the Output panel (`Ctrl+Shift+U`) and select "GitPilot" from the dropdown to see logs.
