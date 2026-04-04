@@ -135,8 +135,8 @@ gitpilot serve
 The PyPI package is **`gitcopilot`** (the CLI is `gitpilot`). Requires Python 3.11 or 3.12.
 
 **"Version mismatch"**
-This VS Code extension (v0.1.x) requires **GitPilot backend v0.1.x** (`gitcopilot>=0.1.5,<0.2.0`).
-Upgrade both together: `pip install --upgrade 'gitcopilot>=0.1.5,<0.2.0'`.
+This VS Code extension (v0.1.x) requires **GitPilot backend v0.1.x** (`gitcopilot>=0.2.5,<0.3.0`).
+Upgrade both together: `pip install --upgrade 'gitcopilot>=0.2.5,<0.3.0'`.
 
 **Extension not loading?**
 Open the Output panel (`Ctrl+Shift+U`) and select "GitPilot" from the dropdown to see logs.
@@ -151,4 +151,4 @@ Open the Output panel (`Ctrl+Shift+U`) and select "GitPilot" from the dropdown t
 
 ---
 
-**Made by [Ruslan Magana Vsevolodovna](https://github.com/ruslanmv)** | MIT License | v0.1.5
+**Made by [Ruslan Magana Vsevolodovna](https://github.com/ruslanmv)** | MIT License | v0.2.5

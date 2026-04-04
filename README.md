@@ -6,7 +6,7 @@
 
 **Your AI coding companion. Ask. Plan. Code. Ship.**
 
-[![Version](https://img.shields.io/badge/version-0.1.5-D95C3D?style=flat-square&labelColor=1C1C1F)](https://github.com/ruslanmv/gitpilot)
+[![Version](https://img.shields.io/badge/version-0.2.5-D95C3D?style=flat-square&labelColor=1C1C1F)](https://github.com/ruslanmv/gitpilot)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-D95C3D?style=flat-square&labelColor=1C1C1F)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-D95C3D?style=flat-square&labelColor=1C1C1F)](LICENSE)
 [![VS Code](https://img.shields.io/badge/VS%20Code-Extension-D95C3D?style=flat-square&labelColor=1C1C1F)](https://marketplace.visualstudio.com/)
