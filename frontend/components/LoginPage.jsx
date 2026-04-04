@@ -1,20 +1,21 @@
 // frontend/components/LoginPage.jsx
 import React, { useState, useEffect, useRef } from "react";
 import { apiUrl, safeFetchJSON } from "../utils/api.js";
+import { initApp } from "../utils/appInit.js";
 
 /**
  * GitPilot – Enterprise Agentic Login
  * Theme: "Claude Code" / Anthropic Enterprise (Dark + Warm Orange)
  */
 
-export default function LoginPage({ onAuthenticated }) {
+export default function LoginPage({ onAuthenticated, backendReady = false }) {
   // Auth State
   const [authProcessing, setAuthProcessing] = useState(false);
   const [error, setError] = useState("");
-  
+
   // Mode State: 'loading' | 'web' (Has Secret) | 'device' (No Secret)
   const [mode, setMode] = useState("loading");
-  
+
   // Device Flow State
   const [deviceData, setDeviceData] = useState(null);
   const pollTimer = useRef(null);
@@ -22,12 +23,16 @@ export default function LoginPage({ onAuthenticated }) {
 
   // Web Flow State
   const [missingClientId, setMissingClientId] = useState(false);
-  
+
   // REF FIX: Prevents React StrictMode from running the auth exchange twice
   const processingRef = useRef(false);
+  const authCheckDone = useRef(false);
 
-  // 1. Initialization Effect
+  // 1. Initialization Effect — runs once on mount AND when backendReady changes
   useEffect(() => {
+    // Skip if already resolved
+    if (authCheckDone.current && mode !== "loading") return;
+
     const params = new URLSearchParams(window.location.search);
     const code = params.get("code");
     const state = params.get("state");
@@ -36,21 +41,25 @@ export default function LoginPage({ onAuthenticated }) {
     if (code) {
       if (!processingRef.current) {
         processingRef.current = true;
-        setMode("web"); // Implicitly web mode if we have a code
+        setMode("web");
         consumeOAuthCallback(code, state);
       }
       return;
     }
 
-    // B. Otherwise, check Server Capabilities to decide UI Mode
-    safeFetchJSON(apiUrl("/api/auth/status"))
-      .then((data) => {
-        setMode(data.mode === "web" ? "web" : "device");
-      })
-      .catch((err) => {
-        console.warn("Auth status check failed, defaulting to device flow:", err);
+    // B. Use the shared singleton init — reuses App.jsx's result.
+    // No duplicate /api/auth/status calls, no separate retry loops.
+    initApp().then((result) => {
+      authCheckDone.current = true;
+      if (result.ready) {
+        setError("");
+        setMode(result.authMode === "web" ? "web" : "device");
+      } else {
+        // Backend unreachable — allow device flow as fallback
+        setError(result.error || "Backend unavailable");
         setMode("device");
-      });
+      }
+    });
 
     // Cleanup polling on unmount
     return () => {
@@ -58,7 +67,7 @@ export default function LoginPage({ onAuthenticated }) {
       if (pollTimer.current) clearTimeout(pollTimer.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [backendReady]);
 
   // ===========================================================================
   // WEB FLOW LOGIC (Standard OAuth2)

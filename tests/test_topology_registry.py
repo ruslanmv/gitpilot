@@ -566,11 +566,19 @@ class TestDispatchRequestTopologyRouting:
         assert result["topology_id"] == "feature_builder"
 
     @pytest.mark.asyncio
+    @patch("gitpilot.agentic._is_incompatible_model", return_value=False)
     @patch("gitpilot.agentic._build_llm", return_value="ollama/qwen2:0.5b")
     @patch("gitpilot.agentic.route_request")
     @patch("gitpilot.agentic.get_saved_topology_preference", return_value=None)
-    async def test_no_topology_falls_through_to_legacy(self, mock_pref, mock_route, mock_llm):
-        """When topology_id is None and no saved pref, dispatch_request uses legacy routing."""
+    async def test_no_topology_falls_through_to_legacy(
+        self, mock_pref, mock_route, mock_llm, mock_incompatible
+    ):
+        """When topology_id is None and no saved pref, dispatch_request uses legacy routing.
+
+        Note: _is_incompatible_model is mocked to False so we explicitly test the
+        legacy multi-agent path. In production, this auto-detection routes small
+        local models (qwen2.5:1.5b, deepseek-r1, etc.) to Lite Mode for reliability.
+        """
         from gitpilot.agentic import dispatch_request
         from gitpilot.agent_router import AgentType, RequestCategory, WorkflowPlan
 

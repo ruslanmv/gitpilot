@@ -1,8 +1,9 @@
 {
   "name": "gitpilot-vscode",
-  "displayName": "GitPilot — AI Agent for GitHub",
-  "description": "Enterprise agentic AI assistant for GitHub repositories — multi-agent orchestration, security scanning, MCP support, local editing, and multi-model AI powered by CrewAI",
+  "displayName": "GitPilot Workspace — AI Repo Copilot",
+  "description": "Right-side Copilot workspace for VS Code with plan, files in scope, changes, chat, and apply/revert actions.",
   "version": "0.1.5",
+  "preview": true,
   "publisher": "ruslanmv",
   "license": "MIT",
   "icon": "resources/icon.png",
@@ -40,7 +41,34 @@
     "ollama"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onCommand:gitpilot.explainSelection",
+    "onCommand:gitpilot.explain_project",
+    "onCommand:gitpilot.fixSelection",
+    "onCommand:gitpilot.fix_selection",
+    "onCommand:gitpilot.generate_tests",
+    "onCommand:gitpilot.newSession",
+    "onCommand:gitpilot.openChat",
+    "onCommand:gitpilot.refreshProjectContext",
+    "onCommand:gitpilot.refreshSessions",
+    "onCommand:gitpilot.refreshSkills",
+    "onCommand:gitpilot.refreshStatus",
+    "onCommand:gitpilot.reviewFile",
+    "onCommand:gitpilot.reviewSelection",
+    "onCommand:gitpilot.review_file",
+    "onCommand:gitpilot.scanFile",
+    "onCommand:gitpilot.scanWorkspace",
+    "onCommand:gitpilot.security_scan",
+    "onCommand:gitpilot.selectModel",
+    "onCommand:gitpilot.selectModelV2",
+    "onCommand:gitpilot.selectProvider",
+    "onCommand:gitpilot.selectProviderV2",
+    "onCommand:gitpilot.sendMessage",
+    "onCommand:gitpilot.setupWizard",
+    "onCommand:gitpilot.showAgentFlow",
+    "onCommand:gitpilot.showServerInfo",
+    "onCommand:gitpilot.testSelection",
+    "onStartupFinished",
+    "onView:gitpilot.chatView"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -58,7 +86,7 @@
         {
           "type": "webview",
           "id": "gitpilot.chatView",
-          "name": "Chat"
+          "name": "GitPilot Workspace"
         },
         {
           "id": "gitpilot.sessionsView",
@@ -73,7 +101,7 @@
     "commands": [
       {
         "command": "gitpilot.openChat",
-        "title": "Open Chat",
+        "title": "Open GitPilot Workspace",
         "category": "GitPilot",
         "icon": "$(comment-discussion)"
       },
@@ -179,6 +207,24 @@
         "title": "Select Model",
         "category": "GitPilot",
         "icon": "$(symbol-enum)"
+      },
+      {
+        "command": "gitpilot.selectProviderV2",
+        "title": "Select Provider",
+        "category": "GitPilot",
+        "icon": "$(server-environment)"
+      },
+      {
+        "command": "gitpilot.selectModelV2",
+        "title": "Select Model (V2)",
+        "category": "GitPilot",
+        "icon": "$(symbol-enum)"
+      },
+      {
+        "command": "gitpilot.openLlmSettings",
+        "title": "Open LLM Settings",
+        "category": "GitPilot",
+        "icon": "$(settings-gear)"
       },
       {
         "command": "gitpilot.ollaBridgePair",
@@ -323,6 +369,48 @@
         "title": "Natural Language Git",
         "category": "GitPilot",
         "icon": "$(comment)"
+      },
+      {
+        "command": "gitpilot.setupWizard",
+        "title": "Open Setup Wizard",
+        "category": "GitPilot",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "gitpilot.refreshProjectContext",
+        "title": "Refresh Project Context",
+        "category": "GitPilot",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "gitpilot.explain_project",
+        "title": "Explain Project",
+        "category": "GitPilot",
+        "icon": "$(book)"
+      },
+      {
+        "command": "gitpilot.review_file",
+        "title": "Review File",
+        "category": "GitPilot",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "gitpilot.fix_selection",
+        "title": "Fix Selection",
+        "category": "GitPilot",
+        "icon": "$(wrench)"
+      },
+      {
+        "command": "gitpilot.generate_tests",
+        "title": "Generate Tests",
+        "category": "GitPilot",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "gitpilot.security_scan",
+        "title": "Security Scan",
+        "category": "GitPilot",
+        "icon": "$(shield)"
       }
     ],
     "keybindings": [
@@ -487,6 +575,16 @@
           "command": "gitpilot.installPlugin",
           "when": "view == gitpilot.skillsView",
           "group": "navigation"
+        },
+        {
+          "command": "gitpilot.setupWizard",
+          "when": "view == gitpilot.chatView",
+          "group": "navigation"
+        },
+        {
+          "command": "gitpilot.refreshProjectContext",
+          "when": "view == gitpilot.chatView",
+          "group": "navigation"
         }
       ],
       "view/item/context": [
@@ -539,6 +637,14 @@
             }
           },
           {
+            "id": "setupWizard",
+            "title": "Run the Setup Wizard",
+            "description": "Let GitPilot detect your workspace, Git repository, provider, and model.\n[Run Setup Wizard](command:gitpilot.setupWizard)",
+            "media": {
+              "markdown": ""
+            }
+          },
+          {
             "id": "openChat",
             "title": "Open Chat Panel",
             "description": "Start chatting with GitPilot using the sidebar or keyboard shortcut.\n[Open Chat (Ctrl+Shift+G)](command:gitpilot.openChat)",
@@ -549,7 +655,7 @@
           {
             "id": "tryReview",
             "title": "Try Code Review",
-            "description": "Open any file, select code, right-click and choose 'GitPilot: Explain Selection'.\n[Review Current File](command:gitpilot.reviewFile)",
+            "description": "Open any file, select code, right-click and choose GitPilot actions.\n[Review Current File](command:gitpilot.reviewFile)",
             "media": {
               "markdown": ""
             }
@@ -558,6 +664,14 @@
             "id": "trySecurity",
             "title": "Run a Security Scan",
             "description": "Scan your workspace for vulnerabilities using AI-powered analysis.\n[Scan Workspace](command:gitpilot.scanWorkspace)",
+            "media": {
+              "markdown": ""
+            }
+          },
+          {
+            "id": "refreshProjectContext",
+            "title": "Refresh Project Context",
+            "description": "Refresh the repository-aware context used by GitPilot.\n[Refresh Project Context](command:gitpilot.refreshProjectContext)",
             "media": {
               "markdown": ""
             }
@@ -576,16 +690,16 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
+    "compile": "tsc -p ./ && node scripts/copy-webview-assets.js",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
     "package": "vsce package",
     "publish": "vsce publish"
   },
   "devDependencies": {
-    "@types/node": "^20.19.37",
+    "@types/node": "^20.19.39",
     "@types/vscode": "^1.110.0",
     "@vscode/vsce": "^2.22.0",
-    "typescript": "^5.3.0"
+    "typescript": "^5.9.3"
   }
 }

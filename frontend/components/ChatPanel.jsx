@@ -201,6 +201,12 @@ export default function ChatPanel({
 
     const text = goal.trim();
 
+    // Clear input immediately (Claude Code behavior)
+    setGoal("");
+    // Reset textarea height
+    const ta = document.querySelector(".chat-input");
+    if (ta) ta.style.height = "40px";
+
     // Optimistic update (user bubble appears immediately)
     const userMsg = { from: "user", role: "user", text, content: text };
     setMessages((prev) => [...prev, userMsg]);
@@ -237,19 +243,49 @@ export default function ChatPanel({
     const effectiveBranch = currentBranch || defaultBranch || "HEAD";
 
     try {
-      const res = await fetch("/api/chat/plan", {
-        method: "POST",
-        headers: getHeaders(),
-        body: JSON.stringify({
-          repo_owner: repo.owner,
-          repo_name: repo.name,
-          goal: text,
-          branch_name: effectiveBranch,
-        }),
-      });
+      // Timeout after 5 minutes (CrewAI agent can be slow with small models)
+      const planController = new AbortController();
+      const planTimer = setTimeout(() => planController.abort(), 300000);
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Failed to generate plan");
+      let res;
+      try {
+        res = await fetch("/api/chat/plan", {
+          method: "POST",
+          headers: getHeaders(),
+          body: JSON.stringify({
+            repo_owner: repo.owner,
+            repo_name: repo.name,
+            goal: text,
+            branch_name: effectiveBranch,
+          }),
+          signal: planController.signal,
+        });
+      } catch (fetchErr) {
+        if (fetchErr.name === "AbortError") {
+          throw new Error("Request timed out after 5 minutes. The LLM may be too slow. Try a faster model.");
+        }
+        throw fetchErr;
+      } finally {
+        clearTimeout(planTimer);
+      }
+
+      let data;
+      try {
+        data = await res.json();
+      } catch {
+        throw new Error(`Server error (${res.status}). The LLM may have returned an invalid response. Try a different model or enable Lite Mode in Settings.`);
+      }
+      if (!res.ok) {
+        const detail = data?.detail || data?.error || data?.message || "";
+        // Friendly message for common LLM failures
+        if (detail.includes("None or empty") || detail.includes("Invalid response from LLM")) {
+          throw new Error(
+            "The LLM returned an empty response. This often happens with small models (deepseek, qwen 0.5b). " +
+            "Try a larger model (llama3, qwen2.5:7b) or enable Lite Mode in Settings."
+          );
+        }
+        throw new Error(detail || "Failed to generate plan");
+      }
 
       setPlan(data);
 
@@ -272,9 +308,6 @@ export default function ChatPanel({
 
       // Persist assistant response to backend session
       persistMessage(sid, "assistant", summary);
-
-      // Clear input only after success
-      setGoal("");
     } catch (err) {
       const msg = String(err?.message || err);
       console.error(err);

@@ -93,7 +93,7 @@ async def github_request(
         "User-Agent": "gitpilot",
     }
 
-    timeout = httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=10.0)
+    timeout = httpx.Timeout(connect=15.0, read=45.0, write=30.0, pool=15.0)
 
     async with httpx.AsyncClient(
         base_url=GITHUB_API_BASE, headers=headers, timeout=timeout
@@ -233,53 +233,50 @@ async def search_user_repos(
     per_page: int = 100,
     token: str | None = None,
 ) -> dict[str, Any]:
-    """
-    Search across ALL user repositories, then return paginated results.
-
-    Returns:
-      {
-        "repositories": [...],
-        "page": int,
-        "per_page": int,
-        "total_count": int,
-        "has_more": bool,
-      }
-    """
     all_repos: list[dict[str, Any]] = []
     fetch_page = 1
-    max_pages = 15  # safety (1500 repos)
+    max_pages = 15
 
-    while fetch_page <= max_pages:
-        result = await list_user_repos_paginated(
-            page=fetch_page,
-            per_page=100,
-            token=token,
-        )
-        all_repos.extend(result["repositories"])
-        if not result["has_more"]:
-            break
-        fetch_page += 1
+    try:
+        while fetch_page <= max_pages:
+            result = await list_user_repos_paginated(
+                page=fetch_page,
+                per_page=100,
+                token=token,
+            )
+            all_repos.extend(result["repositories"])
+
+            if not result["has_more"]:
+                break
+
+            fetch_page += 1
+
+    except httpx.TimeoutException:
+        return {
+            "repositories": [],
+            "page": page,
+            "per_page": per_page,
+            "total_count": 0,
+            "has_more": False,
+        }
 
     q = query.lower()
     filtered = [
-        r
-        for r in all_repos
+        r for r in all_repos
         if q in r["name"].lower() or q in r["full_name"].lower()
     ]
 
     total_count = len(filtered)
     start = (page - 1) * per_page
     end = start + per_page
-    paginated = filtered[start:end]
 
     return {
-        "repositories": paginated,
+        "repositories": filtered[start:end],
         "page": page,
         "per_page": per_page,
         "total_count": total_count,
         "has_more": end < total_count,
     }
-
 
 # -----------------------------------------------------------------------------
 # Repo + Ref resolution helpers (fixes "No commit found for SHA: main")

@@ -1000,15 +1000,17 @@ def get_saved_topology_preference() -> Optional[str]:
     """Read the user's saved topology preference from settings file."""
     import json
     from .settings import CONFIG_DIR
+
     pref_file = CONFIG_DIR / "topology_pref.json"
     if pref_file.exists():
         try:
             data = json.loads(pref_file.read_text("utf-8"))
-            return data.get(_TOPOLOGY_PREF_KEY)
+            value = data.get(_TOPOLOGY_PREF_KEY)
+            if value in TOPOLOGY_REGISTRY:
+                return value
         except Exception:
             pass
     return None
-
 
 def save_topology_preference(topology_id: str) -> None:
     """Persist the user's selected topology preference."""

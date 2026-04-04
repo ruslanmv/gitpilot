@@ -1,116 +1,139 @@
-# GitPilot — AI Agent for GitHub
+<div align="center">
 
-> Enterprise agentic AI assistant for GitHub repositories inside VS Code. Multi-agent orchestration, security scanning, MCP support, and multi-model AI powered by CrewAI.
+# GitPilot for VS Code
 
-## Features
+**AI coding assistant right in your sidebar. Ask questions. Get code. Ship faster.**
 
-### Chat with AI Agents
-- Full sidebar chat panel with markdown rendering
-- Action plan display with **Approve / Reject** workflow
-- Skill invocation via `/command` syntax
-- Persistent session management
+</div>
 
-### Code Intelligence
-- **Explain** — Select code and get AI explanations
-- **Review** — AI-powered code review with actionable feedback
-- **Fix** — Automatic bug detection and fix suggestions
-- **Generate Tests** — AI-generated unit tests for selected code
-- **CodeLens** — Inline "Explain / Review" hints above functions and classes
-
-### Security Scanner
-- AI-powered vulnerability scanning (OWASP Top 10)
-- Findings appear in the VS Code **Problems** panel
-- Scan on save (optional) or scan on demand
-- CWE-mapped findings with severity levels
-
-### Git Operations
-- **Smart Commit** — AI-generated conventional commit messages
-- **Branch Manager** — Create, merge, compare, delete with safety checks
-- **Stash Manager** — Save, pop, and list stashed changes
-- **Conflict Resolver** — AI-assisted merge conflict resolution
-- **Natural Language Git** — Describe operations in plain English
-- **Semantic Commit Search** — Find commits by meaning, not keywords
-- **Repository Health Check** — Comprehensive repo analysis
-- **Impact Analysis** — Understand cross-file dependencies
-
-### Agent Flow Viewer
-- Interactive visualization of multi-agent topologies
-- 7 switchable workflows: Feature Builder, Bug Hunter, Code Inspector, and more
-- Real-time active node highlighting
-
-### Enterprise Features
-- **Permission Modes** — Normal, Plan-Only (read-only), Auto
-- **Plugin System** — Install skills, hooks, and MCP servers from Git URLs
-- **Multi-LLM Support** — OpenAI, Claude, IBM Watsonx, Ollama
-- **Privacy-First** — All processing via your local GitPilot server
+---
 
 ## Quick Start
 
-### 1. Install GitPilot Server
+1. **Install** the extension from the VS Code Marketplace
+2. **Click** the GitPilot icon in the left sidebar
+3. **Choose** your AI provider (Ollama is free and local)
+4. **Ask** anything: "Explain this project", "Fix the bug in login.ts", "Write tests"
 
-```bash
-pip install gitcopilot
+That's it. No account needed. No server to run (unless you want the web app too).
+
+---
+
+## What Can GitPilot Do?
+
+### Chat
+
+Type a question or request in the chat panel. GitPilot reads your project, creates a plan, and writes the code.
+
+**Try these:**
+- "Explain this project's architecture"
+- "Review the current file for issues"
+- "Add error handling to the API endpoints"
+- "Write tests for the auth module"
+
+### Quick Actions
+
+One-click buttons in the sidebar:
+
+| Button | What it does |
+|---|---|
+| **Explain Project** | Summarizes your entire codebase |
+| **Review File** | Finds bugs and improvements in the open file |
+| **Fix Selection** | Fixes the selected code |
+| **Generate Tests** | Creates tests for the selected code |
+| **Security Scan** | Checks for vulnerabilities |
+
+### Code Intelligence
+
+- **CodeLens** hints appear above functions: click "Explain" or "Review"
+- **Right-click menu** on selected code: Explain, Review, Fix, Test
+- **Command Palette** (`Ctrl+Shift+P`): search "GitPilot"
+
+### Git
+
+- **Smart Commit**: generates commit messages from your changes
+- **Branch Manager**: create, merge, compare branches
+- **Conflict Resolver**: AI-assisted merge conflict resolution
+
+---
+
+## Setup Your AI Provider
+
+GitPilot works with any of these providers:
+
+### Free (no API key needed)
+
+**Ollama** (local, private, fast):
+```
+1. Install Ollama: https://ollama.com
+2. Run: ollama pull llama3
+3. In GitPilot: click Provider > Ollama
 ```
 
-### 2. Start the Server
-
-```bash
-gitpilot serve
+**OllaBridge** (cloud, works out of the box):
+```
+1. In GitPilot: click Provider > OllaBridge
+2. It connects automatically (no setup needed)
 ```
 
-### 3. Open VS Code
+### Paid (API key required)
 
-The extension auto-connects to `http://127.0.0.1:8000` on startup.
+**OpenAI**:
+```
+1. Get an API key from https://platform.openai.com
+2. In GitPilot: click Provider > OpenAI
+3. Paste your API key
+```
 
-Press `Ctrl+Shift+G` (or `Cmd+Shift+G` on Mac) to open the chat panel.
+**Claude (Anthropic)**:
+```
+1. Get an API key from https://console.anthropic.com
+2. In GitPilot: click Provider > Claude
+3. Paste your API key
+```
 
-## Configuration
+**IBM Watsonx**:
+```
+1. Get credentials from https://cloud.ibm.com
+2. In GitPilot: click Provider > Watsonx
+3. Add your API key and project ID
+```
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `gitpilot.serverUrl` | `http://127.0.0.1:8000` | GitPilot API server URL |
-| `gitpilot.autoConnect` | `true` | Auto-connect on startup |
-| `gitpilot.githubToken` | — | GitHub PAT (or use env vars) |
-| `gitpilot.showInlineHints` | `true` | Show CodeLens above functions |
-| `gitpilot.permissionMode` | `normal` | Agent permission mode |
-| `gitpilot.showSecurityDiagnostics` | `true` | Security findings in Problems panel |
-| `gitpilot.scanOnSave` | `false` | Auto-scan on file save |
-| `gitpilot.chatFontSize` | `13` | Chat panel font size |
+---
 
-## Commands
+## Settings
 
-Open the Command Palette (`Ctrl+Shift+P`) and type "GitPilot" to see all 38+ commands:
+Open settings: `Ctrl+Shift+P` > "Preferences: Open Settings" > search "gitpilot"
 
-**Chat & Sessions:** Open Chat, Send Message, New Session, Load Session
+| Setting | Default | What it does |
+|---|---|---|
+| `gitpilot.provider` | `ollabridge` | Which AI to use |
+| `gitpilot.codeLens.enabled` | `true` | Show Explain/Review hints |
+| `gitpilot.autoConnect` | `true` | Connect to server on startup |
 
-**Code Intelligence:** Explain Selection, Review File, Fix Selection, Generate Tests
+---
 
-**Security:** Scan File, Scan Workspace, Clear Diagnostics
+## Troubleshooting
 
-**Git Operations:** Smart Commit, Branch Manager, Stash Manager, Conflict Resolver, Natural Language Git, Commit Search, Health Check, Impact Analysis, Create PR
+**"Provider not configured"**
+Click the "Provider" button in the sidebar header and select your AI provider.
 
-**Agent System:** Show Agent Flow, Select Topology, Invoke Skill, Install Plugin
+**"Disconnected"**
+GitPilot needs a backend server. Either:
+- Use the built-in local provider (Ollama / OllaBridge)
+- Or start the server: `pip install gitpilot && gitpilot serve`
 
-**Configuration:** Set Server URL, Reconnect, Server Info, Permission Mode
+**Extension not loading?**
+Open the Output panel (`Ctrl+Shift+U`) and select "GitPilot" from the dropdown to see logs.
 
-## Keyboard Shortcuts
+---
 
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+Shift+G` / `Cmd+Shift+G` | Open Chat |
-| `Ctrl+Enter` / `Cmd+Enter` | Send Message (when chat focused) |
-| `Ctrl+Shift+S` / `Cmd+Shift+S` | Security Scan Current File |
+## Links
 
-## Requirements
+- [GitHub](https://github.com/ruslanmv/gitpilot)
+- [Report a Bug](https://github.com/ruslanmv/gitpilot/issues)
+- [Full Documentation](https://github.com/ruslanmv/gitpilot/blob/main/extensions/vscode/EXTENSION_DOCS.md)
 
-- **GitPilot server** running locally or on a remote host
-- Install via: `pip install gitcopilot`
-- At least one LLM provider configured (OpenAI, Claude, Watsonx, or Ollama)
+---
 
-## Privacy & Security
-
-GitPilot processes everything through your own server. No code or data is sent to third-party services beyond your configured LLM provider. All Git operations run locally on your machine.
-
-## License
-
-MIT — see [LICENSE](https://github.com/ruslanmv/gitpilot/blob/master/LICENSE) for details.
+**Made by [Ruslan Magana Vsevolodovna](https://github.com/ruslanmv)** | MIT License | v0.1.5

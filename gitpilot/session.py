@@ -108,6 +108,8 @@ class SessionManager:
     def __init__(self, root: Path | None = None):
         self.root = root or SESSION_ROOT
         self.root.mkdir(parents=True, exist_ok=True)
+        # Per-instance cache for list_sessions() (see list_sessions() docstring)
+        self._list_cache: dict[str, Any] = {}
 
     def _session_path(self, session_id: str) -> Path:
         return self.root / f"{session_id}.json"
@@ -171,6 +173,7 @@ class SessionManager:
     def save(self, session: Session):
         path = self._session_path(session.id)
         path.write_text(json.dumps(session.to_dict(), indent=2))
+        self.invalidate_list_cache()
 
     def load(self, session_id: str) -> Session:
         path = self._session_path(session_id)
@@ -178,11 +181,41 @@ class SessionManager:
             raise FileNotFoundError(f"Session not found: {session_id}")
         return Session.from_dict(json.loads(path.read_text()))
 
+    def _list_sessions_dir_fingerprint(self) -> tuple[float, int]:
+        """Cheap fingerprint of the sessions directory — (mtime, file_count).
+        If either changes, the cache is stale.
+        """
+        try:
+            stat = self.root.stat()
+            files = list(self.root.glob("*.json"))
+            # Also check any file mtime that's newer than dir mtime
+            # (WSL sometimes doesn't update dir mtime on file edits)
+            max_file_mtime = max(
+                (f.stat().st_mtime for f in files),
+                default=stat.st_mtime,
+            )
+            return (max(stat.st_mtime, max_file_mtime), len(files))
+        except Exception:
+            return (0.0, 0)
+
     def list_sessions(
         self,
         repo_full_name: str | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
+        """List sessions with mtime-based in-memory cache.
+
+        Cache key includes the filter args so different queries don't collide.
+        Cache is invalidated when the sessions directory mtime or file count
+        changes (i.e., any create/update/delete triggers a refresh).
+        """
+        fingerprint = self._list_sessions_dir_fingerprint()
+        cache_key = (fingerprint, repo_full_name, limit)
+
+        cached = self._list_cache.get("entry")
+        if cached is not None and cached[0] == cache_key:
+            return cached[1]
+
         sessions = []
         for path in sorted(self.root.glob("*.json"), reverse=True):
             try:
@@ -206,12 +239,24 @@ class SessionManager:
             except Exception:
                 logger.debug("Failed to read session file %s", path, exc_info=True)
                 continue
+
+        # Store in cache
+        self._list_cache["entry"] = (cache_key, sessions)
         return sessions
+
+    def invalidate_list_cache(self) -> None:
+        """Explicitly invalidate the list_sessions cache.
+
+        Called after save/delete to ensure the next list returns fresh data
+        even if the filesystem mtime hasn't updated yet (WSL edge case).
+        """
+        self._list_cache.pop("entry", None)
 
     def delete(self, session_id: str) -> bool:
         path = self._session_path(session_id)
         if path.exists():
             path.unlink()
+            self.invalidate_list_cache()
             return True
         return False
 

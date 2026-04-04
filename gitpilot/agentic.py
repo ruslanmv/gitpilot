@@ -23,6 +23,61 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Incompatible model detection
+# ---------------------------------------------------------------------------
+# Models that struggle with CrewAI's multi-agent ReAct format.
+# Two categories:
+#   1. REASONING models (deepseek-r1, qwq, marco-o1) — produce <think> tokens
+#      that break CrewAI's parser regardless of model size
+#   2. SMALL models (<7B params) — return empty responses when they can't
+#      follow "Thought: Action: Action Input:" format
+#
+# All of these are auto-routed to Lite Mode for reliability.
+_INCOMPATIBLE_MODEL_PATTERNS = (
+    # Reasoning models (ALL sizes fail — the <think> tag breaks ReAct parser)
+    "deepseek-r1",
+    "qwq",
+    "marco-o1",
+    "o1-",
+    # Small models (<7B)
+    "qwen2.5:0.5b", "qwen2.5:1.5b", "qwen2.5:3b",
+    "qwen2:0.5b", "qwen2:1.5b",
+    "llama3.2:1b", "llama3.2:3b",
+    "phi3:mini", "phi-3-mini", "phi3.5:mini", "phi3:3.8b",
+    "gemma:2b", "gemma2:2b",
+    "deepseek-coder:1.3b", "deepseek-coder:6.7b",
+    "tinyllama", "tinydolphin",
+    "stablelm2", "smollm", "granite3",
+)
+
+
+def _is_incompatible_model(settings) -> bool:
+    """Check if the active model is incompatible with multi-agent ReAct.
+
+    Uses substring matching so "deepseek-r1" catches all variants
+    (deepseek-r1:1.5b, deepseek-r1:7b, deepseek-r1:14b, deepseek-r1:latest).
+    """
+    try:
+        provider = str(getattr(settings, "provider", "")).lower()
+        # Only applies to local Ollama/OllaBridge providers — cloud APIs
+        # (OpenAI, Claude) have native tool-calling that handles this
+        if provider not in ("ollama", "ollabridge"):
+            return False
+
+        if provider == "ollama":
+            model = str(getattr(settings.ollama, "model", "")).lower()
+        else:
+            model = str(getattr(settings.ollabridge, "model", "")).lower()
+
+        for pattern in _INCOMPATIBLE_MODEL_PATTERNS:
+            if pattern in model:
+                return True
+        return False
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Resilient agent execution: timeout + circuit breaker
 # ---------------------------------------------------------------------------
 async def _guarded_agent_call(ctx, func, *, label: str = "agent"):
@@ -1247,14 +1302,53 @@ async def dispatch_request(
         raise ValueError("dispatch_request: missing repo_full_name (or legacy repo_owner/repo_name)")
 
     # ---------- Lite Mode check (additive, non-destructive) ----------
-    # Lite mode activates if EITHER the setting is on OR the topology is "lite_mode"
+    # Lite mode activates if ANY of:
+    #   - the explicit setting is on
+    #   - the topology is "lite_mode"
+    #   - the active model is incompatible with multi-agent ReAct prompts
+    #     (deepseek-r1, qwq, small Ollama models)
     from .settings import get_settings as _get_settings
-    from .topology_registry import get_saved_topology_preference as _get_topo_pref
+
     _current_settings = _get_settings()
-    _lite_active = _current_settings.lite_mode or _get_topo_pref() == "lite_mode"
+    _saved_topology = get_saved_topology_preference()
+
+    # Explicit topology_id must always win.
+    if topology_id:
+        _resolved_tid = topology_id
+    else:
+        _resolved_tid = _saved_topology
+
+    # Auto-detect models that can't handle multi-agent ReAct format
+    # (deepseek-r1, qwq, small local models) — route them to Lite Mode
+    # regardless of explicit settings.
+    _auto_lite = _is_incompatible_model(_current_settings)
+
+    # Lite mode only applies when explicitly selected or globally enabled,
+    # and it must not override an explicit non-lite topology choice.
+    _lite_active = (
+        _current_settings.lite_mode
+        or _resolved_tid == "lite_mode"
+        or _auto_lite
+    )
+
+    # Do not force lite mode when the caller explicitly requested another topology.
+    if topology_id and topology_id != "lite_mode":
+        _lite_active = False
+
+    if _auto_lite and _lite_active:
+        logger.info(
+            "[GitPilot] Auto-routed to Lite Mode: active model is incompatible "
+            "with multi-agent ReAct (deepseek-r1, qwq, or small local model)"
+        )
+
     if _lite_active:
         logger.info("[GitPilot Lite] Lite Mode active — using simplified single-agent path")
-        plan = await generate_plan_lite(user_request, repo_full_name, token=token, branch_name=branch_name)
+        plan = await generate_plan_lite(
+            user_request,
+            repo_full_name,
+            token=token,
+            branch_name=branch_name,
+        )
         return {
             "category": "plan_execute",
             "workflow": "plan_execute",
@@ -1262,6 +1356,10 @@ async def dispatch_request(
             "message": "Lite Mode: Plan generated. Review and approve to execute.",
             "lite_mode": True,
         }
+
+    _active_topology = None
+    if _resolved_tid:
+        _active_topology = get_topology(_resolved_tid)
 
     # ---------- Topology-aware routing (additive) ----------
     _active_topology = None

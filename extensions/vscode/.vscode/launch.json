@@ -1,0 +1,103 @@
+{
+  // Microsoft-standard debug configurations for VS Code extensions.
+  // See: https://code.visualstudio.com/api/get-started/your-first-extension#debugging-the-extension
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // Primary: Launch Extension Development Host with full debugging.
+      // Press F5 or use "Run Extension" from the Run & Debug panel.
+      "name": "Run Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/out/**/*.js"
+      ],
+      "sourceMaps": true,
+      "preLaunchTask": "npm: compile",
+      "env": {
+        "GITPILOT_DEBUG": "1"
+      }
+    },
+    {
+      // Watch mode: same as above but uses the watch task so recompiling
+      // is automatic on save. Best for iterative development.
+      "name": "Run Extension (Watch)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/out/**/*.js"
+      ],
+      "sourceMaps": true,
+      "preLaunchTask": "watch",
+      "env": {
+        "GITPILOT_DEBUG": "1"
+      }
+    },
+    {
+      // Debug the webview (DevTools). After launching "Run Extension",
+      // use this to attach Chrome DevTools to the webview for CSS/JS debugging.
+      "name": "Debug Webview",
+      "type": "chrome",
+      "request": "attach",
+      "port": 9222,
+      "urlFilter": "*gitpilot*",
+      "webRoot": "${workspaceFolder}/src",
+      "sourceMaps": true,
+      "sourceMapPathOverrides": {
+        "webpack:///./src/*": "${workspaceFolder}/src/*"
+      }
+    },
+    {
+      // Verbose mode: launches with all VS Code extension logs enabled.
+      // Useful for diagnosing activation, command registration, and provider issues.
+      "name": "Run Extension (Verbose Logs)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "--log=debug",
+        "--log-level=trace"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/out/**/*.js"
+      ],
+      "sourceMaps": true,
+      "preLaunchTask": "npm: compile",
+      "env": {
+        "GITPILOT_DEBUG": "1",
+        "GITPILOT_LOG_LEVEL": "trace",
+        "NODE_DEBUG": "gitpilot"
+      }
+    },
+    {
+      // Profile startup: measures extension activation time.
+      // Check Developer: Show Running Extensions for timing data.
+      "name": "Profile Extension Startup",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "--inspect-extensions=9229",
+        "--disable-extensions"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/out/**/*.js"
+      ],
+      "sourceMaps": true,
+      "preLaunchTask": "npm: compile"
+    }
+  ],
+  "compounds": [
+    {
+      // Launch both the extension host AND attach webview DevTools together.
+      "name": "Extension + Webview",
+      "configurations": ["Run Extension", "Debug Webview"]
+    }
+  ]
+}

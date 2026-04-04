@@ -1,373 +1,1984 @@
 /**
  * GitPilot VS Code Extension — Main Entry Point
  *
- * Enterprise-grade agentic AI assistant for GitHub repositories.
- * The server handles all AI/LLM logic (OllaBridge, OpenAI, Claude,
- * Ollama, Watsonx), agentic workflows (CrewAI), and multi-agent
- * orchestration. The VS Code extension provides the chat UI, code
- * intelligence, provider management, and developer experience.
- *
- * Architecture:
- *   api/           → HTTP client with retry, auth, health monitoring
- *   views/         → Webview providers (Chat sidebar)
- *   tree/          → TreeView providers (Sessions, Skills/Plugins)
- *   providers/     → CodeLens, CodeActions, Security Diagnostics
- *   commands/      → All command handlers (chat, review, security, skills, server, git)
- *   panels/        → Full webview panels (Agent Flow Viewer)
- *   utils/         → Config, context detection, status bar
+ * Production-ready activation flow with:
+ * - stable command registration for Quick Actions
+ * - workspace/repo-aware chat context
+ * - setup wizard for first-run UX
+ * - automatic local provider bootstrap
+ * - automatic session creation
+ * - deterministic "Explain project" behavior
+ * - safer message handling and diagnostics
+ * - state-driven chat synchronization for the Workspace webview
+ * - reduced duplicate refresh/bootstrap churn
  */
-import * as vscode from 'vscode';
 
-import { GitPilotApiClient } from './api/client';
-import { getConfig, onConfigChange } from './utils/config';
-import { getWorkspaceContext, ensureGitRepo } from './utils/context';
-import { StatusBarManager } from './utils/statusBar';
-import { ChatViewProvider } from './views/chatViewProvider';
-import { SessionsTreeProvider } from './tree/sessionsTreeProvider';
-import { SkillsTreeProvider } from './tree/skillsTreeProvider';
-import { SecurityDiagnosticsProvider } from './providers/securityDiagnostics';
-import { GitPilotCodeLensProvider } from './providers/codeLensProvider';
-import { GitPilotCodeActionProvider } from './providers/codeActionProvider';
-import { AgentFlowPanel } from './panels/agentFlowPanel';
+import * as fs from "fs";
+import * as path from "path";
+import * as vscode from "vscode";
 
-import { registerChatCommands } from './commands/chat';
-import { registerReviewCommands } from './commands/review';
-import { registerSecurityCommands } from './commands/security';
-import { registerSkillCommands } from './commands/skills';
-import { registerServerCommands } from './commands/server';
-import { registerGitCommands } from './commands/git';
-
-// ─── Redesigned Service Layer ────────────────────────────
-import { StateStore } from "./core/stateStore";
-import { GitPilotEvents } from "./core/events";
+import { GitPilotApiClient } from "./api/client";
 import { StatusClient } from "./api/statusClient";
 import { SessionClient } from "./api/sessionClient";
 import { ChatClient } from "./api/chatClient";
 import { SettingsClient } from "./api/settingsClient";
 import { RepoClient } from "./api/repoClient";
+
+import { getConfig, onConfigChange } from "./utils/config";
+import { getWorkspaceContext, ensureGitRepo } from "./utils/context";
+import { StatusBarManager } from "./utils/statusBar";
+
+import { ChatViewProvider } from "./views/chatViewProvider";
+import { SessionsTreeProvider } from "./tree/sessionsTreeProvider";
+import { SkillsTreeProvider } from "./tree/skillsTreeProvider";
+
+import { SecurityDiagnosticsProvider } from "./providers/securityDiagnostics";
+import { GitPilotCodeLensProvider } from "./providers/codeLensProvider";
+import { GitPilotCodeActionProvider } from "./providers/codeActionProvider";
+
+import { AgentFlowPanel } from "./panels/agentFlowPanel";
+
+import { registerChatCommands } from "./commands/chat";
+import { registerReviewCommands } from "./commands/review";
+import { registerSecurityCommands } from "./commands/security";
+import { registerSkillCommands } from "./commands/skills";
+import { registerServerCommands } from "./commands/server";
+import { registerGitCommands } from "./commands/git";
+import { registerWorkspaceCommands } from "./commands/workspaceCommands";
+import { registerSetupCommands } from "./commands/setupCommands";
+import { registerProviderCommands } from "./commands/providerCommands";
+import { registerSessionCommands } from "./commands/sessionCommands";
+import { registerChatCommandsV2 } from "./commands/chatCommands";
+
+import { StateStore } from "./core/stateStore";
+import { GitPilotEvents } from "./core/events";
+
 import { WorkspaceResolver } from "./services/workspace/workspaceResolver";
 import { GitContextService } from "./services/workspace/gitContextService";
 import { ModeResolver } from "./services/workspace/modeResolver";
 import { ReadinessEvaluator } from "./services/workspace/readinessEvaluator";
 import { SessionCoordinator } from "./services/workspace/sessionCoordinator";
 import { ErrorTranslator } from "./services/workspace/errorTranslator";
+
 import { GitPilotPanel } from "./ui/webview/GitPilotPanel";
-import { registerWorkspaceCommands } from "./commands/workspaceCommands";
-import { registerSetupCommands } from "./commands/setupCommands";
-import { registerProviderCommands } from "./commands/providerCommands";
-import { registerSessionCommands } from "./commands/sessionCommands";
-import { registerChatCommandsV2 } from "./commands/chatCommands";
-import { detectIntent, buildIntentPrefix } from "./services/chat/intentDetector";
 
-export function activate(context: vscode.ExtensionContext) {
-    const config = getConfig();
+import { ProjectContextService } from "./services/context/projectContextService";
+import { WorkingSetService } from "./services/context/workingSetService";
+import { ContextAssembler } from "./services/context/contextAssembler";
+import { ProjectIndexCache } from "./services/context/projectIndexCache";
 
-    // ── Core services ──────────────────────────────────────────
-    const client = new GitPilotApiClient(config.serverUrl, config.githubToken);
-    const statusBar = new StatusBarManager();
-    const chatProvider = new ChatViewProvider(context.extensionUri, client);
-    const sessionsTree = new SessionsTreeProvider(client);
-    const skillsTree = new SkillsTreeProvider(client);
-    const securityProvider = new SecurityDiagnosticsProvider(client);
-    const codeLensProvider = new GitPilotCodeLensProvider(config.showInlineHints);
+import {
+  detectIntent,
+  buildIntentPrefix,
+} from "./services/chat/intentDetector";
 
-    // ── Connection state → UI sync ─────────────────────────────
-    client.onStateChange((state) => {
-        statusBar.update(state);
-        chatProvider.updateConnectionState(state === 'connected');
-        if (state === 'connected') {
-            sessionsTree.refresh();
-            skillsTree.refresh();
+import type {
+  ExtensionToWebviewMessage,
+  WorkspaceMode,
+  StructuredProjectContext,
+  StructuredWorkingSet,
+  StructuredTaskContext,
+  PlanSummary,
+} from "./core/types";
+
+type DisposableLike = { dispose(): void };
+
+type QuickActionId =
+  | "explain_project"
+  | "review_file"
+  | "fix_selection"
+  | "generate_tests"
+  | "security_scan";
+
+type FileSummary = {
+  path: string;
+  type: "file" | "dir";
+};
+
+type ProjectSnapshot = {
+  repoName: string;
+  branch?: string;
+  repoRoot?: string;
+  workspaceFolder?: string;
+  languages: string[];
+  manifests: string[];
+  keyFiles: string[];
+  readmePreview?: string;
+  tree: FileSummary[];
+};
+
+type StructuredContextBundle = {
+  project_context?: StructuredProjectContext;
+  working_set?: StructuredWorkingSet;
+  task_context?: StructuredTaskContext;
+  legacy_prompt: string;
+};
+
+type ChatMessageState = {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  createdAt: string;
+  plan?: PlanSummary;
+};
+
+const OUTPUT_CHANNEL_NAME = "GitPilot";
+const PROJECT_TREE_LIMIT = 250;
+const README_PREVIEW_MAX_CHARS = 4000;
+const FILE_READ_MAX_CHARS = 12000;
+
+const QUICK_ACTION_COMMANDS: ReadonlyArray<{
+  id: string;
+  action: QuickActionId;
+}> = [
+  { id: "gitpilot.explain_project", action: "explain_project" },
+  { id: "gitpilot.review_file", action: "review_file" },
+  { id: "gitpilot.fix_selection", action: "fix_selection" },
+  { id: "gitpilot.generate_tests", action: "generate_tests" },
+  { id: "gitpilot.security_scan", action: "security_scan" },
+];
+
+export function activate(context: vscode.ExtensionContext): void {
+  const config = getConfig();
+  const output = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
+
+  output.appendLine("[GitPilot] Activating extension...");
+
+  const client = new GitPilotApiClient(config.serverUrl, config.githubToken);
+  const statusBar = new StatusBarManager();
+
+  const legacyChatProvider = new ChatViewProvider(context.extensionUri, client);
+
+  const sessionsTree = new SessionsTreeProvider(client);
+  const skillsTree = new SkillsTreeProvider(client);
+  const securityProvider = new SecurityDiagnosticsProvider(client);
+  const codeLensProvider = new GitPilotCodeLensProvider(config.showInlineHints);
+
+  const stateStore = new StateStore();
+  const events = new GitPilotEvents();
+
+  const statusClient = new StatusClient(client);
+  const sessionClient = new SessionClient(client);
+  const chatClientV2 = new ChatClient(client);
+  const settingsClient = new SettingsClient(client);
+  const repoClient = new RepoClient(client);
+
+  const workspaceResolver = new WorkspaceResolver();
+  const gitContextService = new GitContextService();
+  const modeResolver = new ModeResolver();
+  const readinessEvaluator = new ReadinessEvaluator();
+  const errorTranslator = new ErrorTranslator();
+
+  const projectContextService = new ProjectContextService();
+  const workingSetService = new WorkingSetService();
+  const contextAssembler = new ContextAssembler();
+  const projectIndexCache = new ProjectIndexCache<StructuredProjectContext>();
+
+  const sessionCoordinator = new SessionCoordinator(
+    sessionClient,
+    stateStore,
+    errorTranslator
+  );
+
+  void repoClient;
+  void events;
+
+  context.subscriptions.push(
+    output,
+    statusBar,
+    securityProvider,
+    stateStore,
+    events,
+    workspaceResolver,
+    {
+      dispose: () => {
+        try {
+          client.dispose();
+        } catch {
+          // no-op
         }
+      },
+    } satisfies DisposableLike
+  );
+
+  let autoBootstrapInFlight = false;
+  let projectSnapshotCache: ProjectSnapshot | undefined;
+  let projectSnapshotCacheKey: string | undefined;
+
+  let gitpilotPanel!: GitPilotPanel;
+
+  const clearProjectCaches = (): void => {
+    projectSnapshotCache = undefined;
+    projectSnapshotCacheKey = undefined;
+
+    const maybeClear = projectIndexCache as unknown as { clear?: () => void };
+    if (typeof maybeClear.clear === "function") {
+      maybeClear.clear();
+    }
+  };
+
+  const postMessageToPanel = (message: ExtensionToWebviewMessage): void => {
+    if (!gitpilotPanel) {
+      return;
+    }
+    gitpilotPanel.postMessage(message);
+  };
+
+  const postErrorToPanel = (payload: {
+    code: string;
+    title: string;
+    message: string;
+    recoverable?: boolean;
+  }): void => {
+    postMessageToPanel({
+      type: "ERROR",
+      payload: {
+        recoverable: true,
+        ...payload,
+      },
+    });
+  };
+
+  const appendOutputError = (prefix: string, error: unknown): void => {
+    output.appendLine(`${prefix}: ${String(error)}`);
+  };
+
+  const currentWorkspaceRoot = (): string | undefined => {
+    const editorPath = vscode.window.activeTextEditor?.document?.uri?.fsPath;
+    if (editorPath) {
+      const folder = vscode.workspace.getWorkspaceFolder(
+        vscode.Uri.file(editorPath)
+      );
+      if (folder?.uri.fsPath) {
+        return folder.uri.fsPath;
+      }
+    }
+
+    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  };
+
+  const isWorkspaceTrusted = (): boolean => {
+    try {
+      return vscode.workspace.isTrusted;
+    } catch {
+      return true;
+    }
+  };
+
+  const findGitRoot = (startPath?: string): string | undefined => {
+    if (!startPath || !fs.existsSync(startPath)) {
+      return undefined;
+    }
+
+    let current: string;
+    try {
+      current = fs.statSync(startPath).isDirectory()
+        ? startPath
+        : path.dirname(startPath);
+    } catch {
+      return undefined;
+    }
+
+    while (true) {
+      const dotGit = path.join(current, ".git");
+      if (fs.existsSync(dotGit)) {
+        return current;
+      }
+
+      const parent = path.dirname(current);
+      if (parent === current) {
+        return undefined;
+      }
+
+      current = parent;
+    }
+  };
+
+  const safeReadTextFile = (
+    filePath: string,
+    maxChars: number
+  ): string | undefined => {
+    try {
+      if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+        return undefined;
+      }
+
+      const raw = fs.readFileSync(filePath, "utf8");
+      if (raw.length <= maxChars) {
+        return raw;
+      }
+
+      return `${raw.slice(0, maxChars)}\n\n...[truncated]`;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const listProjectTree = (
+    root: string,
+    limit = PROJECT_TREE_LIMIT
+  ): FileSummary[] => {
+    const results: FileSummary[] = [];
+    const ignoredNames = new Set([
+      ".git",
+      "node_modules",
+      ".next",
+      ".turbo",
+      ".venv",
+      "venv",
+      "__pycache__",
+      "dist",
+      "build",
+      ".idea",
+      ".vscode-test",
+      ".pytest_cache",
+      ".mypy_cache",
+      ".ruff_cache",
+      ".cache",
+      "coverage",
+      ".DS_Store",
+    ]);
+
+    const walk = (dir: string): void => {
+      if (results.length >= limit) {
+        return;
+      }
+
+      let entries: fs.Dirent[] = [];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+
+      entries.sort((a, b) => {
+        if (a.isDirectory() && !b.isDirectory()) {
+          return -1;
+        }
+        if (!a.isDirectory() && b.isDirectory()) {
+          return 1;
+        }
+        return a.name.localeCompare(b.name);
+      });
+
+      for (const entry of entries) {
+        if (results.length >= limit) {
+          return;
+        }
+
+        if (ignoredNames.has(entry.name)) {
+          continue;
+        }
+
+        const abs = path.join(dir, entry.name);
+        const rel = path.relative(root, abs).replace(/\\/g, "/");
+
+        if (!rel) {
+          continue;
+        }
+
+        if (entry.isDirectory()) {
+          results.push({ path: `${rel}/`, type: "dir" });
+          walk(abs);
+        } else if (entry.isFile()) {
+          results.push({ path: rel, type: "file" });
+        }
+      }
+    };
+
+    walk(root);
+    return results;
+  };
+
+  const detectProjectLanguages = (tree: FileSummary[]): string[] => {
+    const exts = new Set<string>();
+
+    for (const entry of tree) {
+      if (entry.type !== "file") {
+        continue;
+      }
+
+      const ext = path.extname(entry.path).toLowerCase();
+      if (ext) {
+        exts.add(ext);
+      }
+    }
+
+    const map: Record<string, string> = {
+      ".ts": "TypeScript",
+      ".tsx": "TypeScript React",
+      ".js": "JavaScript",
+      ".jsx": "JavaScript React",
+      ".py": "Python",
+      ".go": "Go",
+      ".rs": "Rust",
+      ".java": "Java",
+      ".kt": "Kotlin",
+      ".php": "PHP",
+      ".rb": "Ruby",
+      ".cs": "C#",
+      ".cpp": "C++",
+      ".c": "C",
+      ".h": "C/C++ Header",
+      ".swift": "Swift",
+      ".scala": "Scala",
+      ".r": "R",
+      ".lua": "Lua",
+      ".sql": "SQL",
+      ".sh": "Shell",
+      ".yaml": "YAML",
+      ".yml": "YAML",
+      ".json": "JSON",
+      ".md": "Markdown",
+    };
+
+    const langs = new Set<string>();
+    for (const ext of exts) {
+      const language = map[ext];
+      if (language) {
+        langs.add(language);
+      }
+    }
+
+    return [...langs].sort((a, b) => a.localeCompare(b));
+  };
+
+  const findManifestFiles = (tree: FileSummary[]): string[] => {
+    const known = new Set([
+      "package.json",
+      "package-lock.json",
+      "pnpm-lock.yaml",
+      "yarn.lock",
+      "tsconfig.json",
+      "pyproject.toml",
+      "requirements.txt",
+      "poetry.lock",
+      "Pipfile",
+      "Cargo.toml",
+      "Cargo.lock",
+      "go.mod",
+      "go.sum",
+      "pom.xml",
+      "build.gradle",
+      "build.gradle.kts",
+      "composer.json",
+      "Gemfile",
+      "Dockerfile",
+      "docker-compose.yml",
+      "docker-compose.yaml",
+      "README.md",
+      "README.rst",
+      ".env.example",
+      ".github/workflows",
+    ]);
+
+    return tree
+      .map((entry) => entry.path.replace(/\/$/, ""))
+      .filter((p) => known.has(p) || p.startsWith(".github/workflows/"))
+      .slice(0, 40);
+  };
+
+  const findKeyFiles = (tree: FileSummary[]): string[] => {
+    const priority = [
+      "README.md",
+      "README.rst",
+      "src/",
+      "app/",
+      "server/",
+      "backend/",
+      "frontend/",
+      "api/",
+      "tests/",
+      "__tests__/",
+      "docs/",
+      ".github/workflows/",
+      "package.json",
+      "pyproject.toml",
+      "Cargo.toml",
+      "go.mod",
+      "pom.xml",
+      "Dockerfile",
+    ];
+
+    const paths = tree.map((entry) => entry.path);
+    const selected: string[] = [];
+
+    for (const wanted of priority) {
+      const match = paths.find((p) => p === wanted || p.startsWith(wanted));
+      if (match && !selected.includes(match)) {
+        selected.push(match);
+      }
+    }
+
+    for (const p of paths) {
+      if (selected.length >= 30) {
+        break;
+      }
+      if (!selected.includes(p)) {
+        selected.push(p);
+      }
+    }
+
+    return selected;
+  };
+
+  const getProjectSnapshot = async (
+    forceRefresh = false
+  ): Promise<ProjectSnapshot | undefined> => {
+    const workspaceRoot = currentWorkspaceRoot();
+    const repoRoot = findGitRoot(workspaceRoot);
+    const cacheKey = `${workspaceRoot || ""}::${repoRoot || ""}`;
+
+    if (
+      !forceRefresh &&
+      projectSnapshotCache &&
+      projectSnapshotCacheKey === cacheKey
+    ) {
+      return projectSnapshotCache;
+    }
+
+    const baseRoot = repoRoot || workspaceRoot;
+    if (!baseRoot) {
+      projectSnapshotCache = undefined;
+      projectSnapshotCacheKey = undefined;
+      return undefined;
+    }
+
+    const tree = listProjectTree(baseRoot, PROJECT_TREE_LIMIT);
+    const readmePathCandidates = [
+      path.join(baseRoot, "README.md"),
+      path.join(baseRoot, "README.rst"),
+      path.join(baseRoot, "readme.md"),
+    ];
+
+    const readmePath = readmePathCandidates.find((candidate) =>
+      fs.existsSync(candidate)
+    );
+
+    const readmePreview = readmePath
+      ? safeReadTextFile(readmePath, README_PREVIEW_MAX_CHARS)
+      : undefined;
+
+    const snapshot: ProjectSnapshot = {
+      repoName:
+        stateStore.state.workspace.git.repoName ||
+        path.basename(baseRoot) ||
+        "current-project",
+      branch: stateStore.state.workspace.git.branch || undefined,
+      repoRoot,
+      workspaceFolder: workspaceRoot,
+      languages: detectProjectLanguages(tree),
+      manifests: findManifestFiles(tree),
+      keyFiles: findKeyFiles(tree),
+      readmePreview,
+      tree,
+    };
+
+    projectSnapshotCache = snapshot;
+    projectSnapshotCacheKey = cacheKey;
+    return snapshot;
+  };
+
+  const getCurrentFileContext = (): {
+    fileName?: string;
+    languageId?: string;
+    selectionText?: string;
+    fullText?: string;
+  } => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+      return {};
+    }
+
+    const document = editor.document;
+    const selectionText = editor.selection?.isEmpty
+      ? ""
+      : document.getText(editor.selection);
+    const fullTextRaw = document.getText();
+    const fullText =
+      fullTextRaw.length <= FILE_READ_MAX_CHARS
+        ? fullTextRaw
+        : `${fullTextRaw.slice(0, FILE_READ_MAX_CHARS)}\n\n...[truncated]`;
+
+    return {
+      fileName: document.fileName,
+      languageId: document.languageId,
+      selectionText: selectionText || undefined,
+      fullText,
+    };
+  };
+
+  const buildStructuredContext = async (
+    rawText: string,
+    intent: string
+  ): Promise<StructuredContextBundle> => {
+    const workspaceRoot = currentWorkspaceRoot();
+    const repoRoot = findGitRoot(workspaceRoot);
+    const state = stateStore.state;
+    const sessionMode = state.session.mode;
+    const resolvedMode: WorkspaceMode =
+      sessionMode || (repoRoot ? "local_git" : "folder");
+
+    const repoName =
+      state.workspace.git.repoName ||
+      state.workspace.folderName ||
+      (repoRoot ? path.basename(repoRoot) : undefined);
+
+    const cacheKey = [
+      resolvedMode ?? "",
+      workspaceRoot ?? "",
+      repoRoot ?? "",
+      repoName ?? "",
+      state.workspace.git.branch ?? "",
+    ].join("::");
+
+    let projectContext = projectIndexCache.get(cacheKey);
+    if (!projectContext) {
+      projectContext = projectContextService.build({
+        workspaceRoot,
+        repoRoot,
+        repoName,
+        branch: state.workspace.git.branch,
+        mode:
+          resolvedMode === "github"
+            ? "github"
+            : repoRoot
+              ? "local_git"
+              : "folder",
+      });
+
+      if (projectContext) {
+        projectIndexCache.set(cacheKey, projectContext);
+      }
+    }
+
+    const workingSet = workingSetService.build(workspaceRoot);
+    const taskContext = contextAssembler.buildTaskContext({
+      intent,
+      rawMessage: rawText,
+      workingSet,
     });
 
-    // ── Register views ─────────────────────────────────────────
-    // Note: The primary chat webview (gitpilot.chatView) is now registered
-    // below via GitPilotPanel. The old ChatViewProvider is kept alive only
-    // for legacy command handlers during migration.
+    const legacy_prompt = contextAssembler.buildLegacyPrompt(
+      projectContext,
+      workingSet,
+      taskContext,
+      rawText
+    );
+
+    return {
+      project_context: projectContext,
+      working_set: workingSet,
+      task_context: taskContext,
+      legacy_prompt,
+    };
+  };
+
+  const toPlanSummary = (plan: unknown): PlanSummary | undefined => {
+    if (!plan || typeof plan !== "object") {
+      return undefined;
+    }
+
+    const raw = plan as {
+      goal?: unknown;
+      summary?: unknown;
+      steps?: unknown;
+    };
+
+    const rawSteps = Array.isArray(raw.steps) ? raw.steps : [];
+
+    const normalizePlanStepStatus = (
+      status: unknown
+    ): PlanSummary["steps"][number]["status"] => {
+      if (status === "failed" || status === "applied" || status === "pending" || status === "ready") {
+        return status;
+      }
+      return "pending";
+    };
+
+    return {
+      goal:
+        typeof raw.goal === "string" && raw.goal.trim()
+          ? raw.goal
+          : "Complete the requested task",
+      summary:
+        typeof raw.summary === "string" && raw.summary.trim()
+          ? raw.summary
+          : "GitPilot generated a task plan.",
+      steps: rawSteps.map((step, index) => {
+        const item =
+          step && typeof step === "object"
+            ? (step as {
+                id?: unknown;
+                title?: unknown;
+                description?: unknown;
+                status?: unknown;
+                file?: unknown;
+                action?: unknown;
+              })
+            : {};
+
+        return {
+          step: index + 1,
+          id:
+            typeof item.id === "string" && item.id.trim()
+              ? item.id
+              : `step-${index + 1}`,
+          title:
+            typeof item.title === "string" && item.title.trim()
+              ? item.title
+              : typeof item.action === "string" && item.action.trim()
+                ? item.action
+                : `Step ${index + 1}`,
+          description:
+            typeof item.description === "string"
+              ? item.description
+              : typeof item.file === "string"
+                ? item.file
+                : "Planned task step",
+          status: normalizePlanStepStatus(item.status),
+          file:
+            typeof item.file === "string" && item.file.trim()
+              ? item.file
+              : undefined,
+          action:
+            typeof item.action === "string" && item.action.trim()
+              ? item.action
+              : "planned_action",
+        };
+      }),
+    };
+  };
+
+  const appendChatMessageToState = (message: ChatMessageState): void => {
+    const store = stateStore as unknown as {
+      appendChatMessage?: (msg: ChatMessageState) => void;
+      updateChat?: (patch: { messages: ChatMessageState[] }) => void;
+      state: {
+        chat?: {
+          messages?: ChatMessageState[];
+        };
+      };
+    };
+
+    if (typeof store.appendChatMessage === "function") {
+      store.appendChatMessage(message);
+      return;
+    }
+
+    const currentMessages = store.state.chat?.messages ?? [];
+    if (typeof store.updateChat === "function") {
+      store.updateChat({
+        messages: [...currentMessages, message],
+      });
+      return;
+    }
+
+    output.appendLine(
+      "[GitPilot] Warning: StateStore has no appendChatMessage/updateChat method."
+    );
+  };
+
+  const syncResponsePlanToState = (response: {
+    answer?: string;
+    plan?: unknown;
+    message_id?: string;
+  }): void => {
+    const normalizedPlan = toPlanSummary(response.plan);
+    if (!normalizedPlan) {
+      return;
+    }
+
+    const currentTask = stateStore.state.activeTask || {};
+
+    stateStore.updateActiveTask({
+      ...currentTask,
+      title: currentTask.title || normalizedPlan.goal || "Task in progress",
+      summary:
+        currentTask.summary ||
+        normalizedPlan.summary ||
+        "GitPilot generated a plan and is preparing scoped changes.",
+      status: currentTask.status === "idle" ? "planning" : currentTask.status,
+      plan: normalizedPlan,
+    });
+  };
+
+  const registerCommand = (
+    commandId: string,
+    handler: (...args: unknown[]) => unknown | Promise<unknown>
+  ): void => {
     context.subscriptions.push(
-        vscode.window.registerTreeDataProvider('gitpilot.sessionsView', sessionsTree),
-        vscode.window.registerTreeDataProvider('gitpilot.skillsView', skillsTree),
+      vscode.commands.registerCommand(commandId, async (...args: unknown[]) => {
+        output.appendLine(`[GitPilot] Command invoked: ${commandId}`);
+        await handler(...args);
+      })
+    );
+  };
+
+  const logCommandAvailability = async (): Promise<void> => {
+    try {
+      const commands = await vscode.commands.getCommands(true);
+      for (const cmd of QUICK_ACTION_COMMANDS) {
+        if (!commands.includes(cmd.id)) {
+          output.appendLine(
+            `[GitPilot] Missing command registration: ${cmd.id}`
+          );
+        }
+      }
+    } catch (error: unknown) {
+      appendOutputError(
+        "[GitPilot] Failed to inspect command registry",
+        error
+      );
+    }
+  };
+
+  const refreshStatusAndBootstrap = async (reason: string): Promise<void> => {
+    if (autoBootstrapInFlight) {
+      output.appendLine(
+        `[GitPilot] Bootstrap skipped (already running): ${reason}`
+      );
+      return;
+    }
+
+    autoBootstrapInFlight = true;
+
+    try {
+      output.appendLine(`[GitPilot] Bootstrap check: ${reason}`);
+
+      await vscode.commands.executeCommand("gitpilot.refreshStatus");
+
+      let needsFinalRefresh = false;
+      let state = stateStore.state;
+
+      if (!state.workspace.folderOpen) {
+        return;
+      }
+
+      const autoProvider =
+        await settingsClient.bootstrapLocalProviderDefaults();
+
+      if (autoProvider.changed) {
+        output.appendLine(
+          `[GitPilot] Auto-configured provider=${autoProvider.provider} model=${autoProvider.model}`
+        );
+        needsFinalRefresh = true;
+      }
+
+      if (needsFinalRefresh) {
+        await vscode.commands.executeCommand("gitpilot.refreshStatus");
+        state = stateStore.state;
+        needsFinalRefresh = false;
+      }
+
+      if (
+        state.readiness.canChat &&
+        !state.session.active &&
+        state.session.status !== "creating"
+      ) {
+        output.appendLine("[GitPilot] Auto-starting session...");
+        await sessionCoordinator.ensureActiveSession();
+        needsFinalRefresh = true;
+      }
+
+      if (needsFinalRefresh) {
+        await vscode.commands.executeCommand("gitpilot.refreshStatus");
+      }
+
+      await getProjectSnapshot(true);
+    } catch (error: unknown) {
+      appendOutputError(`[GitPilot] Bootstrap error (${reason})`, error);
+    } finally {
+      autoBootstrapInFlight = false;
+    }
+  };
+
+  const ensureSessionReady = async (): Promise<string | undefined> => {
+    const state = stateStore.state;
+
+    if (state.session.sessionId) {
+      return state.session.sessionId;
+    }
+
+    if (!state.readiness.canChat) {
+      return undefined;
+    }
+
+    if (!state.session.active && state.session.status !== "creating") {
+      await sessionCoordinator.ensureActiveSession();
+    }
+
+    await vscode.commands.executeCommand("gitpilot.refreshStatus");
+    return stateStore.state.session.sessionId;
+  };
+
+  const runSetupWizard = async (): Promise<void> => {
+    const workspaceRoot = currentWorkspaceRoot();
+    const repoRoot = findGitRoot(workspaceRoot);
+    const trusted = isWorkspaceTrusted();
+
+    const choices: Array<
+      vscode.QuickPickItem & { run: () => Promise<void> }
+    > = [];
+
+    if (!trusted) {
+      choices.push({
+        label: "Trust this workspace",
+        description: "Required for full repo-aware features",
+        run: async () => {
+          await vscode.commands.executeCommand("workbench.trust.manage");
+        },
+      });
+    }
+
+    if (!workspaceRoot) {
+      choices.push({
+        label: "Open a folder",
+        description: "Select the project folder to use with GitPilot",
+        run: async () => {
+          await vscode.commands.executeCommand(
+            "workbench.action.files.openFolder"
+          );
+        },
+      });
+    }
+
+    if (workspaceRoot && !repoRoot) {
+      choices.push({
+        label: "Initialize Git repository",
+        description: "Set up this folder as a Git repository",
+        run: async () => {
+          await ensureGitRepo();
+        },
+      });
+    }
+
+    choices.push(
+      {
+        label: "Select provider",
+        description:
+          "Choose Ollama, OpenAI, Claude-compatible, or another provider",
+        run: async () => {
+          await vscode.commands.executeCommand("gitpilot.selectProviderV2");
+        },
+      },
+      {
+        label: "Select model",
+        description: "Choose the model used for chat and quick actions",
+        run: async () => {
+          await vscode.commands.executeCommand("gitpilot.selectModelV2");
+        },
+      },
+      {
+        label: "Refresh project scan",
+        description: "Rebuild repo-aware context for the current workspace",
+        run: async () => {
+          clearProjectCaches();
+          await getProjectSnapshot(true);
+          vscode.window.showInformationMessage(
+            "GitPilot project scan refreshed."
+          );
+        },
+      }
     );
 
-    // ── Register providers ─────────────────────────────────────
-    const codeLensDisposable = vscode.languages.registerCodeLensProvider(
-        { scheme: 'file' },
-        codeLensProvider,
-    );
-    const codeActionDisposable = vscode.languages.registerCodeActionsProvider(
-        { scheme: 'file' },
-        new GitPilotCodeActionProvider(),
-        { providedCodeActionKinds: GitPilotCodeActionProvider.providedCodeActionKinds },
-    );
-    context.subscriptions.push(codeLensDisposable, codeActionDisposable);
+    const picked = await vscode.window.showQuickPick(choices, {
+      placeHolder: "GitPilot Setup Wizard — choose the next step",
+      title: "GitPilot Setup Wizard",
+      matchOnDescription: true,
+    });
 
-    // ── Register all command groups ────────────────────────────
-    registerChatCommands(context, client, chatProvider);
-    registerReviewCommands(context, chatProvider);
-    registerSecurityCommands(context, securityProvider);
-    registerSkillCommands(context, client, chatProvider);
-    registerServerCommands(context, client, chatProvider);
-    registerGitCommands(context, client, chatProvider);
+    if (!picked) {
+      return;
+    }
 
-    // ── Additional commands ────────────────────────────────────
-    context.subscriptions.push(
-        vscode.commands.registerCommand('gitpilot.showAgentFlow', () => {
-            AgentFlowPanel.show(client, context.extensionUri);
+    try {
+      await picked.run();
+      await refreshStatusAndBootstrap("setup-wizard");
+      vscode.window.showInformationMessage("GitPilot setup step completed.");
+    } catch (error: unknown) {
+      appendOutputError("[GitPilot] Setup wizard action failed", error);
+      vscode.window.showErrorMessage(errorTranslator.translate(error));
+    }
+  };
+
+  // ── V2 streaming support (additive) ──────────────────────────────────
+  // AbortController for the current SSE stream. Allows CANCEL_TASK to
+  // terminate a running agent request immediately.
+  let activeStreamAbort: AbortController | null = null;
+
+  /**
+   * Consume the backend SSE stream and forward each event to the webview.
+   * Returns the accumulated assistant text, or null if the stream failed
+   * (in which case the caller should fall back to batch mode).
+   */
+  const sendChatStreaming = async (
+    serverUrl: string,
+    sessionId: string,
+    message: string,
+    intent: string | undefined,
+  ): Promise<string | null> => {
+    activeStreamAbort = new AbortController();
+    const signal = activeStreamAbort.signal;
+
+    let res: Response;
+    try {
+      res = await fetch(`${serverUrl}/api/v2/chat/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sessionId,
+          message,
+          permission_mode: "normal",
         }),
+        signal,
+      });
+    } catch {
+      // Server doesn't support v2 or network error — fall back
+      return null;
+    }
 
-        vscode.commands.registerCommand('gitpilot.refreshSessions', () => {
-            sessionsTree.refresh();
-        }),
+    if (!res.ok || !res.body) {
+      return null;
+    }
 
-        vscode.commands.registerCommand('gitpilot.refreshSkills', () => {
-            skillsTree.refresh();
-        }),
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let fullText = "";
+    let buffer = "";
 
-        vscode.commands.registerCommand('gitpilot.runCommand', async () => {
-            const command = await vscode.window.showInputBox({
-                prompt: 'Enter command to run via GitPilot',
-                placeHolder: 'e.g., npm test',
-            });
-            if (!command) { return; }
-            chatProvider.sendMessageFromCommand(`Run this command: ${command}`);
-            vscode.commands.executeCommand('gitpilot.chatView.focus');
-        }),
-    );
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-    // ── Configuration change handling ──────────────────────────
-    context.subscriptions.push(
-        onConfigChange((newConfig) => {
-            client.setServerUrl(newConfig.serverUrl);
-            client.setToken(newConfig.githubToken);
-            codeLensProvider.setEnabled(newConfig.showInlineHints);
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() || "";
 
-            if (newConfig.scanOnSave) {
-                securityProvider.enableScanOnSave();
+        for (const part of parts) {
+          if (!part.startsWith("data: ")) continue;
+          let event: Record<string, unknown>;
+          try {
+            event = JSON.parse(part.slice(6));
+          } catch {
+            continue;
+          }
+
+          const type = String(event.type || "");
+
+          if (type === "text_delta") {
+            fullText += String(event.text || "");
+            postMessageToPanel({
+              type: "CHAT_STREAM_CHUNK",
+              payload: { content: String(event.text || "") },
+            } as ExtensionToWebviewMessage);
+          } else if (type === "tool_start") {
+            postMessageToPanel({
+              type: "AGENT_TOOL_ACTIVITY",
+              payload: {
+                id: String(event.tool_id || event.id || ""),
+                name: String(event.name || ""),
+                status: "running" as const,
+                args: (event.arguments || {}) as Record<string, unknown>,
+              },
+            } as ExtensionToWebviewMessage);
+          } else if (type === "tool_result") {
+            postMessageToPanel({
+              type: "AGENT_TOOL_ACTIVITY",
+              payload: {
+                id: String(event.tool_id || event.id || ""),
+                name: String(event.name || ""),
+                status: event.is_error ? "failed" as const : "completed" as const,
+                result: String(event.result || "").slice(0, 500),
+                is_error: Boolean(event.is_error),
+              },
+            } as ExtensionToWebviewMessage);
+          } else if (type === "approval_needed") {
+            postMessageToPanel({
+              type: "TOOL_APPROVAL_REQUEST",
+              payload: {
+                id: String(event.request_id || ""),
+                tool: String(event.tool || ""),
+                args: (event.arguments || {}) as Record<string, unknown>,
+                summary: String(event.summary || ""),
+                diffPreview: event.diff_preview ? String(event.diff_preview) : undefined,
+                riskLevel: (String(event.risk_level || "medium")) as "low" | "medium" | "high",
+              },
+            } as ExtensionToWebviewMessage);
+          } else if (type === "plan_step") {
+            postMessageToPanel({
+              type: "PLAN_STEP_UPDATE",
+              payload: {
+                stepIndex: Number(event.step_index || 0),
+                stepTitle: String(event.title || ""),
+                action: String(event.action || ""),
+                status: String(event.status || "pending"),
+              },
+            } as ExtensionToWebviewMessage);
+          } else if (type === "terminal_output") {
+            postMessageToPanel({
+              type: "TERMINAL_OUTPUT",
+              payload: {
+                stream: String(event.stream || "stdout") as "stdout" | "stderr" | "exit",
+                text: String(event.text || ""),
+              },
+            } as ExtensionToWebviewMessage);
+          } else if (type === "terminal_exit") {
+            postMessageToPanel({
+              type: "TERMINAL_OUTPUT",
+              payload: {
+                stream: "exit" as const,
+                text: `\n[Process exited with code ${event.exit_code ?? -1}]`,
+                exitCode: Number(event.exit_code ?? -1),
+              },
+            } as ExtensionToWebviewMessage);
+          } else if (type === "test_result") {
+            postMessageToPanel({
+              type: "TEST_RESULT",
+              payload: {
+                framework: String(event.framework || "unknown"),
+                passed: Number(event.passed || 0),
+                failed: Number(event.failed || 0),
+                skipped: Number(event.skipped || 0),
+                exitCode: Number(event.exit_code || 0),
+              },
+            } as ExtensionToWebviewMessage);
+          } else if (type === "diagnostics") {
+            postMessageToPanel({
+              type: "DIAGNOSTICS_RESULT",
+              payload: {
+                errors: Number(event.errors || 0),
+                warnings: Number(event.warnings || 0),
+                entries: Array.isArray(event.entries) ? event.entries as Array<{ file: string; line: number; severity: string; message: string }> : [],
+              },
+            } as ExtensionToWebviewMessage);
+          } else if (type === "status_change" && event.status !== "keepalive") {
+            // Update task status in state store
+            const statusMap: Record<string, string> = {
+              planning: "planning",
+              generating: "generating",
+              executing: "generating",
+              reviewing: "reviewing",
+              done: "done",
+            };
+            const mapped = statusMap[String(event.status)] || undefined;
+            if (mapped) {
+              stateStore.updateActiveTask({
+                ...(stateStore.state.activeTask || {}),
+                status: mapped as any,
+              });
             }
-        }),
-    );
+          } else if (type === "done") {
+            postMessageToPanel({
+              type: "CHAT_STREAM_END",
+              payload: { usage: (event.usage || {}) as any },
+            } as ExtensionToWebviewMessage);
+          } else if (type === "error") {
+            postMessageToPanel({
+              type: "ERROR",
+              payload: {
+                code: "AGENT_ERROR",
+                title: "Agent Error",
+                message: String(event.error || "Unknown error"),
+                recoverable: Boolean(event.recoverable ?? true),
+              },
+            } as ExtensionToWebviewMessage);
+          }
+        }
+      }
+    } catch (err: unknown) {
+      if (signal.aborted) {
+        output.appendLine("[GitPilot] SSE stream cancelled by user");
+      } else {
+        output.appendLine(`[GitPilot] SSE stream error: ${err}`);
+      }
+    } finally {
+      activeStreamAbort = null;
+    }
 
-    // ── Security scan on save (if enabled) ─────────────────────
-    if (config.scanOnSave) {
+    return fullText || null;
+  };
+
+  const sendChatToBackend = async (rawText: string): Promise<void> => {
+    const text = rawText.trim();
+    if (!text) {
+      return;
+    }
+
+    const userMessage: ChatMessageState = {
+      id: `user:${Date.now()}`,
+      role: "user",
+      content: text,
+      createdAt: new Date().toISOString(),
+    };
+
+    appendChatMessageToState(userMessage);
+
+    const currentTask = stateStore.state.activeTask || {};
+    stateStore.updateActiveTask({
+      ...currentTask,
+      status:
+        currentTask.status && currentTask.status !== "idle"
+          ? currentTask.status
+          : "planning",
+      title: currentTask.title || "Working on your request",
+      summary:
+        currentTask.summary || "GitPilot is analyzing the repository context.",
+    });
+
+    const sessionId = await ensureSessionReady();
+
+    if (!sessionId) {
+      postErrorToPanel({
+        code: "SESSION_NOT_READY",
+        title: "GitPilot is finishing setup",
+        message: "A session is being prepared. Please try again in a moment.",
+      });
+      return;
+    }
+
+    try {
+      const { intent, cleanMessage } = detectIntent(text);
+      const normalizedMessage = cleanMessage || text;
+      const intentPrefix = buildIntentPrefix(intent);
+
+      const structuredContext = await buildStructuredContext(
+        normalizedMessage,
+        intent
+      );
+
+      const enrichedMessage = intentPrefix
+        ? `[${intentPrefix}]\n\n${structuredContext.legacy_prompt}`
+        : structuredContext.legacy_prompt;
+
+      const workflowMode = stateStore.state.workflow.selectedMode;
+      const topologyId =
+        workflowMode && workflowMode !== "auto" ? workflowMode : undefined;
+
+      // ── Try V2 SSE streaming first, fall back to batch ──
+      const serverUrl = client.serverUrl;
+      const streamedText = await sendChatStreaming(
+        serverUrl,
+        sessionId,
+        enrichedMessage,
+        intent
+      );
+
+      if (streamedText !== null) {
+        // Streaming succeeded — finalize state
+        const assistantMessage: ChatMessageState = {
+          id: `assistant:${Date.now()}`,
+          role: "assistant",
+          content: streamedText,
+          createdAt: new Date().toISOString(),
+        };
+        appendChatMessageToState(assistantMessage);
+
+        stateStore.updateActiveTask({
+          ...(stateStore.state.activeTask || {}),
+          status: "done",
+          summary: streamedText.slice(0, 500) || "GitPilot completed the request.",
+        });
+
+        output.appendLine(
+          `[GitPilot] Streamed response received (${streamedText.length} chars). intent=${intent} session=${sessionId}`
+        );
+      } else {
+        // Streaming unavailable — fall back to batch mode (original path)
+        output.appendLine(
+          "[GitPilot] SSE streaming unavailable, falling back to batch mode"
+        );
+
+        const response = await chatClientV2.sendMessage({
+          session_id: sessionId,
+          message: enrichedMessage,
+          topology_id: topologyId,
+          intent,
+          project_context: structuredContext.project_context,
+          working_set: structuredContext.working_set,
+          task_context: structuredContext.task_context,
+        });
+
+        const normalizedPlan = toPlanSummary(response.plan);
+
+        const assistantMessage: ChatMessageState = {
+          id: response.message_id || `assistant:${Date.now()}`,
+          role: "assistant",
+          content: response.answer,
+          createdAt: new Date().toISOString(),
+          plan: normalizedPlan,
+        };
+
+        appendChatMessageToState(assistantMessage);
+        syncResponsePlanToState(response);
+
+        const updatedTask = stateStore.state.activeTask || {};
+        stateStore.updateActiveTask({
+          ...updatedTask,
+          status: normalizedPlan ? "ready_to_apply" : "done",
+          summary:
+            normalizedPlan?.summary ||
+            updatedTask.summary ||
+            "GitPilot completed the request.",
+        });
+
+        output.appendLine(
+          `[GitPilot] Chat response received. intent=${intent} session=${sessionId}`
+        );
+      }
+    } catch (error: unknown) {
+      appendOutputError("[GitPilot] Chat request failed", error);
+
+      stateStore.updateActiveTask({
+        ...(stateStore.state.activeTask || {}),
+        status: "failed",
+      });
+
+      postErrorToPanel({
+        code: "CHAT_ERROR",
+        title: "Chat Error",
+        message: errorTranslator.translate(error),
+      });
+    }
+  };
+
+  const buildQuickActionPrompt = async (
+    action: QuickActionId
+  ): Promise<string | undefined> => {
+    const ctx = getCurrentFileContext();
+    const snapshot = await getProjectSnapshot(false);
+    const repoName =
+      snapshot?.repoName ||
+      stateStore.state.workspace.git.repoName ||
+      stateStore.state.workspace.folderName ||
+      "current repository";
+
+    switch (action) {
+      case "explain_project":
+        return [
+          `Explain the current project "${repoName}".`,
+          "Use the repository tree, README, manifests, and current workspace context.",
+          "Describe:",
+          "1. the project purpose",
+          "2. the main modules and folders",
+          "3. the architecture and runtime flow",
+          "4. the developer workflow",
+          "5. how a new developer should get started quickly",
+          "Do not say that project context is missing unless the repo snapshot is genuinely empty.",
+        ].join("\n");
+
+      case "review_file": {
+        if (!ctx.fileName) {
+          vscode.window.showWarningMessage("Open a file first.");
+          return undefined;
+        }
+
+        const fullText = ctx.fullText;
+
+        return [
+          "Review the current file for bugs, maintainability issues, risky code paths, and refactoring opportunities.",
+          `File: ${ctx.fileName}`,
+          ctx.selectionText
+            ? `Focus especially on this selected code:\n\`\`\`${ctx.languageId || ""}\n${ctx.selectionText}\n\`\`\``
+            : fullText
+              ? `Review the full file content:\n\`\`\`${ctx.languageId || ""}\n${fullText}\n\`\`\``
+              : "Review the full file using available workspace context.",
+          "Be concrete and prioritize the most important issues first.",
+        ].join("\n\n");
+      }
+
+      case "fix_selection": {
+        if (!ctx.fileName) {
+          vscode.window.showWarningMessage("Open a file first.");
+          return undefined;
+        }
+        if (!ctx.selectionText?.trim()) {
+          vscode.window.showWarningMessage("Select some code first.");
+          return undefined;
+        }
+
+        return [
+          `Fix the selected code in ${ctx.fileName}.`,
+          "Explain the issue briefly, then provide the corrected version.",
+          `Selected code:\n\`\`\`${ctx.languageId || ""}\n${ctx.selectionText}\n\`\`\``,
+        ].join("\n\n");
+      }
+
+      case "generate_tests": {
+        if (!ctx.fileName) {
+          return [
+            "Generate useful automated tests for the current project.",
+            "Focus on realistic edge cases, failure paths, and key business logic.",
+            "Infer the likely testing framework from the repository manifests and structure.",
+          ].join("\n\n");
+        }
+
+        const fullText = ctx.fullText;
+
+        return [
+          `Generate useful automated tests for ${ctx.fileName}.`,
+          "Focus on realistic edge cases, failure paths, and core business logic.",
+          ctx.selectionText
+            ? `Prioritize this selected code:\n\`\`\`${ctx.languageId || ""}\n${ctx.selectionText}\n\`\`\``
+            : fullText
+              ? `Use this file as the primary context:\n\`\`\`${ctx.languageId || ""}\n${fullText}\n\`\`\``
+              : "Use the current file as the primary context.",
+        ].join("\n\n");
+      }
+
+      case "security_scan":
+        return [
+          `Review the current project "${repoName}" for security issues.`,
+          "Check for secrets exposure, unsafe code, risky defaults, insecure dependencies, insecure auth flows, injection risks, and attack surfaces.",
+          "Prioritize findings by severity and explain concrete remediation steps.",
+        ].join("\n\n");
+
+      default:
+        return undefined;
+    }
+  };
+
+  client.onStateChange((connectionState) => {
+    const connected = connectionState === "connected";
+
+    statusBar.update(connectionState);
+    legacyChatProvider.updateConnectionState(connected);
+    stateStore.updateServer({ connected });
+
+    if (!connected) {
+      return;
+    }
+
+    sessionsTree.refresh();
+    skillsTree.refresh();
+
+    void refreshStatusAndBootstrap("client-connected");
+  });
+
+  gitpilotPanel = new GitPilotPanel(
+    context.extensionUri,
+    stateStore,
+    async (msg) => {
+      try {
+        switch (msg.type) {
+          case "INIT":
+            void refreshStatusAndBootstrap("webview-init");
+            return;
+
+          case "START_SESSION":
+            await sessionCoordinator.startSession(
+              msg.payload.mode as WorkspaceMode
+            );
+            await vscode.commands.executeCommand("gitpilot.refreshStatus");
+            return;
+
+          case "CHANGE_MODE":
+            stateStore.updateWorkspace({ mode: msg.payload.mode });
+            clearProjectCaches();
+            return;
+
+          case "SEND_CHAT":
+            await sendChatToBackend(msg.payload.text);
+            return;
+
+          case "RUN_QUICK_ACTION": {
+            const prompt = await buildQuickActionPrompt(
+              msg.payload.action as QuickActionId
+            );
+
+            if (!prompt) {
+              return;
+            }
+
+            await sendChatToBackend(prompt);
+            return;
+          }
+
+          case "OPEN_SETTINGS":
+            await vscode.commands.executeCommand(
+              "workbench.action.openSettings",
+              "@ext:ruslanmv.gitpilot-vscode"
+            );
+            return;
+
+          case "OPEN_WORKSPACE":
+            await vscode.commands.executeCommand(
+              "workbench.action.files.openFolder"
+            );
+            return;
+
+          case "OPEN_ADMIN_UI":
+            await vscode.commands.executeCommand("gitpilot.showServerInfo");
+            return;
+
+          case "OPEN_PROVIDER_SETUP":
+            await vscode.commands.executeCommand("gitpilot.selectProviderV2");
+            return;
+
+          case "OPEN_MODEL_SETUP":
+            await vscode.commands.executeCommand("gitpilot.selectModelV2");
+            return;
+
+          case "OPEN_LLM_SETTINGS":
+            await vscode.commands.executeCommand("gitpilot.openLlmSettings");
+            return;
+
+          case "SET_WORKFLOW_MODE": {
+            const selectedMode = msg.payload.mode;
+
+            stateStore.updateWorkflow({
+              selectedMode,
+              source: selectedMode === "auto" ? "auto" : "user",
+            });
+
+            if (selectedMode !== "auto") {
+              try {
+                await client.setTopology(selectedMode);
+              } catch {
+                output.appendLine(
+                  `[GitPilot] Warning: failed to persist topology "${selectedMode}" to backend.`
+                );
+              }
+            }
+
+            return;
+          }
+
+          case "REFRESH_STATUS":
+            await vscode.commands.executeCommand("gitpilot.refreshStatus");
+            return;
+
+          case "OPEN_SETUP_WIZARD":
+            await vscode.commands.executeCommand("gitpilot.setupWizard");
+            return;
+
+          case "REFRESH_PROJECT_CONTEXT":
+            await vscode.commands.executeCommand(
+              "gitpilot.refreshProjectContext"
+            );
+            return;
+
+          case "OPEN_CHANGED_FILE": {
+            const folderPath = stateStore.state.workspace.folderPath;
+            if (!folderPath) {
+              vscode.window.showWarningMessage(
+                "No workspace folder is currently open."
+              );
+              return;
+            }
+
+            const fileUri = vscode.Uri.file(
+              path.join(folderPath, msg.payload.path)
+            );
+            await vscode.commands.executeCommand("vscode.open", fileUri);
+            return;
+          }
+
+          case "OPEN_CHANGED_DIFF":
+            await vscode.commands.executeCommand(
+              "gitpilot.openChangedDiff",
+              msg.payload.path
+            );
+            return;
+
+          case "APPLY_PROPOSED_CHANGES":
+            await vscode.commands.executeCommand("gitpilot.applyProposedChanges");
+            return;
+
+          case "REVERT_PROPOSED_CHANGES":
+            await vscode.commands.executeCommand("gitpilot.revertProposedChanges");
+            return;
+
+          case "REVEAL_FILE": {
+            const folderPath = currentWorkspaceRoot();
+            if (!folderPath) {
+              postErrorToPanel({
+                code: "NO_WORKSPACE_ROOT",
+                title: "Reveal Failed",
+                message: "No workspace folder is currently open.",
+              });
+              return;
+            }
+
+            const fileUri = vscode.Uri.file(
+              path.join(folderPath, msg.payload.path)
+            );
+            await vscode.commands.executeCommand("revealInExplorer", fileUri);
+            return;
+          }
+
+          case "REGENERATE_TASK_PLAN":
+            await vscode.commands.executeCommand("gitpilot.regenerateTaskPlan");
+            return;
+
+          // ── V2 streaming messages ──
+          case "TOOL_APPROVAL_RESPONSE": {
+            const { id: approvalId, approved, scope } = msg.payload;
+            output.appendLine(
+              `[GitPilot] Approval response: ${approvalId} approved=${approved} scope=${scope}`
+            );
+            // Forward to backend approval endpoint
+            try {
+              const serverUrl = client.serverUrl;
+              const sessionId = stateStore.state.session.sessionId || "";
+              void fetch(`${serverUrl}/api/v2/approval/respond`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  session_id: sessionId,
+                  request_id: approvalId,
+                  approved,
+                  scope: scope || "once",
+                }),
+              });
+            } catch (err) {
+              output.appendLine(`[GitPilot] Approval forward failed: ${err}`);
+            }
+            return;
+          }
+
+          case "CANCEL_TASK":
+            output.appendLine("[GitPilot] Cancel task requested");
+            if (activeStreamAbort) {
+              activeStreamAbort.abort();
+              activeStreamAbort = null;
+            }
+            stateStore.updateActiveTask({
+              ...(stateStore.state.activeTask || {}),
+              status: "failed",
+              error: "Cancelled by user",
+            });
+            return;
+
+          default: {
+            const exhaustiveCheck: never = msg;
+            void exhaustiveCheck;
+            return;
+          }
+        }
+      } catch (error: unknown) {
+        appendOutputError("[GitPilot] Webview message handling error", error);
+
+        postErrorToPanel({
+          code: "WEBVIEW_ACTION_ERROR",
+          title: "Action Error",
+          message: errorTranslator.translate(error),
+        });
+      }
+    }
+  );
+
+  context.subscriptions.push(
+    gitpilotPanel,
+    vscode.window.registerWebviewViewProvider(
+      GitPilotPanel.viewType,
+      gitpilotPanel
+    )
+  );
+
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider(
+      "gitpilot.sessionsView",
+      sessionsTree
+    ),
+    vscode.window.registerTreeDataProvider("gitpilot.skillsView", skillsTree)
+  );
+
+  context.subscriptions.push(
+    vscode.languages.registerCodeLensProvider(
+      { scheme: "file" },
+      codeLensProvider
+    ),
+    vscode.languages.registerCodeActionsProvider(
+      { scheme: "file" },
+      new GitPilotCodeActionProvider(),
+      {
+        providedCodeActionKinds:
+          GitPilotCodeActionProvider.providedCodeActionKinds,
+      }
+    )
+  );
+
+  registerChatCommands(context, client, legacyChatProvider);
+  registerReviewCommands(context, legacyChatProvider);
+  registerSecurityCommands(context, securityProvider);
+  registerSkillCommands(context, client, legacyChatProvider);
+  registerServerCommands(context, client, legacyChatProvider);
+  registerGitCommands(context, client, legacyChatProvider);
+
+  registerWorkspaceCommands(
+    context,
+    stateStore,
+    workspaceResolver,
+    gitContextService,
+    modeResolver,
+    readinessEvaluator,
+    statusClient
+  );
+  registerSetupCommands(context, stateStore);
+  registerProviderCommands(context, stateStore, settingsClient);
+  registerSessionCommands(context, stateStore, sessionCoordinator);
+  registerChatCommandsV2(context, stateStore, chatClientV2);
+
+  registerCommand("gitpilot.showAgentFlow", () => {
+    AgentFlowPanel.show(client, context.extensionUri);
+  });
+
+  registerCommand("gitpilot.refreshSessions", () => {
+    sessionsTree.refresh();
+  });
+
+  registerCommand("gitpilot.refreshSkills", () => {
+    skillsTree.refresh();
+  });
+
+  registerCommand("gitpilot.runCommand", async () => {
+    const command = await vscode.window.showInputBox({
+      prompt: "Enter command to run via GitPilot",
+      placeHolder: "e.g. npm test",
+      ignoreFocusOut: true,
+    });
+
+    if (!command) {
+      return;
+    }
+
+    legacyChatProvider.sendMessageFromCommand(`Run this command: ${command}`);
+    await vscode.commands.executeCommand("gitpilot.chatView.focus");
+  });
+
+  registerCommand("gitpilot.setupWizard", async () => {
+    await runSetupWizard();
+  });
+
+  registerCommand("gitpilot.refreshProjectContext", async () => {
+    clearProjectCaches();
+    await getProjectSnapshot(true);
+    vscode.window.showInformationMessage("GitPilot project context refreshed.");
+  });
+
+  registerCommand("gitpilot.openChangedDiff", async (relativePath?: unknown) => {
+    const folderPath = stateStore.state.workspace.folderPath;
+    if (!folderPath || typeof relativePath !== "string" || !relativePath) {
+      vscode.window.showWarningMessage(
+        "Unable to open diff. No workspace folder or target file was provided."
+      );
+      return;
+    }
+
+    const filePath = path.join(folderPath, relativePath);
+    const fileUri = vscode.Uri.file(filePath);
+    await vscode.commands.executeCommand("vscode.open", fileUri);
+  });
+
+  registerCommand("gitpilot.applyProposedChanges", async () => {
+    const task = stateStore.state.activeTask;
+    const edits = task?.edits || [];
+    const folderPath = stateStore.state.workspace.folderPath;
+
+    if (!edits.length) {
+      vscode.window.showInformationMessage("No proposed changes to apply.");
+      return;
+    }
+
+    if (!folderPath) {
+      vscode.window.showWarningMessage("No workspace folder open.");
+      return;
+    }
+
+    try {
+      stateStore.setTaskStatus("applying");
+      const { PatchApplier } = await import("./services/patch/patchApplier");
+      const patchApplier = new PatchApplier();
+      const result = await patchApplier.apply(folderPath, edits);
+      stateStore.setTaskStatus(result.success ? "done" : "failed");
+      output.appendLine(`[GitPilot] Apply result: ${result.success ? "success" : "failed"} (${result.appliedFiles?.length ?? 0} files)`);
+    } catch (err) {
+      stateStore.setTaskStatus("failed");
+      appendOutputError("[GitPilot] Apply failed", err);
+      vscode.window.showErrorMessage(`Failed to apply changes: ${err}`);
+    }
+  });
+
+  registerCommand("gitpilot.regenerateTaskPlan", async () => {
+    const task = stateStore.state.activeTask;
+    if (!task?.title && !task?.summary) {
+      vscode.window.showInformationMessage("No active task to regenerate a plan for.");
+      return;
+    }
+
+    const prompt = task.title || task.summary || "Regenerate the current task plan";
+    stateStore.setTaskStatus("planning");
+    await sendChatToBackend(`[Regenerate plan] ${prompt}`);
+  });
+
+  registerCommand("gitpilot.explain_project", async () => {
+    const prompt = await buildQuickActionPrompt("explain_project");
+    if (prompt) {
+      await sendChatToBackend(prompt);
+    }
+  });
+
+  registerCommand("gitpilot.review_file", async () => {
+    const prompt = await buildQuickActionPrompt("review_file");
+    if (prompt) {
+      await sendChatToBackend(prompt);
+    }
+  });
+
+  registerCommand("gitpilot.fix_selection", async () => {
+    const prompt = await buildQuickActionPrompt("fix_selection");
+    if (prompt) {
+      await sendChatToBackend(prompt);
+    }
+  });
+
+  registerCommand("gitpilot.generate_tests", async () => {
+    const prompt = await buildQuickActionPrompt("generate_tests");
+    if (prompt) {
+      await sendChatToBackend(prompt);
+    }
+  });
+
+  registerCommand("gitpilot.security_scan", async () => {
+    const prompt = await buildQuickActionPrompt("security_scan");
+    if (prompt) {
+      await sendChatToBackend(prompt);
+    }
+  });
+
+  context.subscriptions.push(
+    onConfigChange((newConfig) => {
+      output.appendLine("[GitPilot] Configuration updated.");
+
+      client.setServerUrl(newConfig.serverUrl);
+      client.setToken(newConfig.githubToken);
+      codeLensProvider.setEnabled(newConfig.showInlineHints);
+
+      if (newConfig.scanOnSave) {
         securityProvider.enableScanOnSave();
-    }
+      }
 
-    // ── Disposables ────────────────────────────────────────────
-    context.subscriptions.push(statusBar, securityProvider, { dispose: () => client.dispose() });
+      void refreshStatusAndBootstrap("config-change");
+    })
+  );
 
-    // ── Auto-connect ───────────────────────────────────────────
-    if (config.autoConnect) {
-        client.connect().then((connected) => {
-            if (connected) {
-                const channel = vscode.window.createOutputChannel('GitPilot');
-                channel.appendLine(`Connected to GitPilot server at ${config.serverUrl}`);
-            }
-        });
-    }
+  if (config.scanOnSave) {
+    securityProvider.enableScanOnSave();
+  }
 
-    // ── Git repo detection ─────────────────────────────────────
-    // Check workspace for git repo; prompt to initialize if missing
-    const wsCtx = getWorkspaceContext();
-    if (wsCtx.workspaceRoot && !wsCtx.isGitRepo) {
-        // Defer prompt slightly so VS Code is fully loaded
-        setTimeout(() => { ensureGitRepo(); }, 3000);
-    }
-    if (wsCtx.workspaceRoot) {
-        const channel = vscode.window.createOutputChannel('GitPilot');
-        if (wsCtx.isGitRepo) {
-            channel.appendLine(`Workspace: ${wsCtx.repoOwner}/${wsCtx.repoName} (branch: ${wsCtx.branch || 'HEAD'})`);
-        } else {
-            channel.appendLine(`Workspace: ${wsCtx.workspaceRoot} (no git repo detected)`);
-        }
-    }
-
-    // ─── Redesigned Service Layer (Phase 1–4) ──────────────
-
-    // Core state
-    const stateStore = new StateStore();
-    const events = new GitPilotEvents();
-    context.subscriptions.push(stateStore, events);
-
-    // Split API clients
-    const statusClient = new StatusClient(client);
-    const sessionClient = new SessionClient(client);
-    const chatClientV2 = new ChatClient(client);
-    const settingsClient = new SettingsClient(client);
-    const repoClient = new RepoClient(client);
-
-    // Domain services
-    const workspaceResolver = new WorkspaceResolver();
-    const gitContextService = new GitContextService();
-    const modeResolver = new ModeResolver();
-    const readinessEvaluator = new ReadinessEvaluator();
-    const errorTranslator = new ErrorTranslator();
-    const sessionCoordinator = new SessionCoordinator(
-        sessionClient,
-        stateStore,
-        errorTranslator
-    );
-    context.subscriptions.push(workspaceResolver);
-
-    // Register redesigned webview panel
-    const gitpilotPanel = new GitPilotPanel(
-        context.extensionUri,
-        stateStore,
-        async (msg) => {
-            // Handle webview messages
-            switch (msg.type) {
-                case "START_SESSION":
-                    await sessionCoordinator.startSession(msg.payload.mode);
-                    break;
-                case "CHANGE_MODE":
-                    stateStore.updateWorkspace({ mode: msg.payload.mode });
-                    break;
-                case "SEND_CHAT":
-                    if (stateStore.state.session.sessionId) {
-                        try {
-                            // Intent detection: infer task from natural language
-                            const { intent, cleanMessage } = detectIntent(msg.payload.text);
-                            const intentPrefix = buildIntentPrefix(intent);
-
-                            // Build the message the LLM sees: intent context + user text
-                            const enrichedMessage = intentPrefix
-                                ? `[${intentPrefix}]\n\n${cleanMessage || msg.payload.text}`
-                                : msg.payload.text;
-
-                            // Resolve topology: explicit user selection, or let backend auto-detect
-                            const workflowMode = stateStore.state.workflow.selectedMode;
-                            const topologyId = workflowMode !== "auto" ? workflowMode : undefined;
-
-                            const resp = await chatClientV2.sendMessage({
-                                session_id: stateStore.state.session.sessionId,
-                                message: enrichedMessage,
-                                topology_id: topologyId,
-                            });
-                            gitpilotPanel.postMessage({
-                                type: "CHAT_RESPONSE",
-                                payload: {
-                                    id: resp.message_id || Date.now().toString(),
-                                    role: "assistant",
-                                    content: resp.answer,
-                                    createdAt: new Date().toISOString(),
-                                    plan: resp.plan,
-                                },
-                            });
-                        } catch (err: any) {
-                            gitpilotPanel.postMessage({
-                                type: "ERROR",
-                                payload: {
-                                    code: "CHAT_ERROR",
-                                    title: "Chat Error",
-                                    message: errorTranslator.translate(err),
-                                    recoverable: true,
-                                },
-                            });
-                        }
-                    }
-                    break;
-                case "RUN_QUICK_ACTION":
-                    vscode.commands.executeCommand(
-                        `gitpilot.${msg.payload.action}`
-                    );
-                    break;
-                case "OPEN_SETTINGS":
-                    // Legacy: keep for backwards compat, maps to workspace open
-                    vscode.commands.executeCommand("workbench.action.openFolder");
-                    break;
-                case "OPEN_WORKSPACE":
-                    vscode.commands.executeCommand("workbench.action.openFolder");
-                    break;
-                case "OPEN_ADMIN_UI":
-                    vscode.commands.executeCommand("gitpilot.showServerInfo");
-                    break;
-                case "OPEN_PROVIDER_SETUP":
-                    vscode.commands.executeCommand("gitpilot.selectProviderV2");
-                    break;
-                case "OPEN_MODEL_SETUP":
-                    vscode.commands.executeCommand("gitpilot.selectModelV2");
-                    break;
-                case "OPEN_LLM_SETTINGS":
-                    vscode.commands.executeCommand("gitpilot.openLlmSettings");
-                    break;
-                case "SET_WORKFLOW_MODE":
-                    stateStore.updateWorkflow({
-                        selectedMode: msg.payload.mode,
-                        source: msg.payload.mode === "auto" ? "auto" : "user",
-                    });
-                    // Persist to backend topology preference
-                    if (msg.payload.mode !== "auto") {
-                        try {
-                            await client.setTopology(msg.payload.mode);
-                        } catch {
-                            // Non-critical — preference persists locally even if backend is down
-                        }
-                    }
-                    break;
-                case "REFRESH_STATUS":
-                    vscode.commands.executeCommand("gitpilot.refreshStatus");
-                    break;
-            }
-        }
-    );
-    context.subscriptions.push(gitpilotPanel);
-
-    // Register redesigned webview as the real sidebar chat view.
-    context.subscriptions.push(
-        vscode.window.registerWebviewViewProvider(
-            GitPilotPanel.viewType,
-            gitpilotPanel
-        )
-    );
-
-    // Register redesigned commands
-    registerWorkspaceCommands(
-        context,
-        stateStore,
-        workspaceResolver,
-        gitContextService,
-        modeResolver,
-        readinessEvaluator,
-        statusClient
-    );
-    registerSetupCommands(context, stateStore);
-    registerProviderCommands(context, stateStore, settingsClient);
-    registerSessionCommands(context, stateStore, sessionCoordinator);
-    registerChatCommandsV2(context, stateStore, chatClientV2);
-
-    // Sync state from existing client state changes
-    client.onStateChange((connectionState: string) => {
-        stateStore.updateServer({
-            connected: connectionState === "connected",
-        });
-        if (connectionState === "connected") {
-            vscode.commands.executeCommand("gitpilot.refreshStatus");
-        }
+  if (config.autoConnect) {
+    void client.connect().then((connected) => {
+      if (connected) {
+        output.appendLine(
+          `[GitPilot] Connected to server at ${config.serverUrl}`
+        );
+        void refreshStatusAndBootstrap("auto-connect");
+      } else {
+        output.appendLine(
+          `[GitPilot] Auto-connect failed for ${config.serverUrl}`
+        );
+      }
     });
+  }
 
-    // Initial state sync
-    const wsInfo = workspaceResolver.resolve();
-    stateStore.updateWorkspace({
-        folderOpen: wsInfo.folderOpen,
-        folderPath: wsInfo.folderPath,
-        folderName: wsInfo.folderName,
-    });
+  void initializeWorkspaceState({
+    output,
+    stateStore,
+    workspaceResolver,
+    gitContextService,
+  }).then(async () => {
+    clearProjectCaches();
+    await getProjectSnapshot(true);
+    void refreshStatusAndBootstrap("initial-workspace-sync");
+  });
 
-    // Workspace change listener
-    context.subscriptions.push(
-        workspaceResolver.onDidChange(async (info) => {
-            stateStore.updateWorkspace({
-                folderOpen: info.folderOpen,
-                folderPath: info.folderPath,
-                folderName: info.folderName,
-            });
-            if (info.folderPath) {
-                const gitCtx = await gitContextService.detect(info.folderPath);
-                stateStore.updateWorkspace({ git: gitCtx });
-            }
-            vscode.commands.executeCommand("gitpilot.refreshStatus");
-        })
+  context.subscriptions.push(
+    workspaceResolver.onDidChange(async (info) => {
+      stateStore.updateWorkspace({
+        folderOpen: info.folderOpen,
+        folderPath: info.folderPath,
+        folderName: info.folderName,
+      });
+
+      clearProjectCaches();
+
+      if (info.folderPath) {
+        try {
+          const gitContext = await gitContextService.detect(info.folderPath);
+          stateStore.updateWorkspace({ git: gitContext });
+        } catch (error: unknown) {
+          appendOutputError("[GitPilot] Failed to refresh git context", error);
+        }
+      }
+
+      await getProjectSnapshot(true);
+      await refreshStatusAndBootstrap("workspace-change");
+    })
+  );
+
+  const workspaceContext = getWorkspaceContext();
+
+  if (workspaceContext.workspaceRoot && !workspaceContext.isGitRepo) {
+    output.appendLine(
+      "[GitPilot] Folder mode detected. Git initialization is available from the Setup Wizard."
     );
+  }
+
+  if (workspaceContext.workspaceRoot) {
+    if (workspaceContext.isGitRepo) {
+      output.appendLine(
+        `[GitPilot] Workspace: ${workspaceContext.repoOwner}/${workspaceContext.repoName} (branch: ${workspaceContext.branch || "HEAD"})`
+      );
+    } else {
+      output.appendLine(
+        `[GitPilot] Workspace: ${workspaceContext.workspaceRoot} (no git repo detected)`
+      );
+    }
+  }
+
+  if (!isWorkspaceTrusted()) {
+    output.appendLine(
+      "[GitPilot] Workspace is not trusted. Some features may be limited."
+    );
+  }
+
+  void logCommandAvailability();
+
+  output.appendLine("[GitPilot] Extension activated.");
 }
 
-export function deactivate() {}
+export function deactivate(): void {
+  // VS Code disposes registered resources automatically.
+}
+
+async function initializeWorkspaceState(args: {
+  output: vscode.OutputChannel;
+  stateStore: StateStore;
+  workspaceResolver: WorkspaceResolver;
+  gitContextService: GitContextService;
+}): Promise<void> {
+  const { output, stateStore, workspaceResolver, gitContextService } = args;
+
+  const workspaceInfo = workspaceResolver.resolve();
+
+  stateStore.updateWorkspace({
+    folderOpen: workspaceInfo.folderOpen,
+    folderPath: workspaceInfo.folderPath,
+    folderName: workspaceInfo.folderName,
+  });
+
+  if (!workspaceInfo.folderPath) {
+    return;
+  }
+
+  try {
+    const gitContext = await gitContextService.detect(workspaceInfo.folderPath);
+    stateStore.updateWorkspace({ git: gitContext });
+  } catch (error: unknown) {
+    output.appendLine(
+      `[GitPilot] Failed to detect initial git context: ${String(error)}`
+    );
+  }
+}
