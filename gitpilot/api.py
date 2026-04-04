@@ -21,7 +21,7 @@ from .github_api import (
     github_request,
 )
 from .github_app import check_repo_write_access
-from .settings import AppSettings, get_settings, set_provider, update_settings, LLMProvider
+from .settings import AppSettings, get_settings, set_provider, update_settings, autoconfigure_local_provider, LLMProvider
 from .agentic import (
     generate_plan,
     execute_plan,
@@ -53,7 +53,11 @@ from .topology_registry import (
     get_saved_topology_preference,
     save_topology_preference,
 )
+import httpx
+import logging
+from fastapi import HTTPException
 
+logger = logging.getLogger(__name__)
 
 def _is_lite_mode_active() -> bool:
     """Check if Lite Mode should be used.
@@ -62,7 +66,7 @@ def _is_lite_mode_active() -> bool:
     - settings.lite_mode is True (explicit toggle), OR
     - the saved topology preference is "lite_mode" (selected in flow viewer)
     """
-    s = get_settings()
+    s = autoconfigure_local_provider()
     if s.lite_mode:
         return True
     pref = get_saved_topology_preference()
@@ -203,6 +207,110 @@ app.add_middleware(
 )
 
 
+def _project_context_to_text(project_context) -> str:
+    if not project_context:
+        return ""
+
+    parts = []
+    mode = getattr(project_context, "mode", None)
+    repo_name = getattr(project_context, "repoName", None)
+    branch = getattr(project_context, "branch", None)
+    languages = getattr(project_context, "languages", []) or []
+    manifests = getattr(project_context, "manifests", []) or []
+    key_files = getattr(project_context, "keyFiles", []) or []
+    readme_preview = getattr(project_context, "readmePreview", None)
+    tree_summary = getattr(project_context, "treeSummary", []) or []
+
+    if mode:
+        parts.append(f"Mode: {mode}")
+    if repo_name:
+        parts.append(f"Repo: {repo_name}")
+    if branch:
+        parts.append(f"Branch: {branch}")
+    if languages:
+        parts.append("Languages: " + ", ".join(languages[:20]))
+    if manifests:
+        parts.append("Manifests: " + ", ".join(manifests[:20]))
+    if key_files:
+        parts.append("Key files: " + ", ".join(key_files[:30]))
+
+    if tree_summary:
+        rendered = []
+        for entry in tree_summary[:200]:
+            if isinstance(entry, dict):
+                rendered.append(f"- {entry.get('type', 'file')}: {entry.get('path', '')}")
+        if rendered:
+            parts.append("Project tree:\n" + "\n".join(rendered))
+
+    if readme_preview:
+        parts.append("README preview:\n" + readme_preview)
+
+    return "\n".join(parts)
+
+
+def _working_set_to_text(working_set) -> str:
+    if not working_set:
+        return ""
+
+    parts = []
+    current_file = getattr(working_set, "currentFile", None)
+    language_id = getattr(working_set, "languageId", None)
+    current_selection = getattr(working_set, "currentSelection", None)
+    open_tabs = getattr(working_set, "openTabs", []) or []
+    related_files = getattr(working_set, "relatedFiles", []) or []
+
+    if current_file:
+        parts.append(f"Current file: {current_file}")
+    if language_id:
+        parts.append(f"Language: {language_id}")
+    if open_tabs:
+        parts.append("Open tabs: " + ", ".join(open_tabs[:12]))
+    if related_files:
+        parts.append("Related files: " + ", ".join(related_files[:12]))
+    if current_selection:
+        parts.append("Selected code:\n```\n" + current_selection + "\n```")
+
+    return "\n".join(parts)
+
+
+def _build_local_repo_aware_prompt(req, session) -> str:
+    task_summary = getattr(getattr(req, "task_context", None), "summary", None)
+
+    sections = [
+        "You are GitPilot running in VS Code enterprise repo-aware mode.",
+        "Use the supplied repository metadata, working-set context, and user request to answer precisely.",
+        "When suggesting code changes, be explicit about which files to edit and why.",
+        "Prefer incremental, production-safe patches over large rewrites.",
+    ]
+
+    session_lines = [
+        f"Session mode: {getattr(session, 'mode', None)}",
+        f"Folder path: {getattr(session, 'folder_path', None)}",
+        f"Repo root: {getattr(session, 'repo_root', None)}",
+        f"Branch: {getattr(session, 'branch', None)}",
+    ]
+
+    valid_session_lines = [
+        line for line in session_lines if line and not line.endswith(": None")
+    ]
+    if valid_session_lines:
+        sections.append("Session context:\n" + "\n".join(valid_session_lines))
+
+    project_txt = _project_context_to_text(getattr(req, "project_context", None))
+    if project_txt:
+        sections.append("Project context:\n" + project_txt)
+
+    working_txt = _working_set_to_text(getattr(req, "working_set", None))
+    if working_txt:
+        sections.append("Working set:\n" + working_txt)
+
+    if task_summary:
+        sections.append("Task context:\n" + task_summary)
+
+    sections.append("User request:\n" + req.message)
+
+    return "\n\n---\n\n".join(sections)
+
 def get_github_token(authorization: Optional[str] = Header(None)) -> Optional[str]:
     """
     Extract GitHub token from Authorization header.
@@ -277,6 +385,7 @@ class SettingsResponse(BaseModel):
     claude: dict
     watsonx: dict
     ollama: dict
+    ollabridge: dict
     langflow_url: str
     has_langflow_plan_flow: bool
 
@@ -389,35 +498,28 @@ class SearchRequest(BaseModel):
 
 @app.get("/api/repos", response_model=PaginatedReposResponse)
 async def api_list_repos(
-    query: Optional[str] = Query(None, description="Search query (searches across ALL repositories)"),
-    page: int = Query(1, ge=1, description="Page number (starts at 1)"),
-    per_page: int = Query(100, ge=1, le=100, description="Results per page (max 100)"),
-    authorization: Optional[str] = Header(None),
+    query: str | None = Query(None, description="Search query"),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(100, ge=1, le=100),
+    authorization: str | None = Header(None),
 ):
-    """
-    List user repositories with enterprise-grade pagination and search.
-    Includes default_branch information for correct frontend routing.
-    """
     token = get_github_token(authorization)
 
     try:
         if query:
-            # SEARCH MODE: Search across ALL repositories
             result = await search_user_repos(
                 query=query,
                 page=page,
                 per_page=per_page,
-                token=token
+                token=token,
             )
         else:
-            # PAGINATION MODE: Return repos page by page
             result = await list_user_repos_paginated(
                 page=page,
                 per_page=per_page,
-                token=token
+                token=token,
             )
 
-        # --- FIXED: Mapping default_branch ---
         repos = [
             RepoSummary(
                 id=r["id"],
@@ -425,7 +527,7 @@ async def api_list_repos(
                 full_name=r["full_name"],
                 private=r["private"],
                 owner=r["owner"],
-                default_branch=r.get("default_branch", "main"),  # <--- CRITICAL FIX
+                default_branch=r.get("default_branch", "main"),
             )
             for r in result["repositories"]
         ]
@@ -439,19 +541,33 @@ async def api_list_repos(
             query=query,
         )
 
-    except Exception as e:
-        logging.exception("Error fetching repositories")
-        return JSONResponse(
-            content={
-                "error": f"Failed to fetch repositories: {str(e)}",
-                "repositories": [],
-                "page": page,
-                "per_page": per_page,
-                "has_more": False,
-            },
-            status_code=500
+    except httpx.ConnectTimeout:
+        logger.exception("GitHub connection timed out while fetching repositories")
+        raise HTTPException(
+            status_code=504,
+            detail="Timed out while connecting to GitHub. Please try again."
         )
 
+    except httpx.TimeoutException:
+        logger.exception("GitHub request timed out while fetching repositories")
+        raise HTTPException(
+            status_code=504,
+            detail="GitHub request timed out. Please try again."
+        )
+
+    except httpx.HTTPError as e:
+        logger.exception("GitHub HTTP error while fetching repositories")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to contact GitHub: {str(e)}"
+        )
+
+    except Exception as e:
+        logger.exception("Error fetching repositories")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unexpected error fetching repositories: {str(e)}"
+        )
 
 @app.get("/api/repos/all")
 async def api_list_all_repos(
@@ -587,19 +703,49 @@ async def api_put_file(
 # Settings Endpoints
 # ============================================================================
 
-@app.get("/api/settings", response_model=SettingsResponse)
-async def api_get_settings():
-    s: AppSettings = get_settings()
+def settings_response_from(s: AppSettings) -> SettingsResponse:
     return SettingsResponse(
         provider=s.provider,
-        providers=[LLMProvider.openai, LLMProvider.claude, LLMProvider.watsonx, LLMProvider.ollama],
+        providers=[
+            LLMProvider.openai,
+            LLMProvider.claude,
+            LLMProvider.watsonx,
+            LLMProvider.ollama,
+            LLMProvider.ollabridge,
+        ],
         openai=s.openai.model_dump(),
         claude=s.claude.model_dump(),
         watsonx=s.watsonx.model_dump(),
         ollama=s.ollama.model_dump(),
+        ollabridge=s.ollabridge.model_dump(),
         langflow_url=s.langflow_url,
         has_langflow_plan_flow=bool(s.langflow_plan_flow_id),
     )
+
+
+@app.get("/api/settings", response_model=SettingsResponse)
+async def api_get_settings():
+    """
+    Fast path:
+    Return persisted settings immediately without probing providers/models.
+
+    This keeps the Admin / LLM Settings page fast on first render.
+    """
+    s: AppSettings = get_settings()
+    return settings_response_from(s)
+
+
+@app.post("/api/settings/bootstrap", response_model=SettingsResponse)
+async def api_bootstrap_settings():
+    """
+    Slow path:
+    Perform local provider/model auto-configuration explicitly.
+
+    This can be called after the page renders, or on startup, without blocking
+    the first settings paint.
+    """
+    s: AppSettings = autoconfigure_local_provider()
+    return settings_response_from(s)
 
 
 @app.get("/api/settings/models", response_model=ProviderModelsResponse)
@@ -623,30 +769,41 @@ async def api_list_models(provider: Optional[LLMProvider] = Query(None)):
 
 @app.post("/api/settings/provider", response_model=SettingsResponse)
 async def api_set_provider(update: ProviderUpdate):
+    """
+    Provider changes may legitimately trigger local bootstrap, but only when
+    switching to local providers.
+    """
     s = set_provider(update.provider)
-    return SettingsResponse(
-        provider=s.provider,
-        providers=[LLMProvider.openai, LLMProvider.claude, LLMProvider.watsonx, LLMProvider.ollama],
-        openai=s.openai.model_dump(),
-        claude=s.claude.model_dump(),
-        watsonx=s.watsonx.model_dump(),
-        ollama=s.ollama.model_dump(),
-        langflow_url=s.langflow_url,
-        has_langflow_plan_flow=bool(s.langflow_plan_flow_id),
-    )
+
+    if s.provider in (LLMProvider.ollama, LLMProvider.ollabridge):
+        s = autoconfigure_local_provider(force=True)
+
+    return settings_response_from(s)
 
 
 @app.put("/api/settings/llm", response_model=SettingsResponse)
 async def api_update_llm_settings(updates: dict):
+    """
+    Update full LLM settings including provider-specific configs.
+
+    Important:
+    - Do NOT auto-probe providers here on every save.
+    - Saving should be fast and deterministic.
+    """
+    s = update_settings(updates)
+    return settings_response_from(s)
+
     """Update full LLM settings including provider-specific configs."""
     s = update_settings(updates)
+    s = autoconfigure_local_provider()
     return SettingsResponse(
         provider=s.provider,
-        providers=[LLMProvider.openai, LLMProvider.claude, LLMProvider.watsonx, LLMProvider.ollama],
+        providers=[LLMProvider.openai, LLMProvider.claude, LLMProvider.watsonx, LLMProvider.ollama, LLMProvider.ollabridge],
         openai=s.openai.model_dump(),
         claude=s.claude.model_dump(),
         watsonx=s.watsonx.model_dump(),
         ollama=s.ollama.model_dump(),
+        ollabridge=s.ollabridge.model_dump(),
         langflow_url=s.langflow_url,
         has_langflow_plan_flow=bool(s.langflow_plan_flow_id),
     )
@@ -2568,10 +2725,10 @@ async def api_status():
         StatusResponse, ProviderStatusResponse, ProviderName,
         WorkspaceCapabilitySummary, GithubStatusSummary, ProviderHealth,
     )
-    from gitpilot.settings import get_settings
+    from gitpilot.settings import autoconfigure_local_provider
     from gitpilot.github_api import get_github_status_summary
 
-    s = get_settings()
+    s = autoconfigure_local_provider()
     provider_summary = s.get_provider_summary()
 
     # Build provider status
@@ -2613,10 +2770,10 @@ async def api_status():
 @app.get("/api/providers/status")
 async def api_providers_status():
     """Get detailed status for the active provider."""
-    from gitpilot.settings import get_settings
+    from gitpilot.settings import autoconfigure_local_provider
     from gitpilot.llm_provider import test_provider_connection
 
-    s = get_settings()
+    s = autoconfigure_local_provider()
     summary = await test_provider_connection(s)
     return summary
 
@@ -2632,7 +2789,7 @@ async def api_providers_test(req: _ProviderTestRequest):
     from gitpilot.llm_provider import test_provider_connection
     import copy
 
-    s = get_settings()
+    s = autoconfigure_local_provider()
     # Apply test overrides temporarily
     test_settings = copy.deepcopy(s)
 
@@ -2775,8 +2932,9 @@ async def api_chat_message_v2(req: _ChatMessageRequest):
             # Folder-mode: use LLM directly for simple chat
             from gitpilot.llm_provider import build_llm
             llm = build_llm()
+            local_prompt = _build_local_repo_aware_prompt(req, session)
             answer = llm.call(
-                [{"role": "user", "content": req.message}]
+                [{"role": "user", "content": local_prompt}]
             )
     except Exception as e:
         err_str = str(e)
@@ -2898,3 +3056,285 @@ try:
     del _apply_ob
 except ImportError:
     pass  # Extension not available, skip gracefully
+
+
+# ============================================================================
+# V2 Streaming Agent Endpoints (additive, non-destructive)
+#
+# These endpoints use the unified AgentEventBus protocol so every client
+# (VS Code, React web, HF Spaces) receives the same JSON event shapes.
+#
+# Existing endpoints are NOT modified. These are /api/v2/ prefixed.
+# ============================================================================
+
+from fastapi.responses import StreamingResponse as _StreamingResponse
+from gitpilot.agent_events import get_bus as _get_bus, remove_bus as _remove_bus, EventType as _EvType
+from gitpilot.agent_executor import StreamingAgentExecutor as _StreamingExecutor
+from gitpilot.approval_protocol import ApprovalGate as _ApprovalGate
+from gitpilot.workspace import WorkspaceManager as _V2WorkspaceManager
+
+# Track active executors for cancellation
+_active_executors: dict[str, _StreamingExecutor] = {}
+
+
+@app.post("/api/v2/chat/stream", tags=["v2-streaming"])
+async def v2_chat_stream(request: Request):
+    """
+    Server-Sent Events endpoint for agent execution.
+
+    Returns text/event-stream. Each line is:
+      data: {"type": "text_delta", "text": "..."}\n\n
+      data: {"type": "tool_start", "name": "read_file", ...}\n\n
+      data: {"type": "done", ...}\n\n
+
+    This is the PREFERRED endpoint for:
+      - Hugging Face Spaces (SSE works through nginx/proxies)
+      - VS Code extension (can consume SSE via fetch ReadableStream)
+      - Any HTTP client that supports streaming
+    """
+    body = await request.json()
+    user_message = body.get("message", "")
+    session_id = body.get("session_id", "")
+    permission_mode = body.get("permission_mode", "normal")
+
+    if not user_message:
+        return JSONResponse({"error": "message is required"}, status_code=400)
+
+    # Load session (reuse existing session manager)
+    session = None
+    repo_full_name = ""
+    branch = None
+    token = body.get("token")
+
+    if session_id:
+        try:
+            session = _session_mgr.load(session_id)
+            repo_full_name = session.repo_full_name or ""
+            branch = session.branch
+        except FileNotFoundError:
+            return JSONResponse({"error": "Session not found"}, status_code=404)
+
+    bus = _get_bus(session_id or "ephemeral")
+    gate = _ApprovalGate(bus, mode=permission_mode)
+
+    # Resolve workspace (if session has a local workspace)
+    workspace = None
+    if session and repo_full_name:
+        try:
+            parts = repo_full_name.split("/", 1)
+            if len(parts) == 2:
+                ws_mgr = _V2WorkspaceManager()
+                workspace = await ws_mgr.ensure_workspace(
+                    owner=parts[0], repo=parts[1],
+                    token=token, branch=branch,
+                )
+        except Exception as ws_err:
+            logger.warning("Could not resolve workspace: %s", ws_err)
+
+    executor = _StreamingExecutor(
+        bus=bus, gate=gate, workspace=workspace,
+        ws_manager=_V2WorkspaceManager(),
+    )
+    _active_executors[session_id or "ephemeral"] = executor
+
+    sub_id, _queue = bus.subscribe()
+
+    async def event_generator():
+        """Run agent in background, yield events as SSE."""
+        # Start execution as a background task
+        exec_task = asyncio.create_task(
+            executor.execute(
+                user_message=user_message,
+                repo_full_name=repo_full_name,
+                branch=branch,
+                token=token,
+            )
+        )
+
+        try:
+            async for event in bus.stream(sub_id):
+                yield event.to_sse()
+                if event.type in (_EvType.DONE, _EvType.ERROR):
+                    break
+        finally:
+            bus.unsubscribe(sub_id)
+            _active_executors.pop(session_id or "ephemeral", None)
+
+            # Ensure the task completes
+            if not exec_task.done():
+                exec_task.cancel()
+                try:
+                    await exec_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+            # Save assistant message to session
+            if session and exec_task.done() and not exec_task.cancelled():
+                try:
+                    result = exec_task.result()
+                    if result:
+                        summary = result.get("summary", "") if isinstance(result, dict) else str(result)
+                        session.add_message("assistant", summary[:5000])
+                        _session_mgr.save(session)
+                except Exception:
+                    pass
+
+            _remove_bus(session_id or "ephemeral")
+
+    return _StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post("/api/v2/approval/respond", tags=["v2-streaming"])
+async def v2_approval_respond(request: Request):
+    """
+    Client sends approval/denial for a tool execution.
+    Used by all clients (web, VS Code, HF Spaces).
+    """
+    body = await request.json()
+    session_id = body.get("session_id", "ephemeral")
+    request_id = body.get("request_id", "")
+    approved = body.get("approved", False)
+    scope = body.get("scope", "once")
+
+    if not request_id:
+        return JSONResponse({"error": "request_id is required"}, status_code=400)
+
+    # The approval gate is created per-stream, so we emit an event
+    # that the gate's listener will pick up
+    bus = _get_bus(session_id)
+    from gitpilot.agent_events import approval_resolved
+    await bus.emit(approval_resolved(request_id, approved))
+
+    return {"status": "resolved", "request_id": request_id, "approved": approved}
+
+
+@app.post("/api/v2/agent/cancel", tags=["v2-streaming"])
+async def v2_agent_cancel(request: Request):
+    """Cancel the running agent stream for a session."""
+    body = await request.json()
+    session_id = body.get("session_id", "ephemeral")
+
+    executor = _active_executors.get(session_id)
+    if executor:
+        executor.cancel()
+        return {"status": "cancelled", "session_id": session_id}
+
+    return JSONResponse({"error": "No active executor for this session"}, status_code=404)
+
+
+@app.websocket("/ws/v2/sessions/{session_id}")
+async def v2_session_websocket(websocket: WebSocket, session_id: str):
+    """
+    V2 WebSocket with full agent streaming protocol.
+
+    Same event types as SSE endpoint. Client can also send:
+      { type: "user_message", content: "..." }
+      { type: "approval_response", request_id: "...", approved: true, scope: "session" }
+      { type: "cancel" }
+      { type: "ping" }
+    """
+    await websocket.accept()
+
+    try:
+        session = _session_mgr.load(session_id)
+    except FileNotFoundError:
+        await websocket.send_json({"type": "error", "message": "Session not found"})
+        await websocket.close()
+        return
+
+    await websocket.send_json({
+        "type": "session_restored",
+        "session_id": session.id,
+        "status": session.status,
+        "protocol": "v2",
+    })
+
+    bus = _get_bus(session_id)
+    gate = _ApprovalGate(bus)
+    sub_id, _queue = bus.subscribe()
+
+    # Forward bus events -> WebSocket
+    async def forward_events():
+        try:
+            async for event in bus.stream(sub_id):
+                await websocket.send_json(event.to_dict())
+        except Exception:
+            pass
+
+    forwarder = asyncio.create_task(forward_events())
+
+    try:
+        while True:
+            data = await websocket.receive_json()
+            event_type = data.get("type", "")
+
+            if event_type == "user_message":
+                content = data.get("content", "")
+                if not content:
+                    continue
+
+                session.add_message("user", content)
+                _session_mgr.save(session)
+
+                # Resolve workspace
+                workspace = None
+                repo_full = session.repo_full_name or ""
+                parts = repo_full.split("/", 1)
+                if len(parts) == 2:
+                    try:
+                        ws_mgr = _V2WorkspaceManager()
+                        workspace = await ws_mgr.ensure_workspace(
+                            owner=parts[0], repo=parts[1],
+                            token=data.get("token"),
+                            branch=session.branch,
+                        )
+                    except Exception:
+                        pass
+
+                executor = _StreamingExecutor(
+                    bus=bus, gate=gate, workspace=workspace,
+                    ws_manager=_V2WorkspaceManager(),
+                )
+                _active_executors[session_id] = executor
+
+                # Run agent (non-blocking)
+                asyncio.create_task(executor.execute(
+                    user_message=content,
+                    repo_full_name=repo_full,
+                    branch=session.branch,
+                    token=data.get("token"),
+                ))
+
+            elif event_type == "approval_response":
+                gate.resolve(
+                    request_id=data.get("request_id", ""),
+                    approved=data.get("approved", False),
+                    scope=data.get("scope", "once"),
+                )
+
+            elif event_type == "cancel":
+                executor = _active_executors.get(session_id)
+                if executor:
+                    executor.cancel()
+
+            elif event_type == "ping":
+                await websocket.send_json({"type": "pong"})
+
+    except WebSocketDisconnect:
+        logger.info("V2 WebSocket disconnected for session %s", session_id)
+    except Exception as e:
+        logger.error("V2 WebSocket error for session %s: %s", session_id, e)
+    finally:
+        forwarder.cancel()
+        bus.unsubscribe(sub_id)
+        _active_executors.pop(session_id, None)
+        gate.cancel_all()
+        _remove_bus(session_id)

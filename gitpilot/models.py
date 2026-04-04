@@ -4,9 +4,10 @@ Centralized Pydantic models for the redesigned API contract.
 """
 
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
 
 # ─── Enums ────────────────────────────────────────────────
 
@@ -130,7 +131,7 @@ class StartSessionResponse(BaseModel):
     branch: str | None = None
 
 
-# ─── Chat Models ─────────────────────────────────────────
+# ─── Chat / Task Models ──────────────────────────────────
 
 class PlanStepSummary(BaseModel):
     step: int
@@ -152,10 +153,63 @@ class FileReference(BaseModel):
     line: int | None = None
 
 
+class FileTreeEntry(BaseModel):
+    path: str
+    type: Literal["file", "dir"]
+
+
+class FileInScope(BaseModel):
+    path: str
+    reason: str | None = None
+    confidence: Literal["low", "medium", "high"] | None = None
+
+
+class ProposedEdit(BaseModel):
+    file: str
+    kind: Literal["create", "replace", "patch"]
+    summary: str | None = None
+    diff: str | None = None
+    content: str | None = None
+
+
+class StructuredProjectContext(BaseModel):
+    mode: str | None = None
+    workspaceRoot: str | None = None
+    repoRoot: str | None = None
+    repoName: str | None = None
+    branch: str | None = None
+    languages: list[str] = Field(default_factory=list)
+    manifests: list[str] = Field(default_factory=list)
+    keyFiles: list[str] = Field(default_factory=list)
+    readmePreview: str | None = None
+    treeSummary: list[FileTreeEntry] = Field(default_factory=list)
+    indexedAt: str | None = None
+
+
+class StructuredWorkingSet(BaseModel):
+    currentFile: str | None = None
+    languageId: str | None = None
+    currentSelection: str | None = None
+    openTabs: list[str] = Field(default_factory=list)
+    recentFiles: list[str] = Field(default_factory=list)
+    relatedFiles: list[str] = Field(default_factory=list)
+
+
+class StructuredTaskContext(BaseModel):
+    intent: str | None = None
+    scope: Literal["workspace", "selection", "file"] | None = None
+    summary: str | None = None
+
+
 class ChatMessageRequest(BaseModel):
     session_id: str
     message: str
     scope: Literal["workspace", "selection", "file"] = "workspace"
+    topology_id: str | None = None
+    intent: str | None = None
+    project_context: StructuredProjectContext | None = None
+    working_set: StructuredWorkingSet | None = None
+    task_context: StructuredTaskContext | None = None
 
 
 class ChatMessageResponse(BaseModel):
@@ -163,6 +217,8 @@ class ChatMessageResponse(BaseModel):
     answer: str
     message_id: str | None = None
     plan: PlanSummary | None = None
+    filesInScope: list[FileInScope] = Field(default_factory=list)
+    edits: list[ProposedEdit] = Field(default_factory=list)
     references: list[FileReference] = Field(default_factory=list)
 
 

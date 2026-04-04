@@ -82,6 +82,18 @@ ui/.vite/
 *.swo
 *.orig
 
+# Allow VS Code extension debug configs to be committed
+!extensions/vscode/.vscode/
+extensions/vscode/.vscode-test/
+
+# -----------------
+# VS Code Extension build artifacts
+# -----------------
+extensions/vscode/out/
+extensions/vscode/dist/
+extensions/vscode/*.vsix
+extensions/vscode/.eslintcache
+
 # OS files
 .DS_Store
 Thumbs.db
@@ -125,3 +137,7 @@ frontend/.vite/
 * copy
 * copy*.*
 
+/.patch_backup_20260402_215654
+
+.bak.gpctx
+*.gpctx
