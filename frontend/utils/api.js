@@ -44,7 +44,20 @@ export function apiUrl(path) {
  */
 export async function safeFetchJSON(url, options = {}) {
   try {
-    const response = await fetch(url, options);
+    // Add timeout to prevent hanging when backend is starting up.
+    // Default raised to 15s to tolerate first-load GitHub API checks.
+    const timeout = options.timeout || 15000;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+    const fetchOptions = { ...options, signal: options.signal || controller.signal };
+    delete fetchOptions.timeout;
+
+    let response;
+    try {
+      response = await fetch(url, fetchOptions);
+    } finally {
+      clearTimeout(timer);
+    }
     const contentType = response.headers.get('content-type');
 
     // Check if response is actually JSON
@@ -75,6 +88,12 @@ export async function safeFetchJSON(url, options = {}) {
     return data;
   } catch (error) {
     // Re-throw with better error message
+    if (error.name === 'AbortError') {
+      throw new Error(
+        `Backend server did not respond in time. ` +
+        `Please check that the backend is running at ${BACKEND_URL || 'localhost:8000'}.`
+      );
+    }
     if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
       throw new Error(
         `Cannot connect to backend server. ` +
@@ -153,6 +172,26 @@ export async function authFetchJSON(url, options = {}) {
  */
 export async function fetchStatus() {
   return safeFetchJSON(apiUrl("/api/status"));
+}
+
+/**
+ * Get server status with retry (for startup when backend may still be booting).
+ * Retries up to `maxRetries` times with `delayMs` between attempts.
+ * @param {number} maxRetries - Maximum retry attempts (default: 8)
+ * @param {number} delayMs - Delay between retries in ms (default: 2000)
+ * @returns {Promise<any>} Parsed status response or null
+ */
+export async function fetchStatusWithRetry(maxRetries = 8, delayMs = 2000) {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await safeFetchJSON(apiUrl("/api/status"), { timeout: 5000 });
+    } catch {
+      if (i < maxRetries - 1) {
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+  }
+  return null;
 }
 
 /**

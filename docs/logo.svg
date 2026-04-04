@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366f1"/>
+      <stop offset="100%" style="stop-color:#8b5cf6"/>
+    </linearGradient>
+    <linearGradient id="wing" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#c4b5fd"/>
+      <stop offset="100%" style="stop-color:#a78bfa"/>
+    </linearGradient>
+  </defs>
+  <!-- Background circle -->
+  <circle cx="100" cy="100" r="96" fill="url(#bg)"/>
+  <circle cx="100" cy="100" r="96" fill="none" stroke="#4f46e5" stroke-width="2" opacity="0.3"/>
+  <!-- Git branch lines -->
+  <path d="M70 140 L70 80 Q70 60 90 60 L130 60" stroke="#e0e7ff" stroke-width="4" fill="none" stroke-linecap="round" opacity="0.35"/>
+  <path d="M70 110 Q70 90 90 90 L120 90" stroke="#e0e7ff" stroke-width="4" fill="none" stroke-linecap="round" opacity="0.25"/>
+  <!-- Pilot wing (left) -->
+  <path d="M56 105 Q40 95 28 100 Q40 105 56 115 Z" fill="url(#wing)" opacity="0.9"/>
+  <!-- Pilot wing (right) -->
+  <path d="M144 105 Q160 95 172 100 Q160 105 144 115 Z" fill="url(#wing)" opacity="0.9"/>
+  <!-- Central shield / cockpit -->
+  <path d="M100 55 L130 85 L130 120 Q130 140 100 150 Q70 140 70 120 L70 85 Z" fill="#1e1b4b" opacity="0.85"/>
+  <path d="M100 55 L130 85 L130 120 Q130 140 100 150 Q70 140 70 120 L70 85 Z" fill="none" stroke="#c4b5fd" stroke-width="1.5" opacity="0.6"/>
+  <!-- GP letters -->
+  <text x="100" y="116" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="36" font-weight="800" fill="#f5f3ff" letter-spacing="-1">GP</text>
+  <!-- Small star accent -->
+  <circle cx="138" cy="68" r="3" fill="#fbbf24" opacity="0.9"/>
+  <circle cx="142" cy="74" r="1.5" fill="#fbbf24" opacity="0.6"/>
+</svg>

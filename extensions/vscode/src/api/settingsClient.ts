@@ -104,4 +104,76 @@ export class SettingsClient {
       base_url: baseUrl,
     } as any);
   }
+
+  private extractModel(
+    settings: SettingsData,
+    provider: ProviderName
+  ): string | undefined {
+    if (provider === "watsonx") {
+      return settings.watsonx?.model_id;
+    }
+    return (settings as any)?.[provider]?.model;
+  }
+
+  /**
+   * Prefer a local zero-config provider when one is available.
+   * This reduces first-run friction dramatically.
+   */
+  async bootstrapLocalProviderDefaults(): Promise<{
+    changed: boolean;
+    provider?: ProviderName;
+    model?: string;
+  }> {
+    const settings = await this.getSettings();
+    const currentProvider = (settings.provider as ProviderName) || "ollama";
+
+    const candidateOrder: ProviderName[] = (() => {
+      if (currentProvider === "ollama") return ["ollama", "ollabridge"];
+      if (currentProvider === "ollabridge") return ["ollama", "ollabridge"];
+      return [currentProvider, "ollama", "ollabridge"];
+    })();
+
+    for (const provider of candidateOrder) {
+      if (provider !== "ollama" && provider !== "ollabridge") {
+        continue;
+      }
+
+      try {
+        const modelResponse = await this.listModels(provider);
+        const models = modelResponse.models || [];
+        if (!models.length) {
+          continue;
+        }
+
+        let changed = false;
+
+        if (settings.provider !== provider) {
+          await this.setProvider(provider);
+          changed = true;
+        }
+
+        const freshSettings = changed ? await this.getSettings() : settings;
+        const currentModel = this.extractModel(freshSettings, provider);
+        const selectedModel =
+          currentModel && models.includes(currentModel)
+            ? currentModel
+            : models[0];
+
+        if (currentModel !== selectedModel) {
+          await this.updateProviderModel(provider, selectedModel);
+          changed = true;
+        }
+
+        return {
+          changed,
+          provider,
+          model: selectedModel,
+        };
+      } catch {
+        // keep trying the next provider
+      }
+    }
+
+    return { changed: false };
+  }
 }

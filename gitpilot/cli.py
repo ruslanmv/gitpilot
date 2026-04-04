@@ -155,6 +155,19 @@ def serve(
     open_browser: bool = typer.Option(True, "--open/--no-open", help="Open browser"),
 ):
     """Start the GitPilot server with web UI."""
+    # Check if port is already in use (prevent double-start)
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        if s.connect_ex((host, port)) == 0:
+            console.print(
+                f"[yellow]⚠[/yellow]  Port {port} is already in use. "
+                f"GitPilot may already be running."
+            )
+            console.print(
+                f"[dim]Run 'make stop' or kill the process on port {port} first.[/dim]"
+            )
+            sys.exit(1)
+
     # Display startup banner
     _display_startup_banner(host, port)
 
@@ -253,6 +266,14 @@ def main():
     """Main entry point - run server by default."""
     if len(sys.argv) == 1:
         # No arguments, run server with defaults
+        import socket
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if s.connect_ex(("127.0.0.1", 8000)) == 0:
+                console.print(
+                    "[yellow]⚠[/yellow]  Port 8000 is already in use. "
+                    "GitPilot may already be running."
+                )
+                sys.exit(1)
         _display_startup_banner("127.0.0.1", 8000)
         try:
             _run_server("127.0.0.1", 8000, reload=False)

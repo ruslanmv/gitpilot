@@ -1,17 +1,56 @@
 from __future__ import annotations
 
+import logging
 import os
+from typing import TYPE_CHECKING, Any
 
 import httpx
-from crewai import LLM
+
+# LAZY IMPORT: `from crewai import LLM` pulls in litellm, chromadb, lancedb,
+# opentelemetry, onnxruntime, and ~180 other packages. Importing it at module
+# top-level adds 10-60s to every backend startup (especially on WSL).
+# We defer it into build_llm() so it only loads when a chat is actually sent.
+if TYPE_CHECKING:
+    from crewai import LLM  # noqa: F401 — type hint only
 
 from gitpilot.models import ProviderHealth, ProviderSummary
 
 from .settings import LLMProvider, get_settings
+from .reasoning_normalizer import wrap_if_reasoning_model
+
+logger = logging.getLogger(__name__)
 
 
-def build_llm() -> LLM:
-    """Return an initialized CrewAI LLM using the active provider."""
+def _wrap_llm(llm: Any, model: str) -> Any:
+    """Auto-wrap the LLM with ReasoningAwareLLM if the model is a reasoning
+    model (deepseek-r1, qwq, marco-o1, r1-distill, etc.).
+
+    This is the single point where reasoning-model normalization is applied.
+    For non-reasoning models this is a no-op — the original LLM is returned
+    unchanged with zero overhead.
+
+    The wrapper strips <think>...</think> blocks from LLM responses before
+    CrewAI's ReAct parser sees them, preventing the common
+    "Invalid response from LLM call - None or empty" error.
+    """
+    return wrap_if_reasoning_model(llm, model)
+
+
+def build_llm() -> Any:
+    """Return an initialized CrewAI LLM using the active provider.
+
+    CrewAI is lazy-imported here to avoid loading ~180 packages (litellm,
+    chromadb, lancedb, opentelemetry, onnxruntime, etc.) at server startup.
+    First call adds 5-15s; subsequent calls are instant.
+
+    If the active model is a reasoning model (deepseek-r1, qwq, etc.),
+    the returned LLM is automatically wrapped with ReasoningAwareLLM
+    for CrewAI compatibility. For non-reasoning models, the original
+    LLM is returned unchanged.
+    """
+    # LAZY IMPORT — see module-level comment for rationale
+    from crewai import LLM
+
     settings = get_settings()
     provider = settings.provider
 
@@ -32,10 +71,13 @@ def build_llm() -> LLM:
         if not model.startswith("openai/"):
             model = f"openai/{model}"
 
-        return LLM(
-            model=model,
-            api_key=api_key,
-            base_url=base_url if base_url else None,
+        return _wrap_llm(
+            LLM(
+                model=model,
+                api_key=api_key,
+                base_url=base_url if base_url else None,
+            ),
+            model,
         )
 
     if provider == LLMProvider.claude:
@@ -65,10 +107,13 @@ def build_llm() -> LLM:
         if not model.startswith("anthropic/"):
             model = f"anthropic/{model}"
 
-        return LLM(
-            model=model,
-            api_key=api_key,
-            base_url=base_url if base_url else None,
+        return _wrap_llm(
+            LLM(
+                model=model,
+                api_key=api_key,
+                base_url=base_url if base_url else None,
+            ),
+            model,
         )
 
     if provider == LLMProvider.watsonx:
@@ -109,13 +154,16 @@ def build_llm() -> LLM:
             model = f"watsonx/{model}"
 
         # FIXED: Create LLM with project_id parameter (CRITICAL!)
-        return LLM(
-            model=model,
-            api_key=api_key,
-            base_url=base_url,
-            project_id=project_id,  # \u2190 CRITICAL: This was missing!
-            temperature=0.3,  # Default temperature
-            max_tokens=1024,  # Default max tokens
+        return _wrap_llm(
+            LLM(
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
+                project_id=project_id,  # \u2190 CRITICAL: This was missing!
+                temperature=0.3,  # Default temperature
+                max_tokens=1024,  # Default max tokens
+            ),
+            model,
         )
 
     if provider == LLMProvider.ollama:
@@ -134,7 +182,7 @@ def build_llm() -> LLM:
         if not model.startswith("ollama/"):
             model = f"ollama/{model}"
 
-        return LLM(model=model, base_url=base_url)
+        return _wrap_llm(LLM(model=model, base_url=base_url), model)
 
     if provider == LLMProvider.ollabridge:
         # OllaBridge / OllaBridge Cloud - OpenAI-compatible API
@@ -165,10 +213,13 @@ def build_llm() -> LLM:
         os.environ["OPENAI_API_KEY"] = ollabridge_key
         os.environ["OPENAI_API_BASE"] = ollabridge_api_base
 
-        return LLM(
-            model=model,
-            api_key=ollabridge_key,
-            base_url=ollabridge_api_base,
+        return _wrap_llm(
+            LLM(
+                model=model,
+                api_key=ollabridge_key,
+                base_url=ollabridge_api_base,
+            ),
+            model,
         )
 
     raise ValueError(f"Unsupported provider: {provider}")

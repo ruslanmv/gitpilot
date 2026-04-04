@@ -435,34 +435,41 @@ def _extract_text(path: Path, mime: str) -> str:
 
 
 def _extract_pdf(path: Path) -> str:
-    """Extract text from PDF. Tries PyPDF2/pypdf first, falls back gracefully."""
+    """Extract text from PDF. Tries pypdf/PyPDF2 first, falls back gracefully."""
     try:
         import pypdf
-        reader = pypdf.PdfReader(str(path))
-        pages = []
-        for page in reader.pages:
-            text = page.extract_text()
-            if text:
-                pages.append(text)
-        return "\n\n".join(pages)[:MAX_EXTRACT_CHARS]
+        try:
+            reader = pypdf.PdfReader(str(path))
+            pages = []
+            for page in reader.pages:
+                text = page.extract_text()
+                if text:
+                    pages.append(text)
+            return "\n\n".join(pages)[:MAX_EXTRACT_CHARS]
+        except Exception as e:
+            logger.warning("PDF extraction failed with pypdf: %s", e)
+            return ""
     except ImportError:
         pass
 
     try:
         import PyPDF2  # noqa: N813
-        reader = PyPDF2.PdfReader(str(path))
-        pages = []
-        for page in reader.pages:
-            text = page.extract_text()
-            if text:
-                pages.append(text)
-        return "\n\n".join(pages)[:MAX_EXTRACT_CHARS]
+        try:
+            reader = PyPDF2.PdfReader(str(path))
+            pages = []
+            for page in reader.pages:
+                text = page.extract_text()
+                if text:
+                    pages.append(text)
+            return "\n\n".join(pages)[:MAX_EXTRACT_CHARS]
+        except Exception as e:
+            logger.warning("PDF extraction failed with PyPDF2: %s", e)
+            return ""
     except ImportError:
         pass
 
     logger.info("PDF extraction unavailable (install pypdf or PyPDF2). Storing PDF without text.")
     return ""
-
 
 def _extract_docx(path: Path) -> str:
     """Extract text from DOCX."""

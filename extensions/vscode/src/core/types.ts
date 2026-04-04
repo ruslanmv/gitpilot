@@ -3,13 +3,21 @@
  * Canonical types for extension, webview, and backend API contract.
  */
 
-// ─── Enums & Literals ────────────────────────────────────
-
 export type WorkspaceMode = "folder" | "local_git" | "github";
+export type WorkspaceUiMode = "idle" | "working" | "diff";
 
-export type ConnectionState = "connected" | "disconnected" | "connecting" | "error";
+export type ConnectionState =
+  | "connected"
+  | "disconnected"
+  | "connecting"
+  | "error";
 
-export type ProviderName = "openai" | "claude" | "watsonx" | "ollama" | "ollabridge";
+export type ProviderName =
+  | "openai"
+  | "claude"
+  | "watsonx"
+  | "ollama"
+  | "ollabridge";
 
 export type ProviderConnectionType =
   | "local"
@@ -18,18 +26,27 @@ export type ProviderConnectionType =
   | "cloud"
   | "managed";
 
-// ─── Workflow / Topology ────────────────────────────────
+export type ChatScope = "workspace" | "selection" | "file";
+
+export type ChatIntent =
+  | "general_chat"
+  | "explain_project"
+  | "review_file"
+  | "fix_selection"
+  | "generate_tests"
+  | "security_scan"
+  | "implement_feature";
 
 export type WorkflowMode =
   | "auto"
-  | "default"         // T1 Dispatch (CrewAI Routing)
-  | "gitpilot_code"   // T2 ReAct Loop
-  | "lite_mode"       // T3 Lite Mode
-  | "feature_builder" // T4 Feature Builder
-  | "bug_hunter"      // T5 Bug Hunter
-  | "code_inspector"  // T6 Code Inspector
-  | "architect_mode"  // T7 Architect Mode
-  | "quick_fix";      // T8 Quick Fix
+  | "default"
+  | "gitpilot_code"
+  | "lite_mode"
+  | "feature_builder"
+  | "bug_hunter"
+  | "code_inspector"
+  | "architect_mode"
+  | "quick_fix";
 
 export interface WorkflowState {
   selectedMode: WorkflowMode;
@@ -38,7 +55,102 @@ export interface WorkflowState {
   reason?: string;
 }
 
-// ─── State Models ────────────────────────────────────────
+export type TaskStatus =
+  | "idle"
+  | "planning"
+  | "generating"
+  | "reviewing"
+  | "ready_to_apply"
+  | "applying"
+  | "done"
+  | "failed";
+
+export interface FileInScope {
+  path: string;
+  reason?: string;
+  confidence?: "low" | "medium" | "high";
+}
+
+export interface ChangedFile {
+  path: string;
+  kind?: "M" | "A" | "D";
+  status: "proposed" | "applied" | "failed";
+  summary?: string;
+  reason?: string;
+  hasDiff: boolean;
+  diffPreview?: string;
+  contentPreview?: string;
+}
+
+export interface ProposedEdit {
+  file: string;
+  kind: "create" | "replace" | "patch";
+  summary?: string;
+  diff?: string;
+  content?: string;
+}
+
+export interface PlanStepSummary {
+  step: number;
+  title: string;
+  action: string;
+  file?: string;
+  description: string;
+  status?: "pending" | "ready" | "applied" | "failed";
+}
+
+export interface PlanSummary {
+  goal: string;
+  summary: string;
+  steps: PlanStepSummary[];
+}
+
+export interface ActiveTaskState {
+  id?: string;
+  title?: string;
+  intent?: ChatIntent | string;
+  status: TaskStatus;
+  summary?: string;
+  filesInScope: FileInScope[];
+  changedFiles: ChangedFile[];
+  edits: ProposedEdit[];
+  plan?: PlanSummary;
+  startedAt?: string;
+  updatedAt?: string;
+  error?: string;
+}
+
+export interface ProjectContextSummaryState {
+  mode?: WorkspaceMode;
+  repoName?: string;
+  branch?: string;
+  indexedFiles?: number;
+  languages?: string[];
+  manifests?: string[];
+  keyFiles?: string[];
+  recentFiles?: string[];
+  readmeFound?: boolean;
+  indexedAt?: string;
+}
+
+export interface ChatMessagePayload {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  createdAt: string;
+  plan?: PlanSummary;
+}
+
+export interface ChatState {
+  messages: ChatMessagePayload[];
+  lastIntent?: ChatIntent | string;
+}
+
+export interface WorkspaceUiState {
+  mode: WorkspaceUiMode;
+  focusedDiffPath?: string;
+  notice?: string;
+}
 
 export interface GitContext {
   isGitRepo: boolean;
@@ -102,7 +214,12 @@ export interface ReadinessState {
   blockers: string[];
   warnings: string[];
   primaryCta?: {
-    id: "start_folder" | "start_local_git" | "connect_github" | "open_provider_setup" | "retry";
+    id:
+      | "start_folder"
+      | "start_local_git"
+      | "connect_github"
+      | "open_provider_setup"
+      | "retry";
     label: string;
   };
 }
@@ -115,16 +232,51 @@ export interface GitPilotState {
   session: SessionState;
   readiness: ReadinessState;
   workflow: WorkflowState;
+  projectContextSummary: ProjectContextSummaryState;
+  activeTask: ActiveTaskState;
+  chat: ChatState;
+  ui: WorkspaceUiState;
 }
 
-// ─── Message Contract ────────────────────────────────────
+export interface FileTreeEntry {
+  path: string;
+  type: "file" | "dir";
+}
 
-export interface ChatMessagePayload {
-  id: string;
-  role: "user" | "assistant" | "system";
-  content: string;
-  createdAt: string;
-  plan?: PlanSummary;
+export interface StructuredProjectContext {
+  mode?: WorkspaceMode;
+  workspaceRoot?: string;
+  repoRoot?: string;
+  repoName?: string;
+  branch?: string;
+  languages?: string[];
+  manifests?: string[];
+  keyFiles?: string[];
+  readmePreview?: string;
+  treeSummary?: FileTreeEntry[];
+  indexedAt?: string;
+}
+
+export interface StructuredWorkingSet {
+  currentFile?: string;
+  languageId?: string;
+  currentSelection?: string;
+  openTabs?: string[];
+  recentFiles?: string[];
+  relatedFiles?: string[];
+}
+
+export interface StructuredTaskContext {
+  intent?: ChatIntent | string;
+  scope?: ChatScope;
+  summary?: string;
+}
+
+export interface StructuredContextBundle {
+  project_context?: StructuredProjectContext;
+  working_set?: StructuredWorkingSet;
+  task_context?: StructuredTaskContext;
+  legacy_prompt: string;
 }
 
 export interface ActionResultPayload {
@@ -141,30 +293,23 @@ export interface UiErrorPayload {
   actionLabel?: string;
 }
 
-export interface PlanStepSummary {
-  step: number;
-  title: string;
-  action: string;
-  file?: string;
-  description: string;
-  status?: "pending" | "ready" | "applied" | "failed";
-}
-
-export interface PlanSummary {
-  goal: string;
-  summary: string;
-  steps: PlanStepSummary[];
-}
-
-// Extension → Webview
 export type ExtensionToWebviewMessage =
   | { type: "STATE_SYNC"; payload: GitPilotState }
   | { type: "CHAT_RESPONSE"; payload: ChatMessagePayload }
   | { type: "ACTION_RESULT"; payload: ActionResultPayload }
   | { type: "ERROR"; payload: UiErrorPayload }
-  | { type: "SESSION_UPDATED"; payload: SessionState };
+  | { type: "SESSION_UPDATED"; payload: SessionState }
+  | { type: "TASK_STATE_UPDATED"; payload: ActiveTaskState }
+  // ── V2 streaming events (additive) ──
+  | { type: "CHAT_STREAM_CHUNK"; payload: { content: string } }
+  | { type: "CHAT_STREAM_END"; payload: { id?: string; usage?: { prompt_tokens: number; completion_tokens: number } } }
+  | { type: "AGENT_TOOL_ACTIVITY"; payload: { id: string; name: string; status: "running" | "completed" | "failed"; args?: Record<string, unknown>; result?: string; is_error?: boolean } }
+  | { type: "TOOL_APPROVAL_REQUEST"; payload: { id: string; tool: string; args: Record<string, unknown>; summary: string; diffPreview?: string; riskLevel: "low" | "medium" | "high" } }
+  | { type: "PLAN_STEP_UPDATE"; payload: { stepIndex: number; stepTitle: string; action: string; status: string } }
+  | { type: "TERMINAL_OUTPUT"; payload: { stream: "stdout" | "stderr" | "exit"; text: string; exitCode?: number } }
+  | { type: "DIAGNOSTICS_RESULT"; payload: { file?: string; errors: number; warnings: number; entries: Array<{ file: string; line: number; severity: string; message: string }> } }
+  | { type: "TEST_RESULT"; payload: { framework: string; passed: number; failed: number; skipped: number; exitCode: number } };
 
-// Webview → Extension
 export type WebviewToExtensionMessage =
   | { type: "INIT" }
   | { type: "START_SESSION"; payload: { mode: WorkspaceMode } }
@@ -188,9 +333,18 @@ export type WebviewToExtensionMessage =
   | { type: "OPEN_LLM_SETTINGS" }
   | { type: "OPEN_WORKSPACE" }
   | { type: "SET_WORKFLOW_MODE"; payload: { mode: WorkflowMode } }
-  | { type: "REFRESH_STATUS" };
-
-// ─── Backend API Types ───────────────────────────────────
+  | { type: "REFRESH_STATUS" }
+  | { type: "OPEN_SETUP_WIZARD" }
+  | { type: "REFRESH_PROJECT_CONTEXT" }
+  | { type: "OPEN_CHANGED_FILE"; payload: { path: string } }
+  | { type: "OPEN_CHANGED_DIFF"; payload: { path: string } }
+  | { type: "REVEAL_FILE"; payload: { path: string } }
+  | { type: "APPLY_PROPOSED_CHANGES" }
+  | { type: "REVERT_PROPOSED_CHANGES" }
+  | { type: "REGENERATE_TASK_PLAN" }
+  // ── V2 messages from webview (additive) ──
+  | { type: "TOOL_APPROVAL_RESPONSE"; payload: { id: string; approved: boolean; scope?: "once" | "session" | "always" } }
+  | { type: "CANCEL_TASK" };
 
 export interface StatusResponse {
   server_ready: boolean;
@@ -242,8 +396,12 @@ export interface StartSessionResponse {
 export interface ChatMessageRequest {
   session_id: string;
   message: string;
-  scope?: "workspace" | "selection" | "file";
+  scope?: ChatScope;
   topology_id?: string;
+  intent?: ChatIntent | string;
+  project_context?: StructuredProjectContext;
+  working_set?: StructuredWorkingSet;
+  task_context?: StructuredTaskContext;
 }
 
 export interface ChatMessageResponse {
@@ -251,6 +409,8 @@ export interface ChatMessageResponse {
   answer: string;
   message_id?: string;
   plan?: PlanSummary;
+  filesInScope?: FileInScope[];
+  edits?: ProposedEdit[];
   references?: Array<{
     path: string;
     line?: number;

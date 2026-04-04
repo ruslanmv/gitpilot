@@ -21,7 +21,7 @@ from .github_api import (
     github_request,
 )
 from .github_app import check_repo_write_access
-from .settings import AppSettings, get_settings, set_provider, update_settings, LLMProvider
+from .settings import AppSettings, get_settings, set_provider, update_settings, autoconfigure_local_provider, LLMProvider
 from .agentic import (
     generate_plan,
     execute_plan,
@@ -53,26 +53,58 @@ from .topology_registry import (
     get_saved_topology_preference,
     save_topology_preference,
 )
+import httpx
+import logging
+from fastapi import HTTPException
+
+logger = logging.getLogger(__name__)
+
+def _is_small_local_model() -> bool:
+    """Detect if the active provider is Ollama/OllaBridge with a model
+    that can't handle multi-agent CrewAI prompts reliably.
+
+    Delegates to agentic._is_incompatible_model (single source of truth)
+    so that /api/chat/plan, /api/chat/execute, and /ws/sessions/ all
+    share the same detection logic.
+    """
+    try:
+        from .agentic import _is_incompatible_model
+        s = autoconfigure_local_provider()
+        return _is_incompatible_model(s)
+    except Exception as exc:
+        logger.debug("[GitPilot] _is_small_local_model check failed: %s", exc)
+        return False
 
 
 def _is_lite_mode_active() -> bool:
     """Check if Lite Mode should be used.
 
-    Returns True if EITHER:
+    Returns True if ANY of:
     - settings.lite_mode is True (explicit toggle), OR
-    - the saved topology preference is "lite_mode" (selected in flow viewer)
+    - the saved topology preference is "lite_mode" (selected in flow viewer), OR
+    - the active provider is a small local model that cannot handle
+      multi-agent CrewAI prompts (auto-detected for reliability)
     """
-    s = get_settings()
+    s = autoconfigure_local_provider()
     if s.lite_mode:
         return True
     pref = get_saved_topology_preference()
-    return pref == "lite_mode"
-from .agent_teams import AgentTeam
-from .learning import LearningEngine
-from .cross_repo import CrossRepoAnalyzer
-from .predictions import PredictiveEngine
-from .security import SecurityScanner
-from .nl_database import NLQueryEngine, QueryDialect, SafetyLevel, TableSchema
+    if pref == "lite_mode":
+        return True
+    # Auto-route small local models to lite mode for reliability
+    if _is_small_local_model():
+        logger.info("[GitPilot] Auto-enabling Lite Mode for small local model")
+        return True
+    return False
+# ═════════════════════════════════════════════════════════════════════
+# LAZY IMPORT STRATEGY — Phase 3 heavy modules
+# ═════════════════════════════════════════════════════════════════════
+# agent_teams, learning, cross_repo, predictions, security, nl_database
+# are deferred until first access via _LazyProxy. This saves 200-500ms
+# on WSL cold start (each import triggers disk I/O + pydantic compilation).
+# The proxy pattern means NO code changes are needed at call sites —
+# _agent_team.plan_and_split(...) works identically to the original.
+# NL database types are imported lazily at call site (see /api/nl-db endpoint)
 from .github_oauth import (
     generate_authorization_url,
     exchange_code_for_token,
@@ -91,24 +123,71 @@ from .a2a_adapter import router as a2a_router
 
 logger = logging.getLogger(__name__)
 
-# --- Phase 1 singletons ---
+
+class _LazyProxy:
+    """Lazy singleton proxy — instantiates the wrapped class on first attribute access.
+
+    Used to defer heavy imports (agent_teams, learning, cross_repo, etc.) until
+    they're actually needed, reducing backend startup time on slow filesystems
+    (WSL, HF Spaces cold start).
+
+    All attribute access is transparently forwarded to the underlying instance,
+    so existing code like `_agent_team.plan_and_split(...)` works unchanged.
+    """
+
+    def __init__(self, module_path: str, class_name: str) -> None:
+        object.__setattr__(self, "_module_path", module_path)
+        object.__setattr__(self, "_class_name", class_name)
+        object.__setattr__(self, "_instance", None)
+
+    def _get_instance(self) -> object:
+        inst = object.__getattribute__(self, "_instance")
+        if inst is None:
+            import importlib
+            module = importlib.import_module(self._module_path, package=__package__)
+            cls = getattr(module, self._class_name)
+            inst = cls()
+            object.__setattr__(self, "_instance", inst)
+            logger.debug("[LazyProxy] Instantiated %s.%s on first access",
+                         self._module_path, self._class_name)
+        return inst
+
+    def __getattr__(self, name: str):
+        return getattr(self._get_instance(), name)
+
+    def __setattr__(self, name: str, value):
+        setattr(self._get_instance(), name, value)
+
+    def __call__(self, *args, **kwargs):
+        return self._get_instance()(*args, **kwargs)
+
+    def __repr__(self) -> str:
+        inst = object.__getattribute__(self, "_instance")
+        if inst is None:
+            return f"<_LazyProxy {self._module_path}.{self._class_name} (not yet loaded)>"
+        return repr(inst)
+
+
+# --- Phase 1 singletons (lightweight, instantiate eagerly) ---
 _session_mgr = SessionManager()
 _hook_mgr = HookManager()
 _perm_mgr = PermissionManager()
 
-# --- Phase 2 singletons ---
+# --- Phase 2 singletons (lightweight, instantiate eagerly) ---
 _mcp_client = MCPClient()
 _plugin_mgr = PluginManager()
 _skill_mgr = SkillManager()
 _model_router = ModelRouter()
 
-# --- Phase 3 singletons ---
-_agent_team = AgentTeam()
-_learning_engine = LearningEngine()
-_cross_repo = CrossRepoAnalyzer()
-_predictive_engine = PredictiveEngine()
-_security_scanner = SecurityScanner()
-_nl_engine = NLQueryEngine()
+# --- Phase 3 singletons (HEAVY, lazy-loaded) ---
+# Each of these pulls in several MB of Python code and takes 50-200ms on WSL.
+# Deferred via _LazyProxy until first endpoint call that actually uses them.
+_agent_team = _LazyProxy(".agent_teams", "AgentTeam")
+_learning_engine = _LazyProxy(".learning", "LearningEngine")
+_cross_repo = _LazyProxy(".cross_repo", "CrossRepoAnalyzer")
+_predictive_engine = _LazyProxy(".predictions", "PredictiveEngine")
+_security_scanner = _LazyProxy(".security", "SecurityScanner")
+_nl_engine = _LazyProxy(".nl_database", "NLQueryEngine")
 
 import asyncio as _asyncio
 import signal
@@ -120,23 +199,49 @@ _shutdown_event = _asyncio.Event()
 @asynccontextmanager
 async def _lifespan(application: FastAPI):
     """Manage startup (pre-warm) and graceful shutdown."""
+    import time as _time
+
+    _startup_start = _time.monotonic()
+    logger.info("═══════════════════════════════════════════════════")
+    logger.info("🚀 [STARTUP] GitPilot backend initializing...")
+    logger.info("═══════════════════════════════════════════════════")
 
     # -- Startup: pre-warm CrewAI in background ---
     async def _warmup():
-        await _asyncio.sleep(2)  # let health-check pass first
+        _t0 = _time.monotonic()
+        logger.info("[STARTUP] ⏳ Phase 1/3: Waiting 2s for health endpoint...")
+        await _asyncio.sleep(2)
+
+        _t1 = _time.monotonic()
+        logger.info("[STARTUP] ⏳ Phase 2/3: Importing CrewAI modules...")
         try:
             from .agentic import _crewai, _tools  # noqa: F811
             _crewai()
+            _t_crewai = _time.monotonic() - _t1
+            logger.info("[STARTUP] ✅ CrewAI imports complete in %.2fs", _t_crewai)
+
+            _t2 = _time.monotonic()
+            logger.info("[STARTUP] ⏳ Phase 3/3: Loading agent tools...")
             _tools()
-            logger.info("CrewAI modules pre-warmed successfully")
+            _t_tools = _time.monotonic() - _t2
+            logger.info("[STARTUP] ✅ Agent tools loaded in %.2fs", _t_tools)
+
+            _total = _time.monotonic() - _startup_start
+            logger.info("═══════════════════════════════════════════════════")
+            logger.info("[STARTUP] 🎉 Backend fully ready in %.2fs total", _total)
+            logger.info("═══════════════════════════════════════════════════")
         except Exception as exc:
-            logger.warning("CrewAI pre-warm failed (will retry on first request): %s", exc)
+            _t_fail = _time.monotonic() - _t1
+            logger.warning(
+                "[STARTUP] ⚠️  CrewAI pre-warm failed after %.2fs (will retry on first request): %s",
+                _t_fail, exc,
+            )
 
         # Log memory usage after warmup
         try:
             import resource
             rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
-            logger.info("Memory after warmup: %.1f MB RSS", rss_mb)
+            logger.info("[STARTUP] 📊 Memory after warmup: %.1f MB RSS", rss_mb)
         except Exception:
             pass
 
@@ -153,10 +258,17 @@ async def _lifespan(application: FastAPI):
         except (OSError, ValueError):
             pass  # not main thread or unsupported
 
+    _ready_time = _time.monotonic() - _startup_start
+    logger.info(
+        "[STARTUP] ✅ FastAPI ready to accept requests after %.2fs "
+        "(CrewAI warmup continues in background)",
+        _ready_time,
+    )
+
     yield
 
     # Cleanup on shutdown
-    logger.info("GitPilot shutting down gracefully")
+    logger.info("[SHUTDOWN] GitPilot shutting down gracefully")
     _shutdown_event.set()
 
 
@@ -202,6 +314,149 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# ──────────────────────────────────────────────────────────────────
+# Request timing middleware (logs slow startup requests for debugging)
+# ──────────────────────────────────────────────────────────────────
+@app.middleware("http")
+async def _log_slow_requests(request, call_next):
+    """Log any request that takes >1s to complete, with path and duration.
+
+    This helps diagnose first-load slowness: if /api/status takes 8s on the
+    first call but <100ms afterwards, we know the backend is doing lazy
+    initialization on first request.
+    """
+    import time as _t
+    _start = _t.monotonic()
+    try:
+        response = await call_next(request)
+    except Exception:
+        _elapsed = _t.monotonic() - _start
+        logger.error(
+            "[HTTP] ❌ %s %s failed after %.2fs",
+            request.method, request.url.path, _elapsed,
+        )
+        raise
+
+    _elapsed = _t.monotonic() - _start
+    # Only log slow requests to avoid spam (>1s is slow for health endpoints)
+    if _elapsed > 1.0:
+        logger.warning(
+            "[HTTP] 🐢 %s %s took %.2fs (status=%s)",
+            request.method, request.url.path, _elapsed, response.status_code,
+        )
+    elif _elapsed > 0.5:
+        logger.info(
+            "[HTTP] ⚠️  %s %s took %.2fs (status=%s)",
+            request.method, request.url.path, _elapsed, response.status_code,
+        )
+
+    return response
+
+
+def _project_context_to_text(project_context) -> str:
+    if not project_context:
+        return ""
+
+    parts = []
+    mode = getattr(project_context, "mode", None)
+    repo_name = getattr(project_context, "repoName", None)
+    branch = getattr(project_context, "branch", None)
+    languages = getattr(project_context, "languages", []) or []
+    manifests = getattr(project_context, "manifests", []) or []
+    key_files = getattr(project_context, "keyFiles", []) or []
+    readme_preview = getattr(project_context, "readmePreview", None)
+    tree_summary = getattr(project_context, "treeSummary", []) or []
+
+    if mode:
+        parts.append(f"Mode: {mode}")
+    if repo_name:
+        parts.append(f"Repo: {repo_name}")
+    if branch:
+        parts.append(f"Branch: {branch}")
+    if languages:
+        parts.append("Languages: " + ", ".join(languages[:20]))
+    if manifests:
+        parts.append("Manifests: " + ", ".join(manifests[:20]))
+    if key_files:
+        parts.append("Key files: " + ", ".join(key_files[:30]))
+
+    if tree_summary:
+        rendered = []
+        for entry in tree_summary[:200]:
+            if isinstance(entry, dict):
+                rendered.append(f"- {entry.get('type', 'file')}: {entry.get('path', '')}")
+        if rendered:
+            parts.append("Project tree:\n" + "\n".join(rendered))
+
+    if readme_preview:
+        parts.append("README preview:\n" + readme_preview)
+
+    return "\n".join(parts)
+
+
+def _working_set_to_text(working_set) -> str:
+    if not working_set:
+        return ""
+
+    parts = []
+    current_file = getattr(working_set, "currentFile", None)
+    language_id = getattr(working_set, "languageId", None)
+    current_selection = getattr(working_set, "currentSelection", None)
+    open_tabs = getattr(working_set, "openTabs", []) or []
+    related_files = getattr(working_set, "relatedFiles", []) or []
+
+    if current_file:
+        parts.append(f"Current file: {current_file}")
+    if language_id:
+        parts.append(f"Language: {language_id}")
+    if open_tabs:
+        parts.append("Open tabs: " + ", ".join(open_tabs[:12]))
+    if related_files:
+        parts.append("Related files: " + ", ".join(related_files[:12]))
+    if current_selection:
+        parts.append("Selected code:\n```\n" + current_selection + "\n```")
+
+    return "\n".join(parts)
+
+
+def _build_local_repo_aware_prompt(req, session) -> str:
+    task_summary = getattr(getattr(req, "task_context", None), "summary", None)
+
+    sections = [
+        "You are GitPilot running in VS Code enterprise repo-aware mode.",
+        "Use the supplied repository metadata, working-set context, and user request to answer precisely.",
+        "When suggesting code changes, be explicit about which files to edit and why.",
+        "Prefer incremental, production-safe patches over large rewrites.",
+    ]
+
+    session_lines = [
+        f"Session mode: {getattr(session, 'mode', None)}",
+        f"Folder path: {getattr(session, 'folder_path', None)}",
+        f"Repo root: {getattr(session, 'repo_root', None)}",
+        f"Branch: {getattr(session, 'branch', None)}",
+    ]
+
+    valid_session_lines = [
+        line for line in session_lines if line and not line.endswith(": None")
+    ]
+    if valid_session_lines:
+        sections.append("Session context:\n" + "\n".join(valid_session_lines))
+
+    project_txt = _project_context_to_text(getattr(req, "project_context", None))
+    if project_txt:
+        sections.append("Project context:\n" + project_txt)
+
+    working_txt = _working_set_to_text(getattr(req, "working_set", None))
+    if working_txt:
+        sections.append("Working set:\n" + working_txt)
+
+    if task_summary:
+        sections.append("Task context:\n" + task_summary)
+
+    sections.append("User request:\n" + req.message)
+
+    return "\n\n---\n\n".join(sections)
 
 def get_github_token(authorization: Optional[str] = Header(None)) -> Optional[str]:
     """
@@ -277,6 +532,7 @@ class SettingsResponse(BaseModel):
     claude: dict
     watsonx: dict
     ollama: dict
+    ollabridge: dict
     langflow_url: str
     has_langflow_plan_flow: bool
 
@@ -389,35 +645,28 @@ class SearchRequest(BaseModel):
 
 @app.get("/api/repos", response_model=PaginatedReposResponse)
 async def api_list_repos(
-    query: Optional[str] = Query(None, description="Search query (searches across ALL repositories)"),
-    page: int = Query(1, ge=1, description="Page number (starts at 1)"),
-    per_page: int = Query(100, ge=1, le=100, description="Results per page (max 100)"),
-    authorization: Optional[str] = Header(None),
+    query: str | None = Query(None, description="Search query"),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(100, ge=1, le=100),
+    authorization: str | None = Header(None),
 ):
-    """
-    List user repositories with enterprise-grade pagination and search.
-    Includes default_branch information for correct frontend routing.
-    """
     token = get_github_token(authorization)
 
     try:
         if query:
-            # SEARCH MODE: Search across ALL repositories
             result = await search_user_repos(
                 query=query,
                 page=page,
                 per_page=per_page,
-                token=token
+                token=token,
             )
         else:
-            # PAGINATION MODE: Return repos page by page
             result = await list_user_repos_paginated(
                 page=page,
                 per_page=per_page,
-                token=token
+                token=token,
             )
 
-        # --- FIXED: Mapping default_branch ---
         repos = [
             RepoSummary(
                 id=r["id"],
@@ -425,7 +674,7 @@ async def api_list_repos(
                 full_name=r["full_name"],
                 private=r["private"],
                 owner=r["owner"],
-                default_branch=r.get("default_branch", "main"),  # <--- CRITICAL FIX
+                default_branch=r.get("default_branch", "main"),
             )
             for r in result["repositories"]
         ]
@@ -439,19 +688,33 @@ async def api_list_repos(
             query=query,
         )
 
-    except Exception as e:
-        logging.exception("Error fetching repositories")
-        return JSONResponse(
-            content={
-                "error": f"Failed to fetch repositories: {str(e)}",
-                "repositories": [],
-                "page": page,
-                "per_page": per_page,
-                "has_more": False,
-            },
-            status_code=500
+    except httpx.ConnectTimeout:
+        logger.exception("GitHub connection timed out while fetching repositories")
+        raise HTTPException(
+            status_code=504,
+            detail="Timed out while connecting to GitHub. Please try again."
         )
 
+    except httpx.TimeoutException:
+        logger.exception("GitHub request timed out while fetching repositories")
+        raise HTTPException(
+            status_code=504,
+            detail="GitHub request timed out. Please try again."
+        )
+
+    except httpx.HTTPError as e:
+        logger.exception("GitHub HTTP error while fetching repositories")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to contact GitHub: {str(e)}"
+        )
+
+    except Exception as e:
+        logger.exception("Error fetching repositories")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unexpected error fetching repositories: {str(e)}"
+        )
 
 @app.get("/api/repos/all")
 async def api_list_all_repos(
@@ -587,19 +850,49 @@ async def api_put_file(
 # Settings Endpoints
 # ============================================================================
 
-@app.get("/api/settings", response_model=SettingsResponse)
-async def api_get_settings():
-    s: AppSettings = get_settings()
+def settings_response_from(s: AppSettings) -> SettingsResponse:
     return SettingsResponse(
         provider=s.provider,
-        providers=[LLMProvider.openai, LLMProvider.claude, LLMProvider.watsonx, LLMProvider.ollama],
+        providers=[
+            LLMProvider.openai,
+            LLMProvider.claude,
+            LLMProvider.watsonx,
+            LLMProvider.ollama,
+            LLMProvider.ollabridge,
+        ],
         openai=s.openai.model_dump(),
         claude=s.claude.model_dump(),
         watsonx=s.watsonx.model_dump(),
         ollama=s.ollama.model_dump(),
+        ollabridge=s.ollabridge.model_dump(),
         langflow_url=s.langflow_url,
         has_langflow_plan_flow=bool(s.langflow_plan_flow_id),
     )
+
+
+@app.get("/api/settings", response_model=SettingsResponse)
+async def api_get_settings():
+    """
+    Fast path:
+    Return persisted settings immediately without probing providers/models.
+
+    This keeps the Admin / LLM Settings page fast on first render.
+    """
+    s: AppSettings = get_settings()
+    return settings_response_from(s)
+
+
+@app.post("/api/settings/bootstrap", response_model=SettingsResponse)
+async def api_bootstrap_settings():
+    """
+    Slow path:
+    Perform local provider/model auto-configuration explicitly.
+
+    This can be called after the page renders, or on startup, without blocking
+    the first settings paint.
+    """
+    s: AppSettings = autoconfigure_local_provider()
+    return settings_response_from(s)
 
 
 @app.get("/api/settings/models", response_model=ProviderModelsResponse)
@@ -623,30 +916,41 @@ async def api_list_models(provider: Optional[LLMProvider] = Query(None)):
 
 @app.post("/api/settings/provider", response_model=SettingsResponse)
 async def api_set_provider(update: ProviderUpdate):
+    """
+    Provider changes may legitimately trigger local bootstrap, but only when
+    switching to local providers.
+    """
     s = set_provider(update.provider)
-    return SettingsResponse(
-        provider=s.provider,
-        providers=[LLMProvider.openai, LLMProvider.claude, LLMProvider.watsonx, LLMProvider.ollama],
-        openai=s.openai.model_dump(),
-        claude=s.claude.model_dump(),
-        watsonx=s.watsonx.model_dump(),
-        ollama=s.ollama.model_dump(),
-        langflow_url=s.langflow_url,
-        has_langflow_plan_flow=bool(s.langflow_plan_flow_id),
-    )
+
+    if s.provider in (LLMProvider.ollama, LLMProvider.ollabridge):
+        s = autoconfigure_local_provider(force=True)
+
+    return settings_response_from(s)
 
 
 @app.put("/api/settings/llm", response_model=SettingsResponse)
 async def api_update_llm_settings(updates: dict):
+    """
+    Update full LLM settings including provider-specific configs.
+
+    Important:
+    - Do NOT auto-probe providers here on every save.
+    - Saving should be fast and deterministic.
+    """
+    s = update_settings(updates)
+    return settings_response_from(s)
+
     """Update full LLM settings including provider-specific configs."""
     s = update_settings(updates)
+    s = autoconfigure_local_provider()
     return SettingsResponse(
         provider=s.provider,
-        providers=[LLMProvider.openai, LLMProvider.claude, LLMProvider.watsonx, LLMProvider.ollama],
+        providers=[LLMProvider.openai, LLMProvider.claude, LLMProvider.watsonx, LLMProvider.ollama, LLMProvider.ollabridge],
         openai=s.openai.model_dump(),
         claude=s.claude.model_dump(),
         watsonx=s.watsonx.model_dump(),
         ollama=s.ollama.model_dump(),
+        ollabridge=s.ollabridge.model_dump(),
         langflow_url=s.langflow_url,
         has_langflow_plan_flow=bool(s.langflow_plan_flow_id),
     )
@@ -698,16 +1002,28 @@ async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Hea
                     ),
                 ) from exc
 
-            # ── Empty CrewAI output (small LLM returns nothing) ─
-            if "No valid task outputs" in error_msg:
-                logger.warning("[GitPilot] CrewAI empty output — model may be too small: %s", error_msg)
+            # ── Empty/invalid LLM response (small model can't follow ReAct) ─
+            _empty_llm_errors = (
+                "No valid task outputs",
+                "Invalid response from LLM call",
+                "None or empty",
+            )
+            if any(kw in error_msg for kw in _empty_llm_errors):
+                logger.warning(
+                    "[GitPilot] LLM returned empty/invalid response — "
+                    "model may be too small for multi-agent CrewAI prompts: %s",
+                    error_msg,
+                )
                 raise HTTPException(
                     status_code=502,
                     detail=(
-                        "The LLM returned an empty response. This usually happens "
-                        "with very small models (< 3B parameters) that cannot follow "
-                        "complex multi-agent prompts. Try enabling Lite Mode in "
-                        "Settings for better results with small models."
+                        "The LLM could not complete the multi-agent reasoning. "
+                        "This usually happens with small local models "
+                        "(qwen2.5:0.5b, tinyllama, phi3:mini, etc.) that struggle "
+                        "with the ReAct format. Solutions:\n"
+                        "• Switch to a larger model (llama3, qwen2.5:7b, mistral)\n"
+                        "• Enable Lite Mode in Settings for simpler prompts\n"
+                        "• Use a cloud provider (OpenAI, Claude) for complex tasks"
                     ),
                 ) from exc
 
@@ -744,12 +1060,19 @@ async def api_chat_execute(
                         "or switch to a free local provider in Settings."
                     ),
                 ) from exc
-            if "No valid task outputs" in error_msg:
+            _empty_llm_errors = (
+                "No valid task outputs",
+                "Invalid response from LLM call",
+                "None or empty",
+            )
+            if any(kw in error_msg for kw in _empty_llm_errors):
                 raise HTTPException(
                     status_code=502,
                     detail=(
-                        "The LLM returned an empty response. Try enabling Lite Mode "
-                        "in Settings for better results with small models."
+                        "The LLM could not complete the task. This usually happens "
+                        "with small local models (qwen2.5:0.5b, tinyllama, phi3:mini). "
+                        "Try a larger model (llama3, qwen2.5:7b), enable Lite Mode "
+                        "in Settings, or use a cloud provider."
                     ),
                 ) from exc
             if isinstance(exc, TimeoutError) or "timed out" in error_msg.lower():
@@ -886,12 +1209,19 @@ async def api_chat_message(req: ChatRequest, authorization: Optional[str] = Head
                         "or switch to a free local provider in Settings."
                     ),
                 ) from exc
-            if "No valid task outputs" in error_msg:
+            _empty_llm_errors = (
+                "No valid task outputs",
+                "Invalid response from LLM call",
+                "None or empty",
+            )
+            if any(kw in error_msg for kw in _empty_llm_errors):
                 raise HTTPException(
                     status_code=502,
                     detail=(
-                        "The LLM returned an empty response. Try enabling Lite Mode "
-                        "in Settings for better results with small models."
+                        "The LLM could not complete the task. This usually happens "
+                        "with small local models (qwen2.5:0.5b, tinyllama, phi3:mini). "
+                        "Try a larger model (llama3, qwen2.5:7b), enable Lite Mode "
+                        "in Settings, or use a cloud provider."
                     ),
                 ) from exc
             if isinstance(exc, TimeoutError) or "timed out" in error_msg.lower():
@@ -2127,6 +2457,8 @@ async def api_nl_translate(payload: dict):
     tables = payload.get("tables", [])
     if not question:
         raise HTTPException(status_code=400, detail="question is required")
+    # Lazy import — nl_database pulls in SQL parsing libraries
+    from .nl_database import NLQueryEngine, QueryDialect, TableSchema
     engine = NLQueryEngine(dialect=QueryDialect(dialect))
     for t in tables:
         engine.add_table(TableSchema(
@@ -2412,6 +2744,33 @@ async def api_update_session_status(session_id: str, payload: dict):
 from fastapi import WebSocket, WebSocketDisconnect
 
 
+async def _safe_ws_send_json(websocket: WebSocket, data: dict) -> bool:
+    """Send JSON over a WebSocket, swallowing disconnect errors.
+
+    Returns True if the send succeeded, False if the client has disconnected.
+    This prevents ClientDisconnected / WebSocketDisconnect from crashing the
+    handler when the client closes mid-response (common with Vite HMR,
+    browser tab close, or network drops).
+
+    Best-practice pattern from Starlette docs:
+    https://www.starlette.io/websockets/#disconnect
+    """
+    try:
+        await websocket.send_json(data)
+        return True
+    except WebSocketDisconnect:
+        return False
+    except Exception as exc:
+        # Catches uvicorn.protocols.utils.ClientDisconnected and other
+        # transport-layer errors without importing uvicorn internals
+        exc_name = type(exc).__name__
+        if exc_name in ("ClientDisconnected", "ConnectionClosedError",
+                        "ConnectionClosedOK", "WebSocketDisconnect"):
+            return False
+        # Re-raise unexpected errors so they show up in logs
+        raise
+
+
 @app.websocket("/ws/sessions/{session_id}")
 async def session_websocket(websocket: WebSocket, session_id: str):
     """
@@ -2435,21 +2794,30 @@ async def session_websocket(websocket: WebSocket, session_id: str):
     try:
         session = _session_mgr.load(session_id)
     except FileNotFoundError:
-        await websocket.send_json({"type": "error", "message": "Session not found"})
-        await websocket.close()
+        await _safe_ws_send_json(websocket, {"type": "error", "message": "Session not found"})
+        try:
+            await websocket.close()
+        except Exception:
+            pass
         return
 
-    # Send session history on connect
-    await websocket.send_json({
+    # Send session history on connect (may fail if client already gone)
+    if not await _safe_ws_send_json(websocket, {
         "type": "session_restored",
         "session_id": session.id,
         "status": session.status,
         "message_count": len(session.messages),
-    })
+    }):
+        logger.info(f"WebSocket disconnected before handshake for session {session_id}")
+        return
 
     try:
         while True:
-            data = await websocket.receive_json()
+            try:
+                data = await websocket.receive_json()
+            except WebSocketDisconnect:
+                break
+
             event_type = data.get("type", "")
 
             if event_type == "user_message":
@@ -2458,16 +2826,18 @@ async def session_websocket(websocket: WebSocket, session_id: str):
                 _session_mgr.save(session)
 
                 # Acknowledge receipt
-                await websocket.send_json({
+                if not await _safe_ws_send_json(websocket, {
                     "type": "message_received",
                     "message_index": len(session.messages) - 1,
-                })
+                }):
+                    break
 
                 # Stream agent response (integration point for agentic.py)
-                await websocket.send_json({
+                if not await _safe_ws_send_json(websocket, {
                     "type": "status_change",
                     "status": "active",
-                })
+                }):
+                    break
 
                 # Agent processing hook — when the agent orchestrator is wired,
                 # replace this with actual streaming from agentic.py
@@ -2495,18 +2865,23 @@ async def session_websocket(websocket: WebSocket, session_id: str):
                             answer = str(result)
 
                         # Stream the response
-                        await websocket.send_json({
+                        if not await _safe_ws_send_json(websocket, {
                             "type": "agent_message",
                             "content": answer,
-                        })
+                        }):
+                            # Client disconnected — still persist the answer for session history
+                            session.add_message("assistant", answer)
+                            _session_mgr.save(session)
+                            break
 
                         session.add_message("assistant", answer)
                         _session_mgr.save(session)
                     else:
-                        await websocket.send_json({
+                        if not await _safe_ws_send_json(websocket, {
                             "type": "agent_message",
                             "content": "Session is not connected to a repository.",
-                        })
+                        }):
+                            break
                 except Exception as agent_err:
                     logger.error(f"Agent error in WS session {session_id}: {agent_err}")
                     err_str = str(agent_err)
@@ -2518,38 +2893,44 @@ async def session_websocket(websocket: WebSocket, session_id: str):
                             "hit a rate limit. Please check your billing details or "
                             "switch to a free local provider (Ollama / OllaBridge) in Settings."
                         )
-                    elif "No valid task outputs" in err_str:
+                    elif "No valid task outputs" in err_str or "Invalid response from LLM call" in err_str:
                         err_str = (
                             "The LLM returned an empty response. This often happens "
-                            "with small models (< 3B). Try enabling Lite Mode in Settings."
+                            "with small/reasoning models. Try a larger model or enable Lite Mode."
                         )
-                    await websocket.send_json({
+                    if not await _safe_ws_send_json(websocket, {
                         "type": "error",
                         "message": err_str,
-                    })
+                    }):
+                        break
 
-                await websocket.send_json({
+                if not await _safe_ws_send_json(websocket, {
                     "type": "status_change",
                     "status": "waiting",
-                })
+                }):
+                    break
 
             elif event_type == "cancel":
-                await websocket.send_json({
+                if not await _safe_ws_send_json(websocket, {
                     "type": "status_change",
                     "status": "waiting",
-                })
+                }):
+                    break
 
             elif event_type == "ping":
-                await websocket.send_json({"type": "pong"})
+                if not await _safe_ws_send_json(websocket, {"type": "pong"}):
+                    break
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected for session {session_id}")
     except Exception as e:
-        logger.error(f"WebSocket error for session {session_id}: {e}")
-        try:
-            await websocket.send_json({"type": "error", "message": str(e)})
-        except Exception:
-            pass
+        # Don't log as error if it's a disconnect-related exception
+        exc_name = type(e).__name__
+        if exc_name in ("ClientDisconnected", "ConnectionClosedError", "ConnectionClosedOK"):
+            logger.info(f"WebSocket client disconnected for session {session_id}")
+        else:
+            logger.error(f"WebSocket error for session {session_id}: {e}")
+            await _safe_ws_send_json(websocket, {"type": "error", "message": str(e)})
 
 
 # ─── Redesigned API Endpoints (Phase 1–4) ────────────────────────────────
@@ -2568,10 +2949,10 @@ async def api_status():
         StatusResponse, ProviderStatusResponse, ProviderName,
         WorkspaceCapabilitySummary, GithubStatusSummary, ProviderHealth,
     )
-    from gitpilot.settings import get_settings
+    from gitpilot.settings import autoconfigure_local_provider
     from gitpilot.github_api import get_github_status_summary
 
-    s = get_settings()
+    s = autoconfigure_local_provider()
     provider_summary = s.get_provider_summary()
 
     # Build provider status
@@ -2595,12 +2976,16 @@ async def api_status():
         github_mode_available=False,
     )
 
-    # GitHub status
+    # GitHub status — wrap with timeout to prevent slow first-load
+    # (GitHub API calls over WSL/slow networks can take 5-10s first time)
+    github = GithubStatusSummary()
     try:
-        github = await get_github_status_summary()
+        github = await _asyncio.wait_for(get_github_status_summary(), timeout=3.0)
         workspace.github_mode_available = github.connected
-    except Exception:
-        github = GithubStatusSummary()
+    except _asyncio.TimeoutError:
+        logger.warning("[api/status] GitHub status check timed out after 3s, returning cached/default")
+    except Exception as exc:
+        logger.debug("[api/status] GitHub status check failed: %s", exc)
 
     return StatusResponse(
         server_ready=True,
@@ -2613,10 +2998,10 @@ async def api_status():
 @app.get("/api/providers/status")
 async def api_providers_status():
     """Get detailed status for the active provider."""
-    from gitpilot.settings import get_settings
+    from gitpilot.settings import autoconfigure_local_provider
     from gitpilot.llm_provider import test_provider_connection
 
-    s = get_settings()
+    s = autoconfigure_local_provider()
     summary = await test_provider_connection(s)
     return summary
 
@@ -2632,7 +3017,7 @@ async def api_providers_test(req: _ProviderTestRequest):
     from gitpilot.llm_provider import test_provider_connection
     import copy
 
-    s = get_settings()
+    s = autoconfigure_local_provider()
     # Apply test overrides temporarily
     test_settings = copy.deepcopy(s)
 
@@ -2775,8 +3160,9 @@ async def api_chat_message_v2(req: _ChatMessageRequest):
             # Folder-mode: use LLM directly for simple chat
             from gitpilot.llm_provider import build_llm
             llm = build_llm()
+            local_prompt = _build_local_repo_aware_prompt(req, session)
             answer = llm.call(
-                [{"role": "user", "content": req.message}]
+                [{"role": "user", "content": local_prompt}]
             )
     except Exception as e:
         err_str = str(e)
@@ -2836,6 +3222,16 @@ if ASSETS_DIR.exists():
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.get("/api/ping")
+async def ping():
+    """Zero-dependency ping — used by frontend initApp() to detect when
+    the backend is accepting requests. Returns immediately without touching
+    any modules, settings, or external APIs. Always fast even during
+    CrewAI warmup or GitHub API outages.
+    """
+    return {"ok": True, "service": "gitpilot", "version": __version__}
 
 
 @app.get("/api/health")
@@ -2898,3 +3294,297 @@ try:
     del _apply_ob
 except ImportError:
     pass  # Extension not available, skip gracefully
+
+
+# ============================================================================
+# V2 Streaming Agent Endpoints (additive, non-destructive)
+#
+# These endpoints use the unified AgentEventBus protocol so every client
+# (VS Code, React web, HF Spaces) receives the same JSON event shapes.
+#
+# Existing endpoints are NOT modified. These are /api/v2/ prefixed.
+# ============================================================================
+
+import asyncio as _asyncio
+from fastapi import Request as _Request
+from fastapi.responses import StreamingResponse as _StreamingResponse
+from gitpilot.agent_events import get_bus as _get_bus, remove_bus as _remove_bus, EventType as _EvType
+from gitpilot.agent_executor import StreamingAgentExecutor as _StreamingExecutor
+from gitpilot.approval_protocol import ApprovalGate as _ApprovalGate
+from gitpilot.workspace import WorkspaceManager as _V2WorkspaceManager
+
+# Track active executors for cancellation
+_active_executors: dict[str, _StreamingExecutor] = {}
+
+
+@app.post("/api/v2/chat/stream", tags=["v2-streaming"])
+async def v2_chat_stream(request: _Request):
+    """
+    Server-Sent Events endpoint for agent execution.
+
+    Returns text/event-stream. Each line is:
+      data: {"type": "text_delta", "text": "..."}\n\n
+      data: {"type": "tool_start", "name": "read_file", ...}\n\n
+      data: {"type": "done", ...}\n\n
+
+    This is the PREFERRED endpoint for:
+      - Hugging Face Spaces (SSE works through nginx/proxies)
+      - VS Code extension (can consume SSE via fetch ReadableStream)
+      - Any HTTP client that supports streaming
+    """
+    body = await request.json()
+    user_message = body.get("message", "")
+    session_id = body.get("session_id", "")
+    permission_mode = body.get("permission_mode", "normal")
+
+    if not user_message:
+        return JSONResponse({"error": "message is required"}, status_code=400)
+
+    # Load session (reuse existing session manager)
+    session = None
+    repo_full_name = ""
+    branch = None
+    token = body.get("token")
+
+    if session_id:
+        try:
+            session = _session_mgr.load(session_id)
+            repo_full_name = session.repo_full_name or ""
+            branch = session.branch
+        except FileNotFoundError:
+            return JSONResponse({"error": "Session not found"}, status_code=404)
+
+    bus = _get_bus(session_id or "ephemeral")
+    gate = _ApprovalGate(bus, mode=permission_mode)
+
+    # Resolve workspace (if session has a local workspace)
+    workspace = None
+    if session and repo_full_name:
+        try:
+            parts = repo_full_name.split("/", 1)
+            if len(parts) == 2:
+                ws_mgr = _V2WorkspaceManager()
+                workspace = await ws_mgr.ensure_workspace(
+                    owner=parts[0], repo=parts[1],
+                    token=token, branch=branch,
+                )
+        except Exception as ws_err:
+            logger.warning("Could not resolve workspace: %s", ws_err)
+
+    executor = _StreamingExecutor(
+        bus=bus, gate=gate, workspace=workspace,
+        ws_manager=_V2WorkspaceManager(),
+    )
+    _active_executors[session_id or "ephemeral"] = executor
+
+    sub_id, _queue = bus.subscribe()
+
+    async def event_generator():
+        """Run agent in background, yield events as SSE."""
+        # Start execution as a background task
+        exec_task = _asyncio.create_task(
+            executor.execute(
+                user_message=user_message,
+                repo_full_name=repo_full_name,
+                branch=branch,
+                token=token,
+            )
+        )
+
+        try:
+            async for event in bus.stream(sub_id):
+                yield event.to_sse()
+                if event.type in (_EvType.DONE, _EvType.ERROR):
+                    break
+        finally:
+            bus.unsubscribe(sub_id)
+            _active_executors.pop(session_id or "ephemeral", None)
+
+            # Ensure the task completes
+            if not exec_task.done():
+                exec_task.cancel()
+                try:
+                    await exec_task
+                except (_asyncio.CancelledError, Exception):
+                    pass
+
+            # Save assistant message to session
+            if session and exec_task.done() and not exec_task.cancelled():
+                try:
+                    result = exec_task.result()
+                    if result:
+                        summary = result.get("summary", "") if isinstance(result, dict) else str(result)
+                        session.add_message("assistant", summary[:5000])
+                        _session_mgr.save(session)
+                except Exception:
+                    pass
+
+            _remove_bus(session_id or "ephemeral")
+
+    return _StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post("/api/v2/approval/respond", tags=["v2-streaming"])
+async def v2_approval_respond(request: _Request):
+    """
+    Client sends approval/denial for a tool execution.
+    Used by all clients (web, VS Code, HF Spaces).
+    """
+    body = await request.json()
+    session_id = body.get("session_id", "ephemeral")
+    request_id = body.get("request_id", "")
+    approved = body.get("approved", False)
+    scope = body.get("scope", "once")
+
+    if not request_id:
+        return JSONResponse({"error": "request_id is required"}, status_code=400)
+
+    # The approval gate is created per-stream, so we emit an event
+    # that the gate's listener will pick up
+    bus = _get_bus(session_id)
+    from gitpilot.agent_events import approval_resolved
+    await bus.emit(approval_resolved(request_id, approved))
+
+    return {"status": "resolved", "request_id": request_id, "approved": approved}
+
+
+@app.post("/api/v2/agent/cancel", tags=["v2-streaming"])
+async def v2_agent_cancel(request: _Request):
+    """Cancel the running agent stream for a session."""
+    body = await request.json()
+    session_id = body.get("session_id", "ephemeral")
+
+    executor = _active_executors.get(session_id)
+    if executor:
+        executor.cancel()
+        return {"status": "cancelled", "session_id": session_id}
+
+    return JSONResponse({"error": "No active executor for this session"}, status_code=404)
+
+
+@app.websocket("/ws/v2/sessions/{session_id}")
+async def v2_session_websocket(websocket: WebSocket, session_id: str):
+    """
+    V2 WebSocket with full agent streaming protocol.
+
+    Same event types as SSE endpoint. Client can also send:
+      { type: "user_message", content: "..." }
+      { type: "approval_response", request_id: "...", approved: true, scope: "session" }
+      { type: "cancel" }
+      { type: "ping" }
+    """
+    await websocket.accept()
+
+    try:
+        session = _session_mgr.load(session_id)
+    except FileNotFoundError:
+        await _safe_ws_send_json(websocket, {"type": "error", "message": "Session not found"})
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        return
+
+    if not await _safe_ws_send_json(websocket, {
+        "type": "session_restored",
+        "session_id": session.id,
+        "status": session.status,
+        "protocol": "v2",
+    }):
+        logger.info("V2 WebSocket disconnected before handshake for session %s", session_id)
+        return
+
+    bus = _get_bus(session_id)
+    gate = _ApprovalGate(bus)
+    sub_id, _queue = bus.subscribe()
+
+    # Forward bus events -> WebSocket
+    async def forward_events():
+        try:
+            async for event in bus.stream(sub_id):
+                if not await _safe_ws_send_json(websocket, event.to_dict()):
+                    break
+        except Exception:
+            pass
+
+    forwarder = _asyncio.create_task(forward_events())
+
+    try:
+        while True:
+            try:
+                data = await websocket.receive_json()
+            except WebSocketDisconnect:
+                break
+            event_type = data.get("type", "")
+
+            if event_type == "user_message":
+                content = data.get("content", "")
+                if not content:
+                    continue
+
+                session.add_message("user", content)
+                _session_mgr.save(session)
+
+                # Resolve workspace
+                workspace = None
+                repo_full = session.repo_full_name or ""
+                parts = repo_full.split("/", 1)
+                if len(parts) == 2:
+                    try:
+                        ws_mgr = _V2WorkspaceManager()
+                        workspace = await ws_mgr.ensure_workspace(
+                            owner=parts[0], repo=parts[1],
+                            token=data.get("token"),
+                            branch=session.branch,
+                        )
+                    except Exception:
+                        pass
+
+                executor = _StreamingExecutor(
+                    bus=bus, gate=gate, workspace=workspace,
+                    ws_manager=_V2WorkspaceManager(),
+                )
+                _active_executors[session_id] = executor
+
+                # Run agent (non-blocking)
+                _asyncio.create_task(executor.execute(
+                    user_message=content,
+                    repo_full_name=repo_full,
+                    branch=session.branch,
+                    token=data.get("token"),
+                ))
+
+            elif event_type == "approval_response":
+                gate.resolve(
+                    request_id=data.get("request_id", ""),
+                    approved=data.get("approved", False),
+                    scope=data.get("scope", "once"),
+                )
+
+            elif event_type == "cancel":
+                executor = _active_executors.get(session_id)
+                if executor:
+                    executor.cancel()
+
+            elif event_type == "ping":
+                if not await _safe_ws_send_json(websocket, {"type": "pong"}):
+                    break
+
+    except WebSocketDisconnect:
+        logger.info("V2 WebSocket disconnected for session %s", session_id)
+    except Exception as e:
+        logger.error("V2 WebSocket error for session %s: %s", session_id, e)
+    finally:
+        forwarder.cancel()
+        bus.unsubscribe(sub_id)
+        _active_executors.pop(session_id, None)
+        gate.cancel_all()
+        _remove_bus(session_id)

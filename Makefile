@@ -85,6 +85,9 @@ uv-install:
 	@echo "🔧 Syncing Python environment with uv (all extras)..."
 	@$(UV) sync --all-extras
 	@echo "✅ Python environment ready."
+	@echo "⚡ Precompiling bytecode for faster startup (WSL/HF Spaces)..."
+	@$(UV) run python -m compileall -q -j 4 gitpilot/ 2>/dev/null || true
+	@echo "✅ Bytecode cache warmed."
 
 ## Install frontend dependencies
 frontend-install:
@@ -106,22 +109,32 @@ dev: install
 ## Run GitPilot from the uv-managed environment (backend + frontend)
 run:
 	@echo "🚀 Starting GitPilot backend on http://127.0.0.1:$(PORT)..."
+	@# Check if port is already in use
+	@if lsof -i:$(PORT) -sTCP:LISTEN > /dev/null 2>&1 || \
+	    nc -z 127.0.0.1 $(PORT) > /dev/null 2>&1; then \
+		echo "⚠️  Port $(PORT) is already in use. Run 'make stop' first."; \
+		exit 1; \
+	fi
 	@trap 'kill 0' EXIT; \
 	$(UV) run python -m gitpilot serve --host 127.0.0.1 --port $(PORT) --no-open & \
 	BACKEND_PID=$$!; \
-	echo "⏳ Waiting for backend to be ready..."; \
-	for i in 1 2 3 4 5 6 7 8 9 10; do \
-		if curl -s http://127.0.0.1:$(PORT)/api/health > /dev/null 2>&1 || \
-		   nc -z 127.0.0.1 $(PORT) > /dev/null 2>&1 || \
-		   lsof -i:$(PORT) -sTCP:LISTEN > /dev/null 2>&1; then \
-			echo "✅ Backend is ready!"; \
+	echo "⏳ Waiting for backend to be ready (up to 60s for WSL/first-start)..."; \
+	READY=0; \
+	for i in $$(seq 1 30); do \
+		if curl -sf http://127.0.0.1:$(PORT)/api/ping > /dev/null 2>&1; then \
+			echo "✅ Backend is ready after $$((i * 2))s"; \
+			READY=1; \
 			break; \
 		fi; \
-		if [ $$i -eq 10 ]; then \
-			echo "⚠️  Backend took longer than expected, starting frontend anyway..."; \
+		if [ $$((i % 5)) -eq 0 ]; then \
+			echo "   ... still waiting ($$((i * 2))s elapsed)"; \
 		fi; \
-		sleep 1; \
+		sleep 2; \
 	done; \
+	if [ $$READY -eq 0 ]; then \
+		echo "⚠️  Backend took longer than 60s. Starting frontend anyway — the frontend"; \
+		echo "    will keep polling /api/ping and recover when the backend comes online."; \
+	fi; \
 	echo "🎨 Starting frontend dev server on http://localhost:5173..."; \
 	cd frontend && npm run dev -- --open
 
@@ -152,7 +165,16 @@ stop:
 
 ## Run tests
 test:
-	@echo "🧪 Running tests with pytest..."
+	@echo "🧪 Running tests with isolated GitPilot config..."
+	@TMP_CFG="$$(mktemp -d)"; \
+	echo "Using GITPILOT_CONFIG_DIR=$$TMP_CFG"; \
+	GITPILOT_CONFIG_DIR="$$TMP_CFG" GITPILOT_LITE_MODE=0 PYTHONWARNINGS="ignore::RuntimeWarning" $(UV) run pytest; \
+	STATUS=$$?; \
+	rm -rf "$$TMP_CFG"; \
+	exit $$STATUS
+
+test-fast:
+	@echo "🧪 Running tests (no isolation)..."
 	@$(UV) run pytest
 
 ## Lint code
