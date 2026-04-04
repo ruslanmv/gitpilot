@@ -1,21 +1,54 @@
+/*
+ * GitPilot brand tokens (shared with web frontend + logo).
+ *
+ * Brand palette (single source of truth):
+ *   --gp-accent         #D95C3D  warm orange, primary buttons & links
+ *   --gp-accent-bright  #ff7a3c  brighter variant for glows, cursors, progress
+ *   --gp-accent-hover   #C44F32  darker variant for button hover
+ *   --gp-surface-0      #131316  page background (overrides VS Code in dark themes)
+ *   --gp-surface-1      #1C1C1F  card background (LoginPage theme.cardBg)
+ *   --gp-border-subtle  #27272A  (LoginPage theme.border)
+ *   --gp-text-primary   #EDEDED  primary text on dark surfaces
+ *   --gp-text-muted     #A1A1AA  secondary text
+ *
+ * Philosophy: background and text still honor VS Code's theme so the
+ * extension respects user preferences, but brand accents (--accent,
+ * --button, --focus) are locked to GitPilot's palette so the extension,
+ * web app, and logo share one identity.
+ */
 :root {
+  /* ── GitPilot brand palette (matches docs/logo.svg + web LoginPage) ── */
+  --gp-accent: #D95C3D;
+  --gp-accent-bright: #ff7a3c;
+  --gp-accent-hover: #C44F32;
+  --gp-surface-0: #131316;
+  --gp-surface-1: #1C1C1F;
+  --gp-border-subtle: #27272A;
+  --gp-text-primary: #EDEDED;
+  --gp-text-muted: #A1A1AA;
+
+  /* ── Base tokens honor VS Code theme (light/dark switching works) ── */
   --bg: var(--vscode-sideBar-background);
   --surface: color-mix(in srgb, var(--vscode-editorWidget-background, var(--vscode-sideBar-background)) 78%, var(--vscode-sideBar-background));
   --surface-2: var(--vscode-editor-background, var(--vscode-sideBar-background));
   --fg: var(--vscode-foreground);
   --muted: var(--vscode-descriptionForeground);
   --border: color-mix(in srgb, var(--vscode-panel-border) 80%, transparent);
-  --button: var(--vscode-button-background);
-  --button-fg: var(--vscode-button-foreground);
-  --button-hover: var(--vscode-button-hoverBackground);
-  --secondary: var(--vscode-button-secondaryBackground, rgba(127, 127, 127, .12));
-  --secondary-fg: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+
+  /* ── Brand accents: GitPilot palette, NOT VS Code theme ── */
+  --button: var(--gp-accent);
+  --button-fg: #ffffff;
+  --button-hover: var(--gp-accent-hover);
+  --secondary: color-mix(in srgb, var(--gp-accent) 12%, transparent);
+  --secondary-fg: var(--gp-accent-bright);
   --input-bg: var(--vscode-input-background);
   --input-fg: var(--vscode-input-foreground);
   --input-border: var(--vscode-input-border, var(--vscode-panel-border));
-  --focus: var(--vscode-focusBorder);
-  --accent: var(--vscode-textLink-foreground);
-  --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+  --focus: var(--gp-accent);
+  --accent: var(--gp-accent-bright);
+  --accent-soft: color-mix(in srgb, var(--gp-accent) 14%, transparent);
+
+  /* ── Semantic status colors ── */
   --success: var(--vscode-testing-iconPassed, #4caf50);
   --success-soft: color-mix(in srgb, var(--success) 12%, transparent);
   --warning: var(--vscode-testing-iconQueued, #d7ba7d);
@@ -311,30 +344,6 @@ textarea {
 .progress-label {
   color: var(--muted);
   font-size: var(--font-sm);
-}
-
-.context-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.context-chip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 30px;
-  padding: 5px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--surface-2) 90%, transparent);
-  color: var(--fg);
-  font-size: var(--font-md);
-}
-
-.context-chip strong {
-  color: var(--muted);
-  margin-right: 5px;
-  font-weight: 700;
 }
 
 details.disclosure {

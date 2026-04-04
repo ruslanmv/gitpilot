@@ -1,15 +1,15 @@
 <div align="center">
 
-<img src="docs/logo.svg" alt="GitPilot" width="120" />
+<img src="docs/logo.svg" alt="GitPilot" width="140" />
 
 # GitPilot
 
 **Your AI coding companion. Ask. Plan. Code. Ship.**
 
-[![Version](https://img.shields.io/badge/version-0.1.5-6366f1?style=flat-square)](https://github.com/ruslanmv/gitpilot)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-3776ab?style=flat-square)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
-[![VS Code](https://img.shields.io/badge/VS%20Code-Extension-007acc?style=flat-square)](https://marketplace.visualstudio.com/)
+[![Version](https://img.shields.io/badge/version-0.1.5-D95C3D?style=flat-square&labelColor=1C1C1F)](https://github.com/ruslanmv/gitpilot)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-D95C3D?style=flat-square&labelColor=1C1C1F)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-D95C3D?style=flat-square&labelColor=1C1C1F)](LICENSE)
+[![VS Code](https://img.shields.io/badge/VS%20Code-Extension-D95C3D?style=flat-square&labelColor=1C1C1F)](https://marketplace.visualstudio.com/)
 
 [Get Started](#get-started) &#8226; [VS Code Extension](#vs-code-extension) &#8226; [Web App](#web-app) &#8226; [How It Works](#how-it-works) &#8226; [Contributing](#contributing)
 
@@ -65,11 +65,13 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 ### Option 3: Python CLI
 
 ```bash
-pip install gitpilot
+pip install gitcopilot
 gitpilot serve
 ```
 
 Open [http://localhost:8000](http://localhost:8000).
+
+> **Note**: The PyPI package is named `gitcopilot`, but the command-line tool is `gitpilot`. Requires Python 3.11 or 3.12.
 
 ---
 

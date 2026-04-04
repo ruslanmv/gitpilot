@@ -77,6 +77,30 @@ def _is_incompatible_model(settings) -> bool:
         return False
 
 
+def _split_repo_full_name(repo_full_name: str) -> tuple[str, str]:
+    """Safely split 'owner/repo' into (owner, repo).
+
+    Raises a clear ValueError if the input is missing, empty, or malformed.
+    This replaces `owner, repo = _split_repo_full_name(repo_full_name)` which produces
+    a cryptic "not enough values to unpack" error on folder/local-git
+    sessions that have no GitHub repository.
+    """
+    if not isinstance(repo_full_name, str) or not repo_full_name.strip():
+        raise ValueError(
+            "repo_full_name is required but was empty. "
+            "This session is not connected to a GitHub repository — "
+            "the multi-agent planner needs a repo in 'owner/repo' format. "
+            "Open the Workspace tab and add a repository before chatting."
+        )
+    parts = repo_full_name.strip().split("/")
+    if len(parts) != 2 or not all(p.strip() for p in parts):
+        raise ValueError(
+            f"repo_full_name must be in 'owner/repo' format, got: {repo_full_name!r}. "
+            "Example: 'octocat/hello-world'"
+        )
+    return parts[0].strip(), parts[1].strip()
+
+
 # ---------------------------------------------------------------------------
 # Resilient agent execution: timeout + circuit breaker
 # ---------------------------------------------------------------------------
@@ -197,7 +221,7 @@ async def generate_plan(
     """
     llm = _build_llm()
 
-    owner, repo = repo_full_name.split("/")
+    owner, repo = _split_repo_full_name(repo_full_name)
 
     # CRITICAL: Set context INCLUDING branch so tools never fall back to HEAD/main
     active_ref = branch_name or "HEAD"
@@ -538,7 +562,7 @@ async def generate_plan_lite(
     """
     llm = _build_llm()
 
-    owner, repo = repo_full_name.split("/")
+    owner, repo = _split_repo_full_name(repo_full_name)
     active_ref = branch_name or "HEAD"
     _tools()["set_repo_context"](owner, repo, token=token, branch=active_ref)
 
@@ -756,7 +780,7 @@ async def execute_plan_lite(
     import re
     import time
 
-    owner, repo = repo_full_name.split("/")
+    owner, repo = _split_repo_full_name(repo_full_name)
     execution_steps: list[dict] = []
     llm = _build_llm()
 
@@ -899,7 +923,7 @@ async def execute_plan(
     import re
     import time
 
-    owner, repo = repo_full_name.split("/")
+    owner, repo = _split_repo_full_name(repo_full_name)
     execution_steps: list[dict] = []
     llm = _build_llm()
 
@@ -1401,7 +1425,7 @@ async def dispatch_request(
 
     # Set repo context if needed
     if workflow.requires_repo_context and repo_full_name:
-        owner, repo = repo_full_name.split("/")
+        owner, repo = _split_repo_full_name(repo_full_name)
         active_ref = branch_name or "HEAD"
         _tools()["set_repo_context"](owner, repo, token=token, branch=active_ref)
 
@@ -1521,7 +1545,7 @@ async def _dispatch_pipeline(
     if repo_full_name and _has_writers and not branch_name:
         import re as _re
         import time as _time
-        owner, repo = repo_full_name.split("/")
+        owner, repo = _split_repo_full_name(repo_full_name)
         sanitized = _re.sub(r"[^a-z0-9-]+", "-", user_request.lower())[:35].strip("-")
         timestamp = str(int(_time.time()))[-6:]
         pipeline_branch = f"gitpilot-{topology.id}-{sanitized}-{timestamp}"
@@ -1534,7 +1558,7 @@ async def _dispatch_pipeline(
 
     # Set repo context (on the working branch)
     if repo_full_name:
-        owner, repo = repo_full_name.split("/")
+        owner, repo = _split_repo_full_name(repo_full_name)
         active_ref = pipeline_branch or "HEAD"
         _tools()["set_repo_context"](owner, repo, token=token, branch=active_ref)
 
@@ -1788,7 +1812,7 @@ async def create_pr_after_execution(
     from .github_pulls import create_pull_request
     from .github_api import get_repo
 
-    owner, repo = repo_full_name.split("/")
+    owner, repo = _split_repo_full_name(repo_full_name)
 
     try:
         repo_info = await get_repo(owner, repo, token=token)

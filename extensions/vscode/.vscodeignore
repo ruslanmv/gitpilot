@@ -10,3 +10,10 @@ tsconfig.json
 node_modules/**
 **/*.ts
 !out/**
+# Exclude Windows "Copy" artifacts (e.g., "extension copy.ts")
+**/* copy*.ts
+**/* copy*.tsx
+**/* copy*.js
+**/*.copy.ts
+**/*.backup.ts
+**/*.bak.ts

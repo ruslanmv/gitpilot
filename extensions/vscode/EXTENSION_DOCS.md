@@ -5,6 +5,7 @@
 ## Table of Contents
 
 - [Overview](#overview)
+- [Compatibility](#compatibility)
 - [Installation](#installation)
 - [First Use](#first-use)
 - [The Sidebar Panel](#the-sidebar-panel)
@@ -33,6 +34,35 @@ GitPilot adds an AI-powered sidebar to VS Code. You can:
 - Generate tests, fix bugs, and review code
 
 GitPilot works with 5 AI providers: OpenAI, Claude, Ollama, Watsonx, and OllaBridge. You can switch between them at any time.
+
+---
+
+## Compatibility
+
+GitPilot has **three components that must be version-aligned**: the VS Code extension, the Python backend (PyPI: `gitcopilot`), and the optional web frontend. The extension talks to the backend over HTTP, so their versions must match.
+
+| VS Code extension | Python backend (`gitcopilot`) | VS Code engine | Python |
+|---|---|---|---|
+| **0.1.x** | `>=0.1.5,<0.2.0` | `>=1.110.0` | `3.11` or `3.12` |
+
+**Install both at compatible versions:**
+
+```bash
+# Backend (PyPI package is named "gitcopilot", command is "gitpilot")
+pip install "gitcopilot>=0.1.5,<0.2.0"
+gitpilot serve   # starts backend on http://127.0.0.1:8000
+
+# Extension
+code --install-extension ruslanmv.gitpilot-vscode
+```
+
+**Why two names?** The PyPI project is `gitcopilot` to avoid a name clash on PyPI, but the CLI entry point and Python package are `gitpilot`. Remember:
+
+| Context | Name |
+|---|---|
+| `pip install ...` | **`gitcopilot`** |
+| Command in your terminal | **`gitpilot`** |
+| `import ...` in Python | **`gitpilot`** |
 
 ---
 
@@ -326,6 +356,9 @@ make debug-inspect  # Node inspector on port 9229
 ---
 
 ## FAQ
+
+**Q: Why is the PyPI package called `gitcopilot` but the command `gitpilot`?**
+The name `gitpilot` was already taken on PyPI, so the package was published as `gitcopilot`. The Python module, CLI command, and VS Code extension all use `gitpilot`. You install `gitcopilot` and run `gitpilot` — same tool.
 
 **Q: Do I need an API key?**
 No. Use Ollama (free, local) or OllaBridge (free, cloud). API keys are only needed for OpenAI, Claude, and Watsonx.
