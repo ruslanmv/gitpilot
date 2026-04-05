@@ -8,6 +8,12 @@
 
 **Ask. Plan. Code. Ship.** &nbsp;·&nbsp; You approve every change.
 
+<p>
+  <a href="https://huggingface.co/spaces/ruslanmv/gitpilot">
+    <img src="https://huggingface.co/front/assets/huggingface_logo-noborder.svg" alt="Hugging Face Space" width="28" />
+  </a>
+</p>
+
 [![PyPI](https://img.shields.io/pypi/v/gitcopilot?style=flat-square&color=D95C3D&labelColor=1C1C1F&label=pypi)](https://pypi.org/project/gitcopilot/)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-D95C3D?style=flat-square&labelColor=1C1C1F)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-D95C3D?style=flat-square&labelColor=1C1C1F)](LICENSE)
