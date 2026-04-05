@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" width="1200" height="360" role="img" aria-label="GitPilot request flow: Ask, Plan, Code, Ship. You approve every step.">
+  <title>GitPilot Flow — Ask. Plan. Code. Ship.</title>
+  <desc>Four-step user flow: the user asks a question; GitPilot drafts a plan; after approval it edits files and runs tests; the user ships the result as a commit or pull request.</desc>
+
+  <defs>
+    <linearGradient id="flow-accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%"  stop-color="#ff7a3c"/>
+      <stop offset="100%" stop-color="#D95C3D"/>
+    </linearGradient>
+    <linearGradient id="flow-soft" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ff7a3c" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#D95C3D" stop-opacity="0.04"/>
+    </linearGradient>
+    <marker id="flow-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="url(#flow-accent)"/>
+    </marker>
+    <style>
+      .eyebrow { font: 700 11px -apple-system, "Segoe UI", Inter, sans-serif; fill: #ff7a3c; letter-spacing: 1.5px; }
+      .title   { font: 800 28px -apple-system, "Segoe UI", Inter, sans-serif; fill: #EDEDED; letter-spacing: -0.5px; }
+      .step-n  { font: 800 14px "SFMono-Regular", Menlo, monospace; fill: #ff7a3c; letter-spacing: 1.4px; }
+      .step-h  { font: 800 22px -apple-system, "Segoe UI", Inter, sans-serif; fill: #EDEDED; letter-spacing: -0.4px; }
+      .step-s  { font: 400 13px -apple-system, "Segoe UI", Inter, sans-serif; fill: #A1A1AA; }
+      .approval{ font: 700 12px -apple-system, "Segoe UI", Inter, sans-serif; fill: #ff7a3c; letter-spacing: 0.6px; }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="360" fill="#0B0B0D"/>
+  <rect width="1200" height="360" fill="url(#flow-soft)"/>
+
+  <text class="eyebrow" x="60" y="54">THE GITPILOT LOOP</text>
+  <text class="title"   x="60" y="88">Ask. Plan. Code. Ship.</text>
+
+  <!-- 4 steps, each 240 wide, 90 gap between centres -->
+  <!-- Step 1: Ask -->
+  <g transform="translate(60,150)">
+    <rect width="240" height="140" rx="16" fill="#1C1C1F" stroke="#27272A"/>
+    <text class="step-n" x="24" y="36">01</text>
+    <text class="step-h" x="24" y="70">Ask</text>
+    <text class="step-s" x="24" y="96">"Add input validation</text>
+    <text class="step-s" x="24" y="114">to the login form."</text>
+  </g>
+
+  <!-- Step 2: Plan -->
+  <g transform="translate(340,150)">
+    <rect width="240" height="140" rx="16" fill="#1C1C1F" stroke="#27272A"/>
+    <text class="step-n" x="24" y="36">02</text>
+    <text class="step-h" x="24" y="70">Plan</text>
+    <text class="step-s" x="24" y="96">Reads the repo, drafts</text>
+    <text class="step-s" x="24" y="114">a safe step-by-step plan.</text>
+  </g>
+
+  <!-- Step 3: Code -->
+  <g transform="translate(620,150)">
+    <rect width="240" height="140" rx="16" fill="#1C1C1F" stroke="#D95C3D" stroke-width="1.4"/>
+    <text class="step-n" x="24" y="36">03</text>
+    <text class="step-h" x="24" y="70">Code</text>
+    <text class="step-s" x="24" y="96">Edits files, runs tests,</text>
+    <text class="step-s" x="24" y="114">self-corrects on failure.</text>
+  </g>
+
+  <!-- Step 4: Ship -->
+  <g transform="translate(900,150)">
+    <rect width="240" height="140" rx="16" fill="#1C1C1F" stroke="#27272A"/>
+    <text class="step-n" x="24" y="36">04</text>
+    <text class="step-h" x="24" y="70">Ship</text>
+    <text class="step-s" x="24" y="96">Smart commit message,</text>
+    <text class="step-s" x="24" y="114">PR description, merge.</text>
+  </g>
+
+  <!-- Arrows between steps -->
+  <path d="M300 220 L340 220" stroke="url(#flow-accent)" stroke-width="2.5" fill="none" marker-end="url(#flow-arrow)"/>
+  <path d="M580 220 L620 220" stroke="url(#flow-accent)" stroke-width="2.5" fill="none" marker-end="url(#flow-arrow)"/>
+  <path d="M860 220 L900 220" stroke="url(#flow-accent)" stroke-width="2.5" fill="none" marker-end="url(#flow-arrow)"/>
+
+  <!-- Approval-on-every-edit badge underneath -->
+  <g transform="translate(60,316)">
+    <rect width="1080" height="28" rx="14" fill="rgba(255,122,60,0.08)" stroke="rgba(255,122,60,0.3)"/>
+    <circle cx="20" cy="14" r="5" fill="#ff7a3c"/>
+    <text class="approval" x="36" y="18">YOU APPROVE EVERY CHANGE — NOTHING TOUCHES DISK WITHOUT YOUR CONSENT</text>
+  </g>
+</svg>

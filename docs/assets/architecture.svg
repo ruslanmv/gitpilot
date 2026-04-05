@@ -1,0 +1,140 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 640" width="1200" height="640" role="img" aria-label="GitPilot architecture: three surfaces share one backend that orchestrates a multi-agent pipeline over any LLM provider">
+  <title>GitPilot Architecture</title>
+  <desc>Three client surfaces (Web app, VS Code extension, CLI) talk to a single FastAPI backend, which orchestrates a CrewAI multi-agent pipeline (Explorer, Planner, Executor, Reviewer) backed by any LLM provider.</desc>
+
+  <defs>
+    <linearGradient id="gp-accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff7a3c"/>
+      <stop offset="100%" stop-color="#D95C3D"/>
+    </linearGradient>
+    <linearGradient id="gp-accent-soft" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ff7a3c" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#D95C3D" stop-opacity="0.06"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#D95C3D"/>
+    </marker>
+    <style>
+      .title   { font: 700 26px -apple-system, "Segoe UI", Inter, sans-serif; fill: #EDEDED; }
+      .sub     { font: 400 14px -apple-system, "Segoe UI", Inter, sans-serif; fill: #A1A1AA; }
+      .eyebrow { font: 700 11px -apple-system, "Segoe UI", Inter, sans-serif; fill: #ff7a3c; letter-spacing: 1.5px; }
+      .card-h  { font: 700 16px -apple-system, "Segoe UI", Inter, sans-serif; fill: #EDEDED; }
+      .card-s  { font: 400 12px -apple-system, "Segoe UI", Inter, sans-serif; fill: #A1A1AA; }
+      .agent-h { font: 700 14px -apple-system, "Segoe UI", Inter, sans-serif; fill: #EDEDED; }
+      .agent-s { font: 400 11px -apple-system, "Segoe UI", Inter, sans-serif; fill: #A1A1AA; }
+      .badge   { font: 700 11px -apple-system, "Segoe UI", Inter, sans-serif; fill: #ff7a3c; letter-spacing: 0.8px; }
+      .caption { font: 500 12px -apple-system, "Segoe UI", Inter, sans-serif; fill: #A1A1AA; }
+      .card    { fill: #1C1C1F; stroke: #27272A; stroke-width: 1; }
+      .card-accent { fill: #1C1C1F; stroke: #D95C3D; stroke-width: 1.4; }
+      .pipe    { stroke: #27272A; stroke-width: 1.4; fill: none; }
+      .pipe-accent { stroke: url(#gp-accent); stroke-width: 2; fill: none; }
+    </style>
+  </defs>
+
+  <!-- Page background -->
+  <rect width="1200" height="640" fill="#0B0B0D"/>
+  <rect x="0" y="0" width="1200" height="640" fill="url(#gp-accent-soft)" opacity="0.35"/>
+
+  <!-- Header -->
+  <text class="eyebrow" x="60" y="54">GITPILOT ARCHITECTURE</text>
+  <text class="title"   x="60" y="86">One brand, three surfaces, one pipeline</text>
+  <text class="sub"     x="60" y="112">Web, VS Code and CLI share the same backend, sessions and approvals.</text>
+
+  <!-- ────────── Row 1: Clients ────────── -->
+  <g>
+    <!-- Web -->
+    <g transform="translate(60,160)">
+      <rect class="card" width="280" height="110" rx="14"/>
+      <rect x="18" y="22" width="40" height="40" rx="9" fill="rgba(255,122,60,0.1)" stroke="#D95C3D" stroke-width="1"/>
+      <path d="M30 36 h16 M30 44 h16 M30 52 h10" stroke="#ff7a3c" stroke-width="2" stroke-linecap="round"/>
+      <text class="card-h" x="72" y="42">Web app</text>
+      <text class="card-s" x="72" y="62">React + Vite · chat, diffs, PR review</text>
+      <text class="badge"  x="18" y="92">:5173 / :3000</text>
+    </g>
+
+    <!-- VS Code -->
+    <g transform="translate(460,160)">
+      <rect class="card" width="280" height="110" rx="14"/>
+      <rect x="18" y="22" width="40" height="40" rx="9" fill="rgba(255,122,60,0.1)" stroke="#D95C3D" stroke-width="1"/>
+      <path d="M28 30 L48 54 M28 54 L48 30" stroke="#ff7a3c" stroke-width="2" stroke-linecap="round"/>
+      <text class="card-h" x="72" y="42">VS Code extension</text>
+      <text class="card-s" x="72" y="62">Sidebar chat · inline diffs · approvals</text>
+      <text class="badge"  x="18" y="92">GitPilot Workspace</text>
+    </g>
+
+    <!-- CLI -->
+    <g transform="translate(860,160)">
+      <rect class="card" width="280" height="110" rx="14"/>
+      <rect x="18" y="22" width="40" height="40" rx="9" fill="rgba(255,122,60,0.1)" stroke="#D95C3D" stroke-width="1"/>
+      <path d="M26 34 L36 42 L26 50" stroke="#ff7a3c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <path d="M38 52 h12" stroke="#ff7a3c" stroke-width="2" stroke-linecap="round"/>
+      <text class="card-h" x="72" y="42">Python CLI</text>
+      <text class="card-s" x="72" y="62">pip install gitcopilot · gitpilot serve</text>
+      <text class="badge"  x="18" y="92">PyPI: gitcopilot</text>
+    </g>
+  </g>
+
+  <!-- Pipes: clients → backend -->
+  <path class="pipe-accent" d="M200 270 L200 310 L600 310 L600 340" marker-end="url(#arrow)"/>
+  <path class="pipe-accent" d="M600 270 L600 340" marker-end="url(#arrow)"/>
+  <path class="pipe-accent" d="M1000 270 L1000 310 L600 310" />
+
+  <text class="caption" x="612" y="302">REST · SSE · WebSocket</text>
+
+  <!-- ────────── Row 2: Backend ────────── -->
+  <g transform="translate(320,340)">
+    <rect class="card-accent" width="560" height="90" rx="14"/>
+    <text class="card-h" x="28" y="38">FastAPI backend</text>
+    <text class="card-s" x="28" y="58">Sessions · approvals · context · GitHub · /api/v2/chat/stream</text>
+    <text class="badge"  x="28" y="78">gitpilot.api</text>
+  </g>
+
+  <!-- Pipe: backend → agents -->
+  <path class="pipe-accent" d="M600 430 L600 470" marker-end="url(#arrow)"/>
+
+  <!-- ────────── Row 3: Agent pipeline ────────── -->
+  <g transform="translate(60,470)">
+    <rect class="card" width="1080" height="130" rx="14"/>
+    <text class="eyebrow" x="24" y="28">MULTI-AGENT PIPELINE · CREWAI</text>
+
+    <!-- Explorer -->
+    <g transform="translate(24,44)">
+      <rect width="240" height="72" rx="10" fill="#17171A" stroke="#27272A"/>
+      <circle cx="24" cy="36" r="13" fill="rgba(255,122,60,0.12)" stroke="#D95C3D"/>
+      <text class="agent-h" x="50" y="32">Explorer</text>
+      <text class="agent-s" x="50" y="50">Reads repo, git log, tests</text>
+    </g>
+
+    <!-- Planner -->
+    <g transform="translate(290,44)">
+      <rect width="240" height="72" rx="10" fill="#17171A" stroke="#27272A"/>
+      <circle cx="24" cy="36" r="13" fill="rgba(255,122,60,0.12)" stroke="#D95C3D"/>
+      <text class="agent-h" x="50" y="32">Planner</text>
+      <text class="agent-s" x="50" y="50">Drafts safe step-by-step plan</text>
+    </g>
+
+    <!-- Executor -->
+    <g transform="translate(556,44)">
+      <rect width="240" height="72" rx="10" fill="#17171A" stroke="#27272A"/>
+      <circle cx="24" cy="36" r="13" fill="rgba(255,122,60,0.12)" stroke="#D95C3D"/>
+      <text class="agent-h" x="50" y="32">Executor</text>
+      <text class="agent-s" x="50" y="50">Edits files, runs tests</text>
+    </g>
+
+    <!-- Reviewer -->
+    <g transform="translate(822,44)">
+      <rect width="234" height="72" rx="10" fill="#17171A" stroke="#27272A"/>
+      <circle cx="24" cy="36" r="13" fill="rgba(255,122,60,0.12)" stroke="#D95C3D"/>
+      <text class="agent-h" x="50" y="32">Reviewer</text>
+      <text class="agent-s" x="50" y="50">Validates, summarises</text>
+    </g>
+
+    <!-- Inline arrows between agents -->
+    <path class="pipe" d="M264 80 L290 80" marker-end="url(#arrow)"/>
+    <path class="pipe" d="M530 80 L556 80" marker-end="url(#arrow)"/>
+    <path class="pipe" d="M796 80 L822 80" marker-end="url(#arrow)"/>
+  </g>
+
+  <!-- Footer caption -->
+  <text class="caption" x="60" y="620">LLM providers · OpenAI  ·  Anthropic Claude  ·  Ollama  ·  IBM Watsonx  ·  OllaBridge</text>
+</svg>

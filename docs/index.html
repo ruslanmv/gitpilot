@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GitPilot — Your AI coding companion. Ask. Plan. Code. Ship.</title>
+  <meta name="description" content="GitPilot is an open-source AI coding assistant that reads your repo, plans changes, writes the code, runs your tests, and asks before it touches anything. Works with OpenAI, Claude, Ollama, Watsonx and OllaBridge. Web app, VS Code extension and CLI." />
+  <meta name="theme-color" content="#1C1C1F" />
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="GitPilot — Your AI coding companion" />
+  <meta property="og:description" content="Open-source AI coding assistant. Reads your repo, plans changes, writes code, runs tests. You approve every step." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://ruslanmv.github.io/gitpilot/" />
+  <meta property="og:image" content="./logo.svg" />
+  <meta name="twitter:card" content="summary_large_image" />
+
+  <link rel="icon" type="image/svg+xml" href="./logo.svg" />
+  <link rel="stylesheet" href="./assets/landing.css" />
+</head>
+<body>
+  <!-- ── Top navigation ─────────────────────────────────────────── -->
+  <header class="nav" role="banner">
+    <div class="container nav__inner">
+      <a class="brand" href="./">
+        <img src="./logo.svg" alt="" width="36" height="36" />
+        <span class="brand__name">GitPilot</span>
+      </a>
+
+      <button class="nav__toggle" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="primary-nav">
+        <span></span><span></span><span></span>
+      </button>
+
+      <nav id="primary-nav" class="nav__links" aria-label="Primary">
+        <a href="#features">Features</a>
+        <a href="#how">How it works</a>
+        <a href="#quickstart">Install</a>
+        <a href="#providers">Providers</a>
+        <a href="https://github.com/ruslanmv/gitpilot" rel="noopener">GitHub</a>
+        <a class="btn btn--primary btn--sm" href="#quickstart">Get started</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- ── Hero ───────────────────────────────────────────────────── -->
+  <section class="hero">
+    <div class="container hero__inner">
+      <div class="hero__copy">
+        <span class="chip">
+          <span class="chip__dot" aria-hidden="true"></span>
+          Open source &middot; MIT licensed &middot; v0.1.5
+        </span>
+
+        <h1 class="hero__title">
+          Your AI coding companion.<br />
+          <span class="accent-gradient">Ask. Plan. Code. Ship.</span>
+        </h1>
+
+        <p class="hero__sub">
+          GitPilot reads your repository, drafts a safe plan, writes the code, and runs your tests &mdash;
+          <strong>you approve every change</strong> before it touches a file.
+          Works with OpenAI, Claude, Ollama, Watsonx and OllaBridge. Free and local, or bring your own cloud key.
+        </p>
+
+        <div class="hero__ctas">
+          <a class="btn btn--primary" href="#quickstart">
+            Get started &rarr;
+          </a>
+          <a class="btn btn--ghost" href="https://github.com/ruslanmv/gitpilot" rel="noopener">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.73.5.5 5.74.5 12.03c0 5.08 3.29 9.39 7.86 10.91.57.1.78-.25.78-.56 0-.28-.01-1.02-.02-2-3.2.69-3.87-1.54-3.87-1.54-.52-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.71.08-.71 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.71 1.26 3.37.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.18 1.18a11.1 11.1 0 0 1 5.78 0c2.21-1.49 3.18-1.18 3.18-1.18.63 1.58.23 2.75.11 3.04.74.81 1.19 1.84 1.19 3.1 0 4.42-2.69 5.4-5.25 5.68.41.36.77 1.07.77 2.16 0 1.56-.01 2.81-.01 3.19 0 .31.2.67.79.56A10.53 10.53 0 0 0 23.5 12.03C23.5 5.74 18.27.5 12 .5z"/></svg>
+            View on GitHub
+          </a>
+        </div>
+
+        <ul class="hero__meta" aria-label="Highlights">
+          <li><span>854</span> tests passing</li>
+          <li><span>3</span> surfaces: Web &middot; VS Code &middot; CLI</li>
+          <li><span>5+</span> LLM providers</li>
+        </ul>
+      </div>
+
+      <!-- Terminal preview card -->
+      <div class="hero__preview" aria-hidden="true">
+        <div class="terminal">
+          <div class="terminal__bar">
+            <span class="terminal__dot terminal__dot--r"></span>
+            <span class="terminal__dot terminal__dot--y"></span>
+            <span class="terminal__dot terminal__dot--g"></span>
+            <span class="terminal__title">gitpilot &mdash; session</span>
+          </div>
+          <div class="terminal__body">
+            <p class="tl tl--you"><span class="tl__label">you</span>Add input validation to the login form</p>
+            <p class="tl tl--gp"><span class="tl__label">gp</span>Reading <code>src/auth/login.ts</code> &hellip; done</p>
+            <p class="tl tl--gp"><span class="tl__label">gp</span>Planning 3 safe changes &hellip;</p>
+            <p class="tl tl--gp"><span class="tl__label">gp</span>Edit <code>login.ts</code> &middot; <span class="tl__ok">approved</span></p>
+            <p class="tl tl--gp"><span class="tl__label">gp</span>Running <code>npm test</code> &hellip;</p>
+            <p class="tl tl--ok"><span class="tl__label">&#10003;</span>3 passed, 0 failed &middot; ready to commit</p>
+            <p class="tl tl--cursor"><span class="tl__label">you</span><span class="tl__cursor"></span></p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="hero__glow" aria-hidden="true"></div>
+  </section>
+
+  <!-- ── Features ───────────────────────────────────────────────── -->
+  <section id="features" class="section">
+    <div class="container">
+      <header class="section__head">
+        <span class="eyebrow">Built for real engineers</span>
+        <h2>Everything you expect from an enterprise-grade AI pair programmer.</h2>
+        <p class="section__sub">Three surfaces, one brand, one consistent experience &mdash; and you keep full control of every keystroke the agent proposes.</p>
+      </header>
+
+      <ul class="features">
+        <li class="feature">
+          <div class="feature__icon" aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9"/><path d="M3 4v5h5"/></svg>
+          </div>
+          <h3>Plan before it writes</h3>
+          <p>Every task starts with a readable, step-by-step plan. Review it, edit it, or reject it &mdash; no surprise commits.</p>
+        </li>
+
+        <li class="feature">
+          <div class="feature__icon" aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+          </div>
+          <h3>Approval on every edit</h3>
+          <p>Inline diffs in VS Code and the web app. One click to apply, one click to revert &mdash; nothing touches disk without your consent.</p>
+        </li>
+
+        <li class="feature">
+          <div class="feature__icon" aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+          </div>
+          <h3>Any LLM, any host</h3>
+          <p>OpenAI, Claude, Ollama, Watsonx and OllaBridge out of the box. Swap providers in settings &mdash; no code change.</p>
+        </li>
+
+        <li class="feature">
+          <div class="feature__icon" aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>
+          </div>
+          <h3>Runs your tests</h3>
+          <p>Auto-detects pytest, jest, vitest, go test and cargo. GitPilot runs them after every change and self-corrects on failure.</p>
+        </li>
+
+        <li class="feature">
+          <div class="feature__icon" aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z"/></svg>
+          </div>
+          <h3>Smart commits &amp; PRs</h3>
+          <p>AI-written commit messages, PR descriptions and summaries &mdash; stitched together from the plan and the diff, not hallucinated.</p>
+        </li>
+
+        <li class="feature">
+          <div class="feature__icon" aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          </div>
+          <h3>Local-first &amp; private</h3>
+          <p>Run the whole stack on your laptop with Ollama. No telemetry, no data leaves your machine unless you tell it to.</p>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ── How it works ───────────────────────────────────────────── -->
+  <section id="how" class="section section--alt">
+    <div class="container">
+      <header class="section__head">
+        <span class="eyebrow">How it works</span>
+        <h2>A small team of specialist agents, orchestrated by you.</h2>
+      </header>
+
+      <ol class="steps">
+        <li class="step">
+          <span class="step__num">01</span>
+          <h3>Explore</h3>
+          <p>The Explorer reads your repo structure, git log, key files and tests so the plan starts with real context.</p>
+        </li>
+        <li class="step">
+          <span class="step__num">02</span>
+          <h3>Plan</h3>
+          <p>The Planner drafts a safe, step-by-step plan with diffs &mdash; and surfaces risks before anything is applied.</p>
+        </li>
+        <li class="step">
+          <span class="step__num">03</span>
+          <h3>Execute</h3>
+          <p>The Executor edits files, runs tests and terminal commands. Every risky action waits for your approval.</p>
+        </li>
+        <li class="step">
+          <span class="step__num">04</span>
+          <h3>Review</h3>
+          <p>The Reviewer validates the output, re-runs the suite, and summarises what changed for commit and PR.</p>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- ── Quickstart ─────────────────────────────────────────────── -->
+  <section id="quickstart" class="section">
+    <div class="container">
+      <header class="section__head">
+        <span class="eyebrow">Install</span>
+        <h2>Up and running in under a minute.</h2>
+        <p class="section__sub">Pick the surface you live in. All three share the same sessions, the same settings and the same brand.</p>
+      </header>
+
+      <div class="tabs" data-tabs>
+        <div class="tabs__list" role="tablist" aria-label="Install options">
+          <button class="tabs__tab is-active" role="tab" aria-selected="true" data-tab="pypi">Python / CLI</button>
+          <button class="tabs__tab" role="tab" aria-selected="false" data-tab="vscode">VS Code</button>
+          <button class="tabs__tab" role="tab" aria-selected="false" data-tab="docker">Docker</button>
+          <button class="tabs__tab" role="tab" aria-selected="false" data-tab="source">From source</button>
+        </div>
+
+        <div class="tabs__panels">
+          <div class="tabs__panel is-active" role="tabpanel" data-panel="pypi">
+            <p class="tabs__note">Fastest path. Python 3.11 or 3.12.</p>
+            <div class="code" data-copy>
+              <pre><code>pip install gitcopilot
+gitpilot serve</code></pre>
+              <button class="code__copy" type="button" aria-label="Copy command">Copy</button>
+            </div>
+            <p class="tabs__hint">Then open <a href="http://localhost:8000">http://localhost:8000</a>. The PyPI package is <code>gitcopilot</code> (the name <code>gitpilot</code> was taken), but the command you run is <code>gitpilot</code>.</p>
+          </div>
+
+          <div class="tabs__panel" role="tabpanel" data-panel="vscode" hidden>
+            <p class="tabs__note">The recommended experience for day-to-day coding.</p>
+            <ol class="list-ordered">
+              <li>Open VS Code &rarr; Extensions</li>
+              <li>Search for <strong>"GitPilot Workspace"</strong></li>
+              <li>Click the GitPilot icon in the sidebar</li>
+              <li>Choose your LLM provider &mdash; done</li>
+            </ol>
+            <p class="tabs__hint">The extension talks to the same backend as the web app, so your sessions, approvals and settings stay in sync.</p>
+          </div>
+
+          <div class="tabs__panel" role="tabpanel" data-panel="docker" hidden>
+            <p class="tabs__note">One command, backend + frontend.</p>
+            <div class="code" data-copy>
+              <pre><code>git clone https://github.com/ruslanmv/gitpilot.git
+cd gitpilot
+docker compose up</code></pre>
+              <button class="code__copy" type="button" aria-label="Copy command">Copy</button>
+            </div>
+            <p class="tabs__hint">Backend on <code>:8000</code>, web UI on <code>:3000</code>.</p>
+          </div>
+
+          <div class="tabs__panel" role="tabpanel" data-panel="source" hidden>
+            <p class="tabs__note">For contributors and power users.</p>
+            <div class="code" data-copy>
+              <pre><code>git clone https://github.com/ruslanmv/gitpilot.git
+cd gitpilot
+make install
+make run</code></pre>
+              <button class="code__copy" type="button" aria-label="Copy command">Copy</button>
+            </div>
+            <p class="tabs__hint">Installs Python deps via <code>uv</code> and frontend deps via <code>npm</code>, then boots the backend + Vite dev server.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Providers ──────────────────────────────────────────────── -->
+  <section id="providers" class="section section--alt">
+    <div class="container">
+      <header class="section__head section__head--center">
+        <span class="eyebrow">Any provider</span>
+        <h2>Bring your own model.</h2>
+        <p class="section__sub">GitPilot ships with adapters for the five providers teams actually deploy in production. Change providers in settings &mdash; no code change, no restart.</p>
+      </header>
+
+      <ul class="providers">
+        <li><strong>Ollama</strong><span>Local &middot; free</span></li>
+        <li><strong>OllaBridge</strong><span>Cloud Ollama &middot; free</span></li>
+        <li><strong>OpenAI</strong><span>GPT-4o, o-series</span></li>
+        <li><strong>Anthropic</strong><span>Claude Sonnet / Opus</span></li>
+        <li><strong>IBM Watsonx</strong><span>Enterprise</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ── Final CTA ──────────────────────────────────────────────── -->
+  <section class="cta">
+    <div class="container cta__inner">
+      <div>
+        <h2>Ship better code, faster &mdash; without giving up control.</h2>
+        <p>Open source. MIT licensed. Runs on your laptop, your VS Code, your cloud. Your repo, your rules.</p>
+      </div>
+      <div class="cta__actions">
+        <a class="btn btn--primary" href="#quickstart">Install GitPilot</a>
+        <a class="btn btn--ghost" href="https://github.com/ruslanmv/gitpilot" rel="noopener">Star on GitHub</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Footer ─────────────────────────────────────────────────── -->
+  <footer class="footer">
+    <div class="container footer__inner">
+      <div class="footer__brand">
+        <img src="./logo.svg" alt="" width="28" height="28" />
+        <span>GitPilot</span>
+      </div>
+      <nav class="footer__links" aria-label="Footer">
+        <a href="https://github.com/ruslanmv/gitpilot" rel="noopener">GitHub</a>
+        <a href="https://pypi.org/project/gitcopilot/" rel="noopener">PyPI</a>
+        <a href="https://github.com/ruslanmv/gitpilot/issues" rel="noopener">Issues</a>
+        <a href="https://github.com/ruslanmv/gitpilot/blob/main/LICENSE" rel="noopener">License</a>
+      </nav>
+      <p class="footer__credit">
+        &copy; <span id="year">2026</span> GitPilot &middot; Made by
+        <a href="https://github.com/ruslanmv" rel="noopener">Ruslan Magana Vsevolodovna</a>
+      </p>
+    </div>
+  </footer>
+
+  <script src="./assets/landing.js" defer></script>
+</body>
+</html>
