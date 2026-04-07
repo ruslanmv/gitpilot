@@ -4,15 +4,14 @@
 
 # GitPilot
 
-### The open-source AI coding companion your team can actually trust.
+### The first open-source multi-agent AI coding assistant.
 
-**Ask. Plan. Code. Ship.** &nbsp;·&nbsp; You approve every change.
-
-
+Four specialized agents &mdash; Explorer, Planner, Coder, Reviewer &mdash; collaborate on every task.<br/>
+You approve every change. No surprises, no silent commits, no lock-in.
 
 [![PyPI](https://img.shields.io/pypi/v/gitcopilot?style=flat-square&color=D95C3D&labelColor=1C1C1F&label=pypi)](https://pypi.org/project/gitcopilot/)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-D95C3D?style=flat-square&labelColor=1C1C1F)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-D95C3D?style=flat-square&labelColor=1C1C1F)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-D95C3D?style=flat-square&labelColor=1C1C1F)](LICENSE)
 [![VS Code](https://img.shields.io/badge/VS%20Code-Extension-D95C3D?style=flat-square&labelColor=1C1C1F)](https://marketplace.visualstudio.com/)
 [![Tests](https://img.shields.io/badge/tests-854%20passing-D95C3D?style=flat-square&labelColor=1C1C1F)](#contributing)
 
@@ -31,13 +30,24 @@
 
 ## Why GitPilot?
 
-GitPilot is the AI pair programmer built for teams that take code seriously. It reads your repository, drafts a safe plan, writes the code, runs your tests — and **waits for your approval before touching a single file**. No surprises, no silent commits, no lock-in.
+Most AI coding tools are a **single model behind a chat box**. GitPilot is fundamentally different: it deploys a **team of four specialized AI agents** that collaborate on every task — just like a real engineering team.
 
-- 🧭 **Works where you work** — the same experience in VS Code, on the web, and from the terminal. One login, one history, one set of approvals.
-- 🔐 **Safe by default** — every file edit, shell command, and git operation asks for permission first. Diffs are shown before they're applied, tests run before anything is committed.
-- 🧠 **Your model, your rules** — drop in OpenAI, Anthropic Claude, IBM Watsonx, Ollama (local) or OllaBridge (free cloud). Switch providers in settings without changing a line of code.
-- 🏢 **Enterprise-ready, open source** — MIT licensed, 854 passing tests, Docker & Hugging Face deployment recipes, no telemetry, no vendor lock-in.
-- 🌍 **Runs anywhere** — your laptop, your private cloud, air-gapped environments, or a managed host. Your repo stays your repo.
+| Agent | Role | What it does |
+|---|---|---|
+| **Explorer** | Context | Reads your full repo, git log, test suite, and dependencies so the plan starts with real knowledge — not guesses |
+| **Planner** | Strategy | Drafts a safe, step-by-step plan with diffs and surfaces risks before any file is touched |
+| **Coder** | Execution | Writes code, runs your tests, and self-corrects on failure — iterating until the suite passes |
+| **Reviewer** | Quality | Validates the output, re-runs the suite, and drafts a commit message and PR summary |
+
+**You approve every change.** Diffs are shown before they're applied. Tests run before anything is committed. No surprises.
+
+### What else sets GitPilot apart
+
+- 🧭 **Works where you work** — VS Code, web app, and CLI share one login, one history, and one set of approvals.
+- 🧠 **Any LLM, zero lock-in** — OpenAI, Anthropic Claude, IBM Watsonx, Ollama (local & free) or OllaBridge. Switch in settings, no code change.
+- 🔐 **Private by default** — run the entire stack locally with Ollama. No telemetry, no data leaves your machine.
+- 🏢 **Enterprise-ready, Apache 2.0 open source** — 854 passing tests, Docker & Hugging Face deployment recipes, audit the code yourself.
+- 🌍 **Runs anywhere** — laptop, private cloud, air-gapped environments, or managed hosting. Your repo, your rules.
 
 ---
 
@@ -228,11 +238,7 @@ Full API docs at `http://localhost:8000/docs` (Swagger UI).
 
 ## Deployment
 
-### Hugging Face Spaces <p>
-  <a href="https://huggingface.co/spaces/ruslanmv/gitpilot">
-    <img src="https://huggingface.co/front/assets/huggingface_logo-noborder.svg" alt="Hugging Face Space" width="28" />
-  </a>
-</p>
+### Hugging Face Spaces
 
 GitPilot runs on Hugging Face Spaces with OllaBridge (free):
 
@@ -280,7 +286,7 @@ make compile
 
 ## License
 
-MIT License. See [LICENSE](LICENSE).
+Apache License 2.0. See [LICENSE](LICENSE).
 
 ---
 

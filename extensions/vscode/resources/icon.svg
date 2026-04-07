@@ -1,7 +1,32 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-  <circle cx="12" cy="12" r="10" stroke="#4FC3F7" fill="none"/>
-  <path d="M8 12 L11 15 L16 9" stroke="#4FC3F7" fill="none"/>
-  <path d="M12 2 C12 2 14 6 14 8 C14 10 12 12 12 12" stroke="#81D4FA" fill="none" opacity="0.6"/>
-  <path d="M12 22 C12 22 10 18 10 16 C10 14 12 12 12 12" stroke="#81D4FA" fill="none" opacity="0.6"/>
-  <circle cx="12" cy="12" r="2" fill="#4FC3F7"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <!--
+    GitPilot activity-bar icon.
+    VS Code renders sidebar icons as monochrome silhouettes using
+    `currentColor`, so this uses only stroke/fill with currentColor.
+    Design: simplified GP monogram inside a progress-ring arc,
+    echoing the master logo (docs/logo.svg) at 24×24.
+  -->
+
+  <!-- Outer ring (full circle, subtle) -->
+  <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.2" opacity="0.35"/>
+
+  <!-- Active arc (top-right quarter, the "live" indicator from the master logo) -->
+  <path
+    d="M 12 2 A 10 10 0 0 1 22 12"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+  />
+
+  <!-- GP monogram -->
+  <text
+    x="12"
+    y="16"
+    text-anchor="middle"
+    font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif"
+    font-size="10"
+    font-weight="700"
+    fill="currentColor"
+    letter-spacing="-0.5"
+  >GP</text>
 </svg>

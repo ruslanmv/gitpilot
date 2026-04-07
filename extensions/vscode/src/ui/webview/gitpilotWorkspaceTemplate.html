@@ -14,23 +14,28 @@
         <div>
           <div class="eyebrow">
             <span class="eyebrow-dot"></span>
-            GitPilot Workspace
+            GitPilot
           </div>
-          <h1 class="header-title">Enterprise Repo Copilot</h1>
           <div class="header-subtitle" id="provider-line">Provider state</div>
           <div class="header-meta" id="repo-line">Repo state</div>
         </div>
 
         <div class="header-actions">
-          <button class="secondary" id="setup-context-btn" type="button">Refresh Context</button>
-          <button class="secondary" id="provider-setup-btn" type="button">Provider</button>
+          <button class="icon-btn" id="settings-header-btn" type="button" title="Settings" aria-label="Settings">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </button>
+          <button class="icon-btn" id="setup-context-btn" type="button" title="Refresh Context" aria-label="Refresh Context">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9"/><path d="M3 4v5h5"/></svg>
+          </button>
+          <button class="icon-btn" id="provider-setup-btn" type="button" title="Change Provider" aria-label="Change Provider">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10H12V2z"/><path d="M20.24 7.76L12 12"/></svg>
+          </button>
         </div>
       </div>
 
       <div class="status-row">
-        <span class="pill" id="workflow-pill">Workflow: auto</span>
         <span class="pill" id="connection-pill">Disconnected</span>
-        <span class="pill" id="task-pill">No active task</span>
+        <span class="pill" id="task-pill">Ready</span>
       </div>
     </section>
 
@@ -41,77 +46,64 @@
       <div class="section-copy" id="error-copy"></div>
     </section>
 
-    <section class="surface card" id="assistant-summary-section">
+    <section class="surface card hidden" id="assistant-summary-section">
       <div class="section-head">
         <h2 class="section-title">Task Status</h2>
+        <span class="pill" id="task-status-pill">Idle</span>
       </div>
 
       <div class="summary-card">
-        <div class="summary-title" id="task-title">GitPilot is ready</div>
+        <div class="summary-title" id="task-title"></div>
 
         <div class="status-row">
-          <span class="pill pill-accent" id="task-status-pill">Status: Idle</span>
-          <span class="pill" id="task-step-pill">Step 0/0</span>
+          <span class="pill" id="task-step-pill"></span>
         </div>
 
-        <div class="summary-note" id="task-summary">
-          Ask GitPilot to explain, review, change, or test your project. Full responses appear in chat.
-        </div>
+        <div class="summary-note" id="task-summary"></div>
 
         <div class="progress">
           <div class="progress-track">
             <div class="progress-bar" id="task-progress-bar"></div>
           </div>
-          <div class="progress-label" id="task-progress-label">Waiting for a task</div>
+          <div class="progress-label" id="task-progress-label"></div>
         </div>
       </div>
     </section>
 
     <section class="surface card" id="overview-section">
-      <div class="section-head">
-        <h2 class="section-title">Quick Actions</h2>
-      </div>
-
       <details class="disclosure" id="advanced-tools">
         <summary>
-          <span class="summary-label">Advanced Tools</span>
+          <span class="summary-label">Quick Actions</span>
           <span class="chevron">⌄</span>
         </summary>
         <div class="disclosure-body">
           <div class="tool-grid">
             <button class="tool-button secondary" data-quick-action="explain_project" type="button">
               <span class="tool-title">Explain Project</span>
-              <span class="tool-copy">Understand architecture, responsibilities, and key modules.</span>
             </button>
 
             <button class="tool-button secondary" data-quick-action="review_file" type="button">
               <span class="tool-title">Review File</span>
-              <span class="tool-copy">Run a focused review of the current file and surface improvements.</span>
             </button>
 
             <button class="tool-button secondary" data-quick-action="fix_selection" type="button">
               <span class="tool-title">Fix Selection</span>
-              <span class="tool-copy">Improve the selected code with a targeted patch proposal.</span>
             </button>
 
             <button class="tool-button secondary" data-quick-action="generate_tests" type="button">
               <span class="tool-title">Generate Tests</span>
-              <span class="tool-copy">Create practical tests aligned with the selected logic.</span>
             </button>
 
             <button class="tool-button secondary" data-quick-action="security_scan" type="button">
               <span class="tool-title">Security Scan</span>
-              <span class="tool-copy">Inspect the workspace for risks, vulnerabilities, and gaps.</span>
             </button>
 
             <button class="tool-button secondary" id="refresh-context-card" type="button">
               <span class="tool-title">Refresh Index</span>
-              <span class="tool-copy">Rebuild repository context, manifests, and working state.</span>
             </button>
 
             <button class="tool-button ghost" id="idle-setup-btn" type="button">
               <span class="tool-title">Setup Wizard</span>
-              <span class="tool-copy">Configure provider, model, and workspace readiness.</span>
             </button>
           </div>
         </div>
@@ -191,26 +183,32 @@
 
           <div class="primary-row">
             <button id="send-btn" type="button">Send</button>
-            <button class="secondary" id="contextual-btn" type="button">Refresh Context</button>
+            <button class="ghost" id="new-chat-btn" type="button" title="Start a new conversation">New Chat</button>
           </div>
 
           <div class="secondary-row hidden" id="secondary-actions-row">
             <button class="secondary hidden" id="apply-btn" type="button">Apply Patch</button>
             <button class="ghost hidden" id="revert-btn" type="button">Revert</button>
-            <button class="ghost" id="settings-btn" type="button">Settings</button>
           </div>
         </div>
       </div>
     </section>
 
     <section class="surface card hidden" id="plan-section">
-      <details class="disclosure" id="plan-disclosure">
+      <details class="disclosure" id="plan-disclosure" open>
         <summary>
           <span class="summary-label">Execution Plan</span>
           <span class="chevron">⌄</span>
         </summary>
         <div class="disclosure-body">
           <ul class="list" id="plan-list"></ul>
+          <div class="plan-approval hidden" id="plan-approval-bar">
+            <p class="plan-approval__text">Review the plan above. When you're ready:</p>
+            <div class="plan-approval__actions">
+              <button class="primary" id="plan-approve-btn" type="button">Approve &amp; Execute</button>
+              <button class="ghost" id="plan-reject-btn" type="button">Dismiss</button>
+            </div>
+          </div>
         </div>
       </details>
     </section>
@@ -465,9 +463,9 @@
         <div class="chat-role-row">
           <div class="chat-role">
             <span class="role-avatar assistant">G</span>
-            assistant
+            GitPilot
           </div>
-          <div class="chat-time">thinking</div>
+          <div class="chat-time" id="chat-thinking-elapsed">${formatElapsed(Date.now() - thinkingStartedAt)}</div>
         </div>
         <div class="chat-content">
           <div class="thinking-row">
@@ -478,7 +476,6 @@
               </div>
               <span class="thinking-label">${esc(phaseLabel)}</span>
             </div>
-            <span class="thinking-elapsed" id="chat-thinking-elapsed">${formatElapsed(Date.now() - thinkingStartedAt)}</span>
           </div>
         </div>
       `;
@@ -535,7 +532,7 @@
     };
 
     const setActionButtonsDisabled = (visible) => {
-      ["send-btn", "contextual-btn", "apply-btn", "revert-btn"].forEach((id) => {
+      ["send-btn", "apply-btn", "revert-btn"].forEach((id) => {
         const button = byId(id);
         if (button) button.disabled = visible;
       });
@@ -624,8 +621,7 @@
       byId("provider-line").textContent = providerName + " · " + connection + " · " + model;
       byId("repo-line").textContent = "Repo: " + repoName + " · Branch: " + branch;
 
-      byId("workflow-pill").textContent = "Workflow: " + workflow;
-      byId("workflow-pill").className = "pill";
+      // workflow-pill removed from UI for cleaner layout
 
       byId("connection-pill").textContent = connection;
       byId("connection-pill").className =
@@ -635,10 +631,9 @@
             ? "pill pill-warning"
             : "pill pill-danger";
 
-      byId("task-pill").textContent = task.title
-        ? "Task: " + task.title
-        : "No active task";
-      byId("task-pill").className = task.title ? "pill pill-accent" : "pill";
+      const taskActive = task.status && task.status !== "idle";
+      byId("task-pill").textContent = taskActive ? statusLabel(task.status) : "Ready";
+      byId("task-pill").className = taskActive ? "pill pill-accent" : "pill";
     };
 
     const renderOverview = (state) => {
@@ -679,24 +674,34 @@
       const activeStepIndex = steps.findIndex((step) => !["applied", "ready", "done"].includes(step.status));
       const currentStep = totalSteps === 0 ? 0 : (activeStepIndex >= 0 ? activeStepIndex + 1 : totalSteps);
 
-      byId("task-title").textContent = task.title || "GitPilot is ready";
-      byId("task-status-pill").textContent = "Status: " + statusLabel(task.status);
+      // ── Only show the Task Status card when there is real progress
+      // to display (plan steps with a progress ratio). During the initial
+      // "planning" / "generating" phases without steps, the inline
+      // thinking bubble in chat is the only status indicator — showing
+      // the Task Status card too creates double-stacked UI that pushes
+      // the chat down and overlaps visually.
+      const hasProgress = totalSteps > 0;
+      const isTerminalWithInfo = ["done", "failed", "ready_to_apply"].includes(task.status) && (task.title || task.summary);
+      const showCard = hasProgress || isTerminalWithInfo;
+      byId("assistant-summary-section").classList.toggle("hidden", !showCard);
+
+      if (!showCard) return;
+
+      byId("task-title").textContent = task.title || "";
+      byId("task-status-pill").textContent = statusLabel(task.status);
       byId("task-status-pill").className = pillClassForStatus(task.status);
-      byId("task-step-pill").textContent = totalSteps > 0 ? ("Step " + Math.max(1, currentStep) + "/" + totalSteps) : "Step 0/0";
+      byId("task-step-pill").textContent = totalSteps > 0 ? ("Step " + Math.max(1, currentStep) + "/" + totalSteps) : "";
 
-      const summaryText = task.status === "ready_to_apply"
-        ? "Changes are ready to review in chat."
-        : task.status === "done"
-          ? (task.summary || "Task completed. See chat for the full response.")
-          : task.status === "failed"
-            ? "The request needs attention. See chat or the workspace notice for details."
-            : "GitPilot is working on your request. Detailed output stays in chat.";
+      byId("task-summary").textContent =
+        task.status === "ready_to_apply" ? "Changes ready to review."
+        : task.status === "done" ? (task.summary || "Done.")
+        : task.status === "failed" ? "See chat for details."
+        : "";
 
-      byId("task-summary").textContent = summaryText;
       byId("task-progress-bar").style.width = Math.round(ratio * 100) + "%";
       byId("task-progress-label").textContent = totalSteps > 0
-        ? (completedCount + " of " + totalSteps + " steps completed")
-        : statusLabel(task.status);
+        ? (completedCount + "/" + totalSteps + " steps")
+        : "";
     };
 
     const renderPlan = (state) => {
@@ -729,6 +734,16 @@
             `;
           }).join("")
         : "";
+
+      // Show the "Approve & Execute" bar when plan steps exist and
+      // the task has not started executing yet. Once executing/done,
+      // hide it — the user already approved or the agent auto-ran.
+      const approvalBar = byId("plan-approval-bar");
+      if (approvalBar) {
+        const taskStatus = ((state.activeTask) || {}).status || "idle";
+        const planReady = steps.length > 0 && ["planning", "ready_to_apply"].includes(taskStatus);
+        approvalBar.classList.toggle("hidden", !planReady);
+      }
     };
 
     const renderScope = (state) => {
@@ -849,26 +864,11 @@
       const task = state.activeTask || {};
       const changes = task.changedFiles || [];
       const hasPatch = task.status === "ready_to_apply" || changes.length > 0;
-      const showSecondaryRow = hasPatch || task.status === "failed";
+      const showSecondaryRow = hasPatch;
 
       byId("secondary-actions-row").classList.toggle("hidden", !showSecondaryRow);
       byId("apply-btn").classList.toggle("hidden", !hasPatch);
       byId("revert-btn").classList.toggle("hidden", !hasPatch);
-
-      const contextualButton = byId("contextual-btn");
-      if (hasPatch) {
-        contextualButton.textContent = "Apply Patch";
-        contextualButton.className = "secondary";
-        contextualButton.dataset.action = "apply";
-      } else if (task.status === "failed") {
-        contextualButton.textContent = "Retry";
-        contextualButton.className = "secondary";
-        contextualButton.dataset.action = "retry";
-      } else {
-        contextualButton.textContent = "Refresh Context";
-        contextualButton.className = "secondary";
-        contextualButton.dataset.action = "refresh";
-      }
 
       const showTaskControls = taskIsActive(state) || hasPatch;
       byId("actions-section").classList.toggle("hidden", !showTaskControls);
@@ -1173,7 +1173,31 @@
         post({ type: "OPEN_SETUP_WIZARD" });
       });
 
-      byId("contextual-btn").addEventListener("click", handleContextualAction);
+      // ── New Chat button: clears chat and starts a fresh session ──
+      byId("new-chat-btn").addEventListener("click", () => {
+        // Clear local webview state immediately for instant feedback
+        const list = byId("chat-list");
+        if (list) list.innerHTML = "";
+        const emptyState = byId("chat-empty-state");
+        if (emptyState) emptyState.classList.remove("hidden");
+        streamingItemId = null;
+        clearBusy();
+        // Tell the extension host to create a fresh session
+        post({ type: "NEW_SESSION" });
+      });
+
+      // ── Plan approval: user must click before execution proceeds ──
+      byId("plan-approve-btn").addEventListener("click", () => {
+        byId("plan-approval-bar").classList.add("hidden");
+        setBusy(true, "Executing approved plan…");
+        post({ type: "APPROVE_PLAN" });
+      });
+
+      byId("plan-reject-btn").addEventListener("click", () => {
+        byId("plan-approval-bar").classList.add("hidden");
+        clearBusy();
+        post({ type: "REJECT_PLAN" });
+      });
 
       byId("apply-btn").addEventListener("click", () => {
         setBusy(true, "Applying proposed changes…");
@@ -1194,7 +1218,7 @@
         post({ type: "OPEN_SETUP_WIZARD" });
       });
 
-      byId("settings-btn").addEventListener("click", () => {
+      byId("settings-header-btn").addEventListener("click", () => {
         post({ type: "OPEN_SETTINGS" });
       });
 
@@ -1289,8 +1313,19 @@
 
       if (msg.type === "STATE_SYNC") {
         lastError = undefined;
-        clearBusy();
-        render(msg.payload || {});
+        const syncState = msg.payload || {};
+        const taskStatus = ((syncState.activeTask) || {}).status || "idle";
+        // Only clear the thinking animation when the task reaches a
+        // terminal state. During "planning" / "generating" / "reviewing"
+        // the animation must keep running — the old code called
+        // clearBusy() unconditionally here, which killed the spinner
+        // after ~1-2s (as soon as the first stateStore.updateActiveTask
+        // fired) while the LLM was still working for 30+ seconds.
+        const isTerminal = ["idle", "done", "failed", "ready_to_apply"].includes(taskStatus);
+        if (isTerminal) {
+          clearBusy();
+        }
+        render(syncState);
         return;
       }
 

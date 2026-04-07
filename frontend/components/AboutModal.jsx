@@ -9,7 +9,7 @@ import { apiUrl, safeFetchJSON } from "../utils/api.js";
  * - Prominent brand mark matching docs/logo.svg (orange ring + GP monogram)
  * - Clear identity: name, tagline, version (frontend + backend)
  * - Credits the creator (Ruslan Magana Vsevolodovna) as a link to GitHub
- * - Open-source positioning: MIT license + GitHub repo link
+ * - Open-source positioning: Apache 2.0 license + GitHub repo link
  * - Action row: View on GitHub, Report Issue, Documentation
  * - Accessible: role="dialog", aria-modal, aria-labelledby, Escape to close,
  *   focus trap via initial focus on close button
@@ -17,7 +17,7 @@ import { apiUrl, safeFetchJSON } from "../utils/api.js";
  */
 
 const FRONTEND_VERSION =
-  typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "0.2.5";
+  typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "0.1.5";
 
 export default function AboutModal({ isOpen, onClose }) {
   const [backendVersion, setBackendVersion] = useState(null);
@@ -209,7 +209,7 @@ export default function AboutModal({ isOpen, onClose }) {
                 boxShadow: "0 0 8px rgba(255, 122, 60, 0.8)",
               }}
             />
-            Open Source · MIT
+            Open Source · Apache 2.0
           </div>
         </div>
 
@@ -244,7 +244,7 @@ export default function AboutModal({ isOpen, onClose }) {
               label="Backend"
               value={backendVersion ? `v${backendVersion}` : "—"}
             />
-            <MetaRow label="License" value="MIT" />
+            <MetaRow label="License" value="Apache 2.0" />
             <MetaRow
               label="Created by"
               value={
