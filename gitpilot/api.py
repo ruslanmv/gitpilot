@@ -420,14 +420,114 @@ def _working_set_to_text(working_set) -> str:
     return "\n".join(parts)
 
 
+def _sanitize_relative_path(p: str) -> str | None:
+    """Reject absolute paths, .. traversal, drive letters, and empty strings."""
+    import os
+    p = p.strip().strip("`\"'").strip()
+    if not p:
+        return None
+    # Reject absolute / drive / UNC paths
+    if os.path.isabs(p) or p.startswith("\\\\") or (len(p) >= 2 and p[1] == ":"):
+        return None
+    # Reject parent traversal
+    parts = p.replace("\\", "/").split("/")
+    if ".." in parts:
+        return None
+    # Normalise to forward slashes
+    return "/".join(parts)
+
+
+def _extract_edits_from_answer(answer: str) -> list[dict]:
+    """Extract structured ProposedEdit objects from LLM markdown answers.
+
+    Parses fenced code blocks where the filename appears on the opening
+    fence line (e.g. ```python hello.py) — the format we instruct the
+    LLM to use in _build_local_repo_aware_prompt.
+
+    Falls back to matching "save as <filename>" / "create file <filename>"
+    patterns paired with the nearest code block.
+
+    Returns a list of dicts matching the ProposedEdit schema:
+      [{"file": "hello.py", "kind": "create", "content": "...", "summary": "..."}]
+    """
+    import re
+
+    edits: list[dict] = []
+    seen_paths: set[str] = set()
+    if not answer:
+        return edits
+
+    def _add(raw_path: str, content: str) -> None:
+        path = _sanitize_relative_path(raw_path)
+        if not path or path in seen_paths:
+            return
+        seen_paths.add(path)
+        edits.append({
+            "file": path,
+            "kind": "create",
+            "content": content.rstrip(),
+            "summary": f"Create {path}",
+        })
+
+    # Pattern 1: ```lang filepath\n...code...\n```
+    blocks = re.findall(
+        r"```(?:\w+)?\s+([^\n`]+?\.\w+)\s*\n(.*?)```",
+        answer,
+        re.DOTALL,
+    )
+    for filepath, content in blocks:
+        _add(filepath, content)
+
+    if edits:
+        return edits
+
+    # Pattern 2: "save this as `filename`" / "create a file called `filename`"
+    # followed by a code block
+    file_mentions = re.findall(
+        r"(?:save\s+(?:this\s+)?(?:as|to|in)|create\s+(?:a\s+)?(?:file\s+)?(?:called|named)?)\s+[`\"']?([^\s`\"']+\.\w+)[`\"']?",
+        answer,
+        re.IGNORECASE,
+    )
+    code_blocks = re.findall(r"```\w*\n(.*?)```", answer, re.DOTALL)
+
+    if file_mentions and code_blocks:
+        for filename, content in zip(file_mentions, code_blocks):
+            _add(filename, content)
+
+    return edits
+
+
 def _build_local_repo_aware_prompt(req, session) -> str:
     task_summary = getattr(getattr(req, "task_context", None), "summary", None)
 
     sections = [
-        "You are GitPilot running in VS Code enterprise repo-aware mode.",
+        "You are GitPilot, a multi-agent AI coding assistant running in VS Code.",
         "Use the supplied repository metadata, working-set context, and user request to answer precisely.",
-        "When suggesting code changes, be explicit about which files to edit and why.",
-        "Prefer incremental, production-safe patches over large rewrites.",
+        "",
+        "IMPORTANT — File output format:",
+        "When you create or edit files, output each file in this exact format:",
+        "",
+        "```language filepath/relative/to/repo.ext",
+        "...full file content...",
+        "```",
+        "",
+        "Examples:",
+        "  ```python hello.py",
+        "  print('Hello, World!')",
+        "  ```",
+        "",
+        "  ```typescript src/utils/validate.ts",
+        "  export function validate(input: string): boolean {",
+        "    return input.length > 0;",
+        "  }",
+        "  ```",
+        "",
+        "Rules:",
+        "- Always include the relative file path on the same line as the opening triple-backtick fence.",
+        "- Output the COMPLETE file content, not just a snippet.",
+        "- For edits to existing files, output the full updated file.",
+        "- Prefer incremental, production-safe changes over large rewrites.",
+        "- Be explicit about which files to create or modify and why.",
     ]
 
     session_lines = [
@@ -3187,11 +3287,16 @@ async def api_chat_message_v2(req: _ChatMessageRequest):
     session.messages.append(Message(role="assistant", content=answer))
     mgr.save(session)
 
+    # Extract structured edits from the LLM answer so the VS Code
+    # extension can offer an "Apply Patch" button for file creation.
+    edits = _extract_edits_from_answer(answer) if answer else []
+
     return ChatMessageResponse(
         session_id=req.session_id,
         answer=answer,
         message_id=str(uuid.uuid4()),
         plan=plan,
+        edits=edits,
         references=references,
     )
 

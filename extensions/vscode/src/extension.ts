@@ -79,6 +79,7 @@ import type {
   StructuredWorkingSet,
   StructuredTaskContext,
   PlanSummary,
+  ProposedEdit,
 } from "./core/types";
 
 type DisposableLike = { dispose(): void };
@@ -1050,7 +1051,7 @@ export function activate(context: vscode.ExtensionContext): void {
         body: JSON.stringify({
           session_id: sessionId,
           message,
-          permission_mode: "normal",
+          permission_mode: ({ auto: "auto", ask: "normal", plan: "plan" } as Record<string, string>)[stateStore.state.executionMode] || "normal",
         }),
         signal,
       });
@@ -1352,12 +1353,26 @@ export function activate(context: vscode.ExtensionContext): void {
         appendChatMessageToState(assistantMessage);
         syncResponsePlanToState(response);
 
+        // Extract proposed file edits from the backend response.
+        // The backend now parses code blocks in the LLM answer and
+        // returns them as structured ProposedEdit objects, enabling
+        // the VS Code "Apply Patch" button to write files to disk.
+        const responseEdits: ProposedEdit[] = Array.isArray(
+          (response as unknown as Record<string, unknown>).edits
+        )
+          ? ((response as unknown as Record<string, unknown>).edits as ProposedEdit[])
+          : [];
+
+        const hasEdits = responseEdits.length > 0;
+
         const updatedTask = stateStore.state.activeTask || {};
         stateStore.updateActiveTask({
           ...updatedTask,
-          status: normalizedPlan ? "ready_to_apply" : "done",
+          status: normalizedPlan || hasEdits ? "ready_to_apply" : "done",
+          edits: hasEdits ? responseEdits : updatedTask.edits,
           summary:
             normalizedPlan?.summary ||
+            (hasEdits ? `${responseEdits.length} file(s) ready to apply.` : "") ||
             updatedTask.summary ||
             "GitPilot completed the request.",
         });
@@ -1580,6 +1595,32 @@ export function activate(context: vscode.ExtensionContext): void {
               }
             }
 
+            return;
+          }
+
+          case "SET_EXECUTION_MODE": {
+            const execMode = msg.payload.mode;
+            output.appendLine(`[GitPilot] Execution mode set to: ${execMode}`);
+            stateStore.setExecutionMode(execMode);
+
+            // Persist to VS Code settings
+            const modeMap: Record<string, string> = { auto: "auto", ask: "normal", plan: "plan" };
+            void vscode.workspace.getConfiguration("gitpilot").update(
+              "permissionMode", modeMap[execMode] || "normal",
+              vscode.ConfigurationTarget.Global
+            );
+
+            // Sync to backend
+            try {
+              const serverUrl = client.serverUrl;
+              void fetch(`${serverUrl}/api/permissions/mode`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ mode: modeMap[execMode] || "normal" }),
+              });
+            } catch {
+              output.appendLine("[GitPilot] Warning: failed to sync mode to backend");
+            }
             return;
           }
 
@@ -1880,8 +1921,41 @@ export function activate(context: vscode.ExtensionContext): void {
       const { PatchApplier } = await import("./services/patch/patchApplier");
       const patchApplier = new PatchApplier();
       const result = await patchApplier.apply(folderPath, edits);
-      stateStore.setTaskStatus(result.success ? "done" : "failed");
-      output.appendLine(`[GitPilot] Apply result: ${result.success ? "success" : "failed"} (${result.appliedFiles?.length ?? 0} files)`);
+
+      if (result.success) {
+        // Post-apply: refresh project context so the tree/index
+        // reflects the newly created/modified files, and clear
+        // pending edits so the "Apply Patch" button disappears.
+        stateStore.updateActiveTask({
+          ...(stateStore.state.activeTask || {}),
+          edits: [],
+          status: "done",
+          summary: `Applied ${result.appliedFiles?.length ?? edits.length} file(s). Context refreshing...`,
+        });
+
+        // Refresh project context in background
+        void vscode.commands.executeCommand("gitpilot.refreshProjectContext");
+
+        // Open the first applied file so the user sees the result
+        if (result.appliedFiles?.length) {
+          const firstFile = result.appliedFiles[0] as unknown;
+          const firstPath = typeof firstFile === "string"
+            ? firstFile
+            : (firstFile as { path?: string })?.path || "";
+          const fileUri = vscode.Uri.file(path.join(folderPath, firstPath));
+          void vscode.commands.executeCommand("vscode.open", fileUri);
+        }
+
+        output.appendLine(
+          `[GitPilot] Apply success: ${result.appliedFiles?.length ?? 0} files written`
+        );
+        vscode.window.showInformationMessage(
+          `GitPilot applied ${result.appliedFiles?.length ?? edits.length} file(s) successfully.`
+        );
+      } else {
+        stateStore.setTaskStatus("failed");
+        output.appendLine("[GitPilot] Apply reported failure");
+      }
     } catch (err) {
       stateStore.setTaskStatus("failed");
       appendOutputError("[GitPilot] Apply failed", err);

@@ -7,7 +7,7 @@
 ### The first open-source multi-agent AI coding assistant.
 
 Four specialized agents &mdash; Explorer, Planner, Coder, Reviewer &mdash; collaborate on every task.<br/>
-You approve every change. No surprises, no silent commits, no lock-in.
+By default, GitPilot asks before every risky action. Switch to Auto or Plan mode anytime.
 
 [![PyPI](https://img.shields.io/pypi/v/gitcopilot?style=flat-square&color=D95C3D&labelColor=1C1C1F&label=pypi)](https://pypi.org/project/gitcopilot/)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-D95C3D?style=flat-square&labelColor=1C1C1F)](https://www.python.org/)
@@ -39,7 +39,15 @@ Most AI coding tools are a **single model behind a chat box**. GitPilot is funda
 | **Coder** | Execution | Writes code, runs your tests, and self-corrects on failure — iterating until the suite passes |
 | **Reviewer** | Quality | Validates the output, re-runs the suite, and drafts a commit message and PR summary |
 
-**You approve every change.** Diffs are shown before they're applied. Tests run before anything is committed. No surprises.
+**You control how the agent runs.** Three execution modes — selectable per session from the VS Code compose bar or backend API:
+
+| Mode | Default? | Behavior |
+|---|---|---|
+| **Ask** | Yes | Prompts you before each dangerous action (write, edit, run, commit). You see the diff and click Allow / Deny. |
+| **Auto** | | Executes all tools automatically. Fastest for experienced users who trust the plan. |
+| **Plan** | | Read-only. Generates and displays the plan but blocks all file writes and commands. |
+
+Diffs are shown before they're applied. Tests run before anything is committed. No surprises.
 
 ### What else sets GitPilot apart
 
@@ -63,9 +71,9 @@ You: "Add input validation to the login form"
 GitPilot:
   1. Reading src/auth/login.ts...
   2. Planning 3 changes...
-  3. Editing login.ts (Allow? [Yes] [No])
+  3. Editing login.ts → [Apply Patch] [Revert]
   4. Running npm test... 3 passed
-  5. Done.
+  5. Done — files written to your workspace.
 ```
 
 ---
@@ -116,12 +124,79 @@ The sidebar panel gives you everything in one place:
 | Feature | What it does |
 |---|---|
 | **Chat** | Ask questions, request changes, review code |
+| **Execution Modes** | Bottom bar: `Auto` / `Ask` / `Plan` — controls agent permissions per session |
 | **Plan View** | See the step-by-step plan before changes are made |
+| **Plan Approval** | "Approve & Execute" / "Dismiss" bar — execution waits for your OK |
+| **Tool Approvals** | Per-action Allow / Allow for session / Deny cards (Ask mode) |
 | **Diff Preview** | Review proposed edits in VS Code's native diff viewer |
 | **Apply / Revert** | One click to apply changes, one click to undo |
 | **Quick Actions** | Explain, Review, Fix, Generate Tests, Security Scan |
 | **Smart Commit** | AI-generated commit messages |
 | **Code Lens** | Inline "Explain / Review" hints on functions |
+| **Settings Tab** | Branded settings page (General, Provider, Agent, Editor) |
+| **New Chat** | One click to clear chat and start a fresh session |
+
+### Execution modes
+
+The compose bar includes a mode selector that controls how the multi-agent pipeline runs:
+
+```
+[ Auto | Ask | Plan ]    [ Send ]    [ New Chat ]
+```
+
+| Mode | VS Code setting | Backend value | What happens |
+|---|---|---|---|
+| **Ask** (default) | `gitpilot.permissionMode: "normal"` | `"normal"` | Each dangerous tool (write, edit, run, commit) shows an approval card |
+| **Auto** | `gitpilot.permissionMode: "auto"` | `"auto"` | Tools execute automatically — no approval prompts |
+| **Plan** | `gitpilot.permissionMode: "plan"` | `"plan"` | Plan is generated and displayed, all writes/commands blocked |
+
+Mode changes are persisted to VS Code settings and synced to the backend via `PUT /api/permissions/mode`.
+
+### How approvals work
+
+```
+You send a request
+  → Explorer reads repo context
+  → Planner drafts step-by-step plan
+  → Plan appears in sidebar (Approve & Execute / Dismiss)
+  → You click Approve
+  → Coder begins execution
+  → Dangerous tool requested (e.g. write_file)
+    → Ask mode: approval card shown (Allow / Allow for session / Deny)
+    → Auto mode: executes immediately
+    → Plan mode: blocked
+  → Tests run, Reviewer validates
+  → Done — Apply Patch or Revert
+```
+
+> **Note:** Simple questions (e.g. "explain this code") may return a direct answer without generating a multi-step plan. This is expected — the planner activates for tasks that require file changes or multi-step execution.
+
+### Code generation and Apply Patch
+
+When you ask GitPilot to create or edit files, the response includes structured `edits` — not just text. The **Apply Patch** button writes them directly to your workspace.
+
+```
+You: "Create a Flask app with app.py, requirements.txt, and README.md"
+
+GitPilot:
+  → LLM generates 3 files with content
+  → Backend extracts structured edits (path + content)
+  → VS Code shows [Apply Patch] [Revert]
+  → You click Apply Patch
+  → 3 files written to disk
+  → Project context refreshes automatically
+  → First file opens in the editor
+```
+
+How it works under the hood:
+- The LLM is instructed to output code blocks with the filename on the fence line (` ```python hello.py`)
+- The backend parses these blocks into `ProposedEdit` objects with file path, kind, and content
+- All paths are sanitized (rejects `../` traversal, absolute paths, drive letters)
+- The extension stores edits in `activeTask.edits` and shows Apply / Revert
+- `PatchApplier` writes files via `vscode.workspace.fs.writeFile`
+- After apply, project context refreshes and the first file opens
+
+> **Note:** For folder-only sessions (no GitHub remote), code generation uses the LLM directly with structured output instructions. For GitHub-connected sessions, the full CrewAI multi-agent pipeline (Explorer → Planner → Coder → Reviewer) handles planning and execution.
 
 ### Supported AI Providers
 
@@ -165,7 +240,7 @@ GitPilot uses a multi-agent system powered by CrewAI:
 3. **Executor** writes code and runs tests, self-correcting on failure
 4. **Reviewer** validates the output and summarises what changed
 
-You approve every change before it's applied.
+In **Ask** mode (default), you approve every change before it's applied. In **Auto** mode, tools execute without prompts. In **Plan** mode, only the plan is generated — no files are touched.
 
 ---
 
@@ -225,12 +300,15 @@ GitPilot exposes a REST + WebSocket API:
 |---|---|
 | `GET /api/status` | Server health check |
 | `POST /api/chat/send` | Send a message, get a response |
-| `POST /api/v2/chat/stream` | Stream agent events (SSE) |
+| `POST /api/v2/chat/stream` | Stream agent events (SSE) — accepts `permission_mode` |
 | `WS /ws/v2/sessions/{id}` | Real-time WebSocket streaming |
 | `POST /api/chat/plan` | Generate an execution plan |
 | `POST /api/chat/execute` | Execute a plan |
 | `GET /api/repos` | List connected repositories |
 | `GET /api/sessions` | List chat sessions |
+| `GET /api/permissions` | Current permission policy |
+| `PUT /api/permissions/mode` | Set execution mode: `normal` / `auto` / `plan` |
+| `POST /api/v2/approval/respond` | Approve or deny a tool execution request |
 
 Full API docs at `http://localhost:8000/docs` (Swagger UI).
 
