@@ -104,6 +104,15 @@ docker compose up
 
 Open [http://localhost:3000](http://localhost:3000) in your browser.
 
+### Live Demo on Hugging Face
+
+Experience the application in action through our hosted demo environment:
+
+[![Live Demo Preview](assets/2026-04-07-16-17-56.png)](https://huggingface.co/spaces/ruslanmv/gitpilot)
+
+🔗 **Access the live demo:**  
+[https://huggingface.co/spaces/ruslanmv/gitpilot](https://huggingface.co/spaces/ruslanmv/gitpilot)
+
 ### Option 3: Python CLI (fastest)
 
 ```bash
