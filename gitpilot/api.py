@@ -421,9 +421,22 @@ def _working_set_to_text(working_set) -> str:
 
 
 def _sanitize_relative_path(p: str) -> str | None:
-    """Reject absolute paths, .. traversal, drive letters, and empty strings."""
+    """Reject absolute paths, .. traversal, drive letters, and empty strings.
+
+    Also strips LLM artifacts like "three_backticks_space" that some models
+    produce instead of actual backtick characters.
+    """
     import os
+    import re as _re
     p = p.strip().strip("`\"'").strip()
+    # Strip common LLM artifacts
+    # Strip literal descriptions LLMs produce instead of actual backtick chars
+    p = _re.sub(r"(?i)three[\s_+]*backtick[s]?[\s_+]*space[\s_+]*", "", p)
+    p = _re.sub(r"(?i)three[\s_+]*\+[\s_+]*markdown[\s_+]*\+[\s_+]*space[\s_+]*\+?\s*", "", p)
+    p = _re.sub(r"(?i)backtick[s]?[\s_+]*", "", p)
+    p = _re.sub(r"(?i)triple[\s_+]*backtick[s]?[\s_+]*", "", p)
+    p = _re.sub(r"(?i)fenced?[\s_+]*code[\s_+]*block[\s_+]*", "", p)
+    p = p.strip()
     if not p:
         return None
     # Reject absolute / drive / UNC paths
@@ -469,7 +482,7 @@ def _extract_edits_from_answer(answer: str) -> list[dict]:
             "summary": f"Create {path}",
         })
 
-    # Pattern 1: ```lang filepath\n...code...\n```
+    # Pattern 1 (preferred): ```lang filepath\n...code...\n```
     blocks = re.findall(
         r"```(?:\w+)?\s+([^\n`]+?\.\w+)\s*\n(.*?)```",
         answer,
@@ -481,7 +494,21 @@ def _extract_edits_from_answer(answer: str) -> list[dict]:
     if edits:
         return edits
 
-    # Pattern 2: "save this as `filename`" / "create a file called `filename`"
+    # Pattern 2: non-standard format some LLMs produce
+    # "```\npython filepath\n---\n...code...\n---\n```"
+    # or just "python filepath\n---\n...code...\n" outside fences
+    dash_blocks = re.findall(
+        r"(?:```\n?)?(\w+)\s+([^\n]+?\.\w+)\s*\n-{3,}\n(.*?)\n-{3,}",
+        answer,
+        re.DOTALL,
+    )
+    for _lang, filepath, content in dash_blocks:
+        _add(filepath, content)
+
+    if edits:
+        return edits
+
+    # Pattern 3: "save this as `filename`" / "create a file called `filename`"
     # followed by a code block
     file_mentions = re.findall(
         r"(?:save\s+(?:this\s+)?(?:as|to|in)|create\s+(?:a\s+)?(?:file\s+)?(?:called|named)?)\s+[`\"']?([^\s`\"']+\.\w+)[`\"']?",
@@ -500,35 +527,40 @@ def _extract_edits_from_answer(answer: str) -> list[dict]:
 def _build_local_repo_aware_prompt(req, session) -> str:
     task_summary = getattr(getattr(req, "task_context", None), "summary", None)
 
-    sections = [
-        "You are GitPilot, a multi-agent AI coding assistant running in VS Code.",
-        "Use the supplied repository metadata, working-set context, and user request to answer precisely.",
-        "",
-        "IMPORTANT — File output format:",
-        "When you create or edit files, output each file in this exact format:",
-        "",
-        "```language filepath/relative/to/repo.ext",
-        "...full file content...",
-        "```",
-        "",
-        "Examples:",
-        "  ```python hello.py",
-        "  print('Hello, World!')",
-        "  ```",
-        "",
-        "  ```typescript src/utils/validate.ts",
-        "  export function validate(input: string): boolean {",
-        "    return input.length > 0;",
-        "  }",
-        "  ```",
-        "",
-        "Rules:",
-        "- Always include the relative file path on the same line as the opening triple-backtick fence.",
-        "- Output the COMPLETE file content, not just a snippet.",
-        "- For edits to existing files, output the full updated file.",
-        "- Prefer incremental, production-safe changes over large rewrites.",
-        "- Be explicit about which files to create or modify and why.",
-    ]
+    # System instructions — the file-output format uses triple-backtick
+    # fences with the filepath on the opening line. We use a raw block
+    # to avoid confusion when the prompt is joined with --- separators.
+    system_block = (
+        "You are GitPilot, a multi-agent AI coding assistant running in VS Code.\n"
+        "Use the supplied repository metadata, working-set context, and user request to answer precisely.\n"
+        "\n"
+        "IMPORTANT FILE OUTPUT FORMAT:\n"
+        "When you create or edit files, you MUST use triple-backtick fenced code blocks\n"
+        "with the language AND the file path on the SAME opening line.\n"
+        "\n"
+        "Correct format (you MUST follow this exactly):\n"
+        "\n"
+        "  ```python hello.py\n"
+        "  print('Hello, World!')\n"
+        "  ```\n"
+        "\n"
+        "  ```typescript src/utils/validate.ts\n"
+        "  export function validate(input: string): boolean {\n"
+        "    return input.length > 0;\n"
+        "  }\n"
+        "  ```\n"
+        "\n"
+        "Rules:\n"
+        "- The opening fence MUST be triple backticks followed by the language then the filepath.\n"
+        "- The closing fence MUST be triple backticks on their own line.\n"
+        "- Do NOT use --- separators or any other format.\n"
+        "- Output the COMPLETE file content, not just a snippet.\n"
+        "- For edits to existing files, output the full updated file.\n"
+        "- Be explicit about which files to create or modify and why.\n"
+        "- Prefer incremental, production-safe changes over large rewrites."
+    )
+
+    sections = [system_block]
 
     session_lines = [
         f"Session mode: {getattr(session, 'mode', None)}",

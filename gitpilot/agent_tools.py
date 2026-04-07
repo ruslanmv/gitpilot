@@ -10,6 +10,29 @@ from crewai.tools import tool
 
 from .github_api import get_repo_tree, get_file
 
+
+def _sanitize_tool_arg(value: Any, fallback_key: str = "description") -> str:
+    """Fix CrewAI tool argument format bug.
+
+    Smaller LLMs (deepseek-r1, qwen, phi) sometimes send tool arguments
+    as a dict copying the schema definition instead of the actual value:
+        {"description": "README.md", "type": "str"}
+    instead of:
+        "README.md"
+
+    This helper unwraps the dict and returns a plain string.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        # Try common keys the LLM might stuff the value into
+        for key in (fallback_key, "description", "value", "default", "title"):
+            if key in value and isinstance(value[key], str) and value[key]:
+                return value[key]
+        # Last resort: stringify
+        return str(next(iter(value.values()), ""))
+    return str(value)
+
 # Global context for current repository
 # Now includes 'token' to ensure tools can authenticate even in threads
 # AND includes 'branch' to ensure tools operate on the correct ref (not default HEAD/main)
@@ -152,6 +175,7 @@ def get_directory_structure() -> str:
 @tool("Read file content")
 def read_file(file_path: str) -> str:
     """Reads the content of a specific file."""
+    file_path = _sanitize_tool_arg(file_path)
     try:
         owner, repo, token, branch = get_repo_context()
 
@@ -194,6 +218,9 @@ def get_repository_summary() -> str:
 @tool("Write or update a file in the repository")
 def write_file(file_path: str, content: str, commit_message: str) -> str:
     """Creates or updates a file in the repository. Provide the full file content."""
+    file_path = _sanitize_tool_arg(file_path)
+    content = _sanitize_tool_arg(content, fallback_key="value")
+    commit_message = _sanitize_tool_arg(commit_message, fallback_key="value")
     try:
         owner, repo, token, branch = get_repo_context()
         from .github_api import put_file
@@ -216,6 +243,8 @@ def write_file(file_path: str, content: str, commit_message: str) -> str:
 @tool("Delete a file from the repository")
 def delete_repo_file(file_path: str, commit_message: str) -> str:
     """Deletes a file from the repository."""
+    file_path = _sanitize_tool_arg(file_path)
+    commit_message = _sanitize_tool_arg(commit_message, fallback_key="value")
     try:
         owner, repo, token, branch = get_repo_context()
         from .github_api import delete_file
@@ -238,6 +267,7 @@ def delete_repo_file(file_path: str, commit_message: str) -> str:
 @tool("Create a new branch in the repository")
 def create_repo_branch(branch_name: str) -> str:
     """Creates a new branch from the current HEAD."""
+    branch_name = _sanitize_tool_arg(branch_name)
     try:
         owner, repo, token, _branch = get_repo_context()
         from .github_api import create_branch
