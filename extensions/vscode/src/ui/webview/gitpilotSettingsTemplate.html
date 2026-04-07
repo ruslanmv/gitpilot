@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="__CSP__" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GitPilot Settings</title>
+  <style nonce="__NONCE__">
+    :root {
+      --bg: var(--vscode-editor-background, #0B0B0D);
+      --surface: var(--vscode-sideBar-background, #1C1C1F);
+      --surface-2: #17171A;
+      --border: var(--vscode-panel-border, #27272A);
+      --fg: var(--vscode-foreground, #EDEDED);
+      --muted: #A1A1AA;
+      --accent: #D95C3D;
+      --accent-bright: #ff7a3c;
+      --hover: rgba(255,255,255,0.04);
+      --active-bg: rgba(217,92,61,0.12);
+      --radius: 8px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+      font-size: 13px;
+      color: var(--fg);
+      background: var(--bg);
+      overflow: hidden;
+      height: 100vh;
+    }
+
+    /* ── Layout: sidebar + content ── */
+    .settings-shell {
+      display: flex;
+      height: 100vh;
+    }
+    .settings-sidebar {
+      width: 210px;
+      min-width: 210px;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      padding: 12px 0;
+      overflow-y: auto;
+    }
+    .settings-main {
+      flex: 1;
+      overflow-y: auto;
+      padding: 28px 36px 64px;
+    }
+
+    /* ── Sidebar nav items ── */
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 18px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      background: none;
+      width: 100%;
+      text-align: left;
+      font-family: inherit;
+      transition: background 80ms ease, color 80ms ease;
+      border-left: 3px solid transparent;
+    }
+    .nav-item:hover { background: var(--hover); color: var(--fg); }
+    .nav-item.active {
+      background: var(--active-bg);
+      color: var(--accent-bright);
+      border-left-color: var(--accent-bright);
+      font-weight: 600;
+    }
+    .nav-item svg { width: 18px; height: 18px; flex-shrink: 0; }
+    .nav-icon { display: inline-flex; align-items: center; color: inherit; }
+
+    .nav-footer {
+      margin-top: auto;
+      padding: 14px 18px;
+      border-top: 1px solid var(--border);
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+    .nav-footer a {
+      color: var(--accent-bright);
+      text-decoration: none;
+    }
+    .nav-footer a:hover { text-decoration: underline; }
+
+    /* ── Section headings ── */
+    .section-page { display: none; }
+    .section-page.active { display: block; }
+    .section-heading {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--fg);
+      margin-bottom: 24px;
+      letter-spacing: -0.3px;
+    }
+
+    /* ── Field rows ── */
+    .field {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 16px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .field:last-child { border-bottom: none; }
+    .field-info { flex: 1; min-width: 0; }
+    .field-label {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--fg);
+      margin-bottom: 3px;
+    }
+    .field-desc {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+    .field-desc code {
+      background: rgba(255,255,255,0.06);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 11px;
+    }
+    .field-control { flex-shrink: 0; display: flex; align-items: center; padding-top: 2px; }
+
+    /* ── Inputs ── */
+    input[type="text"], input[type="number"], input[type="password"], select {
+      font-family: inherit;
+      font-size: 13px;
+      color: var(--fg);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 7px 12px;
+      min-width: 220px;
+      outline: none;
+      transition: border-color 120ms ease;
+    }
+    input:focus, select:focus { border-color: var(--accent); }
+    input[type="number"] { min-width: 90px; }
+    select { cursor: pointer; }
+
+    /* ── Toggle switch ── */
+    .toggle {
+      position: relative;
+      width: 38px; height: 20px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      cursor: pointer;
+      transition: background 140ms ease, border-color 140ms ease;
+      flex-shrink: 0;
+    }
+    .toggle.active { background: var(--accent); border-color: var(--accent); }
+    .toggle::after {
+      content: "";
+      position: absolute;
+      top: 2px; left: 2px;
+      width: 14px; height: 14px;
+      background: var(--fg);
+      border-radius: 50%;
+      transition: transform 140ms ease;
+    }
+    .toggle.active::after { transform: translateX(18px); }
+
+    /* ── Action buttons ── */
+    .btn {
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 7px 18px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--fg);
+      transition: background 100ms ease, border-color 100ms ease;
+    }
+    .btn:hover { background: var(--hover); border-color: rgba(255,122,60,0.35); }
+    .btn-primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .btn-primary:hover { background: #C44F32; }
+    .btn-danger {
+      color: #f87171;
+      border-color: rgba(248,113,113,0.35);
+    }
+    .btn-danger:hover { background: rgba(248,113,113,0.08); }
+
+    /* ── Status badge ── */
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .status-badge.connected { background: rgba(74,222,128,0.1); color: #4ade80; border: 1px solid rgba(74,222,128,0.3); }
+    .status-badge.disconnected { background: rgba(248,113,113,0.1); color: #f87171; border: 1px solid rgba(248,113,113,0.3); }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; }
+    .connected .status-dot { background: #4ade80; }
+    .disconnected .status-dot { background: #f87171; }
+
+    /* ── Save toast ── */
+    .save-toast {
+      position: fixed;
+      bottom: 20px;
+      right: 28px;
+      background: var(--accent);
+      color: #fff;
+      padding: 10px 22px;
+      border-radius: var(--radius);
+      font-weight: 600;
+      font-size: 13px;
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity 200ms ease, transform 200ms ease;
+      pointer-events: none;
+    }
+    .save-toast.visible { opacity: 1; transform: translateY(0); }
+  </style>
+</head>
+<body>
+  <div class="settings-shell">
+    <!-- ── Sidebar ── -->
+    <nav class="settings-sidebar" aria-label="Settings sections">
+      <button class="nav-item active" data-page="general">
+        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
+        General
+      </button>
+      <button class="nav-item" data-page="provider">
+        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10H12V2z"/><path d="M20.24 7.76L12 12"/></svg></span>
+        AI Provider
+      </button>
+      <button class="nav-item" data-page="agent">
+        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>
+        Agent
+      </button>
+      <button class="nav-item" data-page="editor">
+        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></span>
+        Editor
+      </button>
+
+      <div class="nav-footer">
+        <div>Version: __VERSION__</div>
+        <a href="https://github.com/ruslanmv/gitpilot" data-href="docs">GitPilot Docs</a><br/>
+        <a href="https://github.com/ruslanmv/gitpilot/issues" data-href="issues">Report Issue</a>
+      </div>
+    </nav>
+
+    <!-- ── Content ── -->
+    <main class="settings-main">
+      <!-- === General === -->
+      <div class="section-page active" id="page-general">
+        <div class="section-heading">General</div>
+
+        <div class="field">
+          <div class="field-info">
+            <div class="field-label">Server URL</div>
+            <div class="field-desc">Address of your GitPilot backend. Default: <code>http://127.0.0.1:8000</code></div>
+          </div>
+          <div class="field-control">
+            <input type="text" id="serverUrl" placeholder="http://127.0.0.1:8000" />
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="field-info">
+            <div class="field-label">Auto-connect on startup</div>
+            <div class="field-desc">Connect to the backend automatically when VS Code opens.</div>
+          </div>
+          <div class="field-control">
+            <div class="toggle" id="autoConnect" role="switch" tabindex="0"></div>
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="field-info">
+            <div class="field-label">Connection status</div>
+            <div class="field-desc">Current backend connection state.</div>
+          </div>
+          <div class="field-control">
+            <span class="status-badge" id="connection-status">
+              <span class="status-dot"></span>
+              <span id="connection-text">Checking...</span>
+            </span>
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="field-info">
+            <div class="field-label">GitHub Token</div>
+            <div class="field-desc">Personal access token for repository integration. Falls back to <code>GITHUB_TOKEN</code> env var.</div>
+          </div>
+          <div class="field-control">
+            <input type="password" id="githubToken" placeholder="ghp_..." />
+          </div>
+        </div>
+      </div>
+
+      <!-- === AI Provider === -->
+      <div class="section-page" id="page-provider">
+        <div class="section-heading">AI Provider</div>
+
+        <div class="field">
+          <div class="field-info">
+            <div class="field-label">Provider</div>
+            <div class="field-desc">Choose your LLM provider. Ollama and OllaBridge are free and require no API key.</div>
+          </div>
+          <div class="field-control">
+            <select id="provider">
+              <option value="ollama">Ollama (local, free)</option>
+              <option value="ollabridge">OllaBridge (cloud, free)</option>
+              <option value="openai">OpenAI</option>
+              <option value="claude">Anthropic Claude</option>
+              <option value="watsonx">IBM Watsonx</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="field-info">
+            <div class="field-label">Lite mode</div>
+            <div class="field-desc">Use simplified prompts optimized for small LLMs (&lt;7B params) like tinyllama, phi-3-mini, gemma-2b, qwen2.5:1.5b.</div>
+          </div>
+          <div class="field-control">
+            <div class="toggle" id="liteMode" role="switch" tabindex="0"></div>
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="field-info">
+            <div class="field-label">Open Admin Panel</div>
+            <div class="field-desc">Advanced provider configuration, model selection, and API key management in the browser.</div>
+          </div>
+          <div class="field-control">
+            <button class="btn" id="open-admin-btn" type="button">Open</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- === Agent === -->
+      <div class="section-page" id="page-agent">
+        <div class="section-heading">Agent Behavior</div>
+
+        <div class="field">
+          <div class="field-info">
+            <div class="field-label">Permission mode</div>
+            <div class="field-desc">
+              <strong>Normal</strong>: asks before risky operations (recommended).<br/>
+              <strong>Plan only</strong>: read-only, all writes blocked.<br/>
+              <strong>Auto</strong>: no confirmation prompts.
+            </div>
+          </div>
+          <div class="field-control">
+            <select id="permissionMode">
+              <option value="normal">Normal</option>
+              <option value="plan">Plan only</option>
+              <option value="auto">Auto</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="field-info">
+            <div class="field-label">Default topology</div>
+            <div class="field-desc">Agent topology to use for multi-agent pipeline execution.</div>
+          </div>
+          <div class="field-control">
+            <input type="text" id="defaultTopology" value="default" />
+          </div>
+        </div>
+      </div>
+
+      <!-- === Editor === -->
+      <div class="section-page" id="page-editor">
+        <div class="section-heading">Editor Integration</div>
+
+        <div class="field">
+          <div class="field-info">
+            <div class="field-label">CodeLens hints</div>
+            <div class="field-desc">Show "Explain" and "Review" links above functions and classes in the editor.</div>
+          </div>
+          <div class="field-control">
+            <div class="toggle" id="showInlineHints" role="switch" tabindex="0"></div>
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="field-info">
+            <div class="field-label">Security scan on save</div>
+            <div class="field-desc">Automatically run a vulnerability scan every time you save a file.</div>
+          </div>
+          <div class="field-control">
+            <div class="toggle" id="scanOnSave" role="switch" tabindex="0"></div>
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="field-info">
+            <div class="field-label">Show security diagnostics</div>
+            <div class="field-desc">Display security scan findings in the VS Code Problems panel.</div>
+          </div>
+          <div class="field-control">
+            <div class="toggle" id="showSecurityDiagnostics" role="switch" tabindex="0"></div>
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="field-info">
+            <div class="field-label">Chat font size</div>
+            <div class="field-desc">Font size for the chat panel (10-24px).</div>
+          </div>
+          <div class="field-control">
+            <input type="number" id="chatFontSize" min="10" max="24" value="13" />
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="field-info">
+            <div class="field-label">Max chat history</div>
+            <div class="field-desc">Maximum number of messages kept in memory (10-1000).</div>
+          </div>
+          <div class="field-control">
+            <input type="number" id="maxChatHistory" min="10" max="1000" value="100" />
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Save toast -->
+  <div class="save-toast" id="save-toast">Settings saved</div>
+
+  <script nonce="__NONCE__">
+    const vscode = acquireVsCodeApi();
+    const post = (msg) => vscode.postMessage(msg);
+    const byId = (id) => document.getElementById(id);
+
+    // ── Toggle helpers ──
+    const getToggle = (id) => byId(id)?.classList.contains("active");
+    const setToggle = (id, val) => {
+      const el = byId(id);
+      if (!el) return;
+      el.classList.toggle("active", Boolean(val));
+      el.setAttribute("aria-checked", String(Boolean(val)));
+    };
+
+    // ── Sidebar navigation ──
+    document.querySelectorAll(".nav-item").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".nav-item").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        document.querySelectorAll(".section-page").forEach((p) => p.classList.remove("active"));
+        const page = byId("page-" + btn.dataset.page);
+        if (page) page.classList.add("active");
+      });
+    });
+
+    // ── Toggle click/keyboard ──
+    document.querySelectorAll(".toggle").forEach((toggle) => {
+      toggle.addEventListener("click", () => {
+        toggle.classList.toggle("active");
+        toggle.setAttribute("aria-checked", String(toggle.classList.contains("active")));
+        saveSettings();
+      });
+      toggle.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle.click(); }
+      });
+    });
+
+    // ── Auto-save on input change (debounced) ──
+    let saveTimer = null;
+    const debounceSave = () => {
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(saveSettings, 600);
+    };
+    document.querySelectorAll("input, select").forEach((el) => {
+      el.addEventListener("input", debounceSave);
+      el.addEventListener("change", debounceSave);
+    });
+
+    // ── Open admin panel ──
+    byId("open-admin-btn")?.addEventListener("click", () => {
+      post({ type: "OPEN_ADMIN" });
+    });
+
+    // ── Collect + save ──
+    function saveSettings() {
+      post({
+        type: "SAVE_SETTINGS",
+        payload: {
+          serverUrl: byId("serverUrl").value.trim(),
+          autoConnect: getToggle("autoConnect"),
+          githubToken: byId("githubToken").value,
+          provider: byId("provider").value,
+          permissionMode: byId("permissionMode").value,
+          defaultTopology: byId("defaultTopology").value.trim() || "default",
+          liteMode: getToggle("liteMode"),
+          showInlineHints: getToggle("showInlineHints"),
+          scanOnSave: getToggle("scanOnSave"),
+          showSecurityDiagnostics: getToggle("showSecurityDiagnostics"),
+          chatFontSize: parseInt(byId("chatFontSize").value, 10) || 13,
+          maxChatHistory: parseInt(byId("maxChatHistory").value, 10) || 100,
+        },
+      });
+    }
+
+    // ── Receive current settings ──
+    window.addEventListener("message", (event) => {
+      const msg = event.data;
+      if (!msg) return;
+
+      if (msg.type === "SETTINGS_DATA") {
+        const s = msg.payload || {};
+        byId("serverUrl").value = s.serverUrl || "http://127.0.0.1:8000";
+        setToggle("autoConnect", s.autoConnect !== false);
+        byId("githubToken").value = s.githubToken || "";
+        byId("defaultTopology").value = s.defaultTopology || "default";
+        setToggle("liteMode", Boolean(s.liteMode));
+        setToggle("showInlineHints", s.showInlineHints !== false);
+        setToggle("scanOnSave", Boolean(s.scanOnSave));
+        setToggle("showSecurityDiagnostics", s.showSecurityDiagnostics !== false);
+        byId("chatFontSize").value = String(s.chatFontSize || 13);
+        byId("maxChatHistory").value = String(s.maxChatHistory || 100);
+
+        const providerSelect = byId("provider");
+        if (s.provider && providerSelect) {
+          for (const opt of providerSelect.options) {
+            if (opt.value === s.provider) { opt.selected = true; break; }
+          }
+        }
+
+        const badge = byId("connection-status");
+        const text = byId("connection-text");
+        if (s.connected) {
+          badge.className = "status-badge connected";
+          text.textContent = "Connected";
+        } else {
+          badge.className = "status-badge disconnected";
+          text.textContent = "Disconnected";
+        }
+      }
+
+      if (msg.type === "SETTINGS_SAVED") {
+        const toast = byId("save-toast");
+        toast.classList.add("visible");
+        setTimeout(() => toast.classList.remove("visible"), 1800);
+      }
+    });
+
+    // ── Init: request current settings ──
+    post({ type: "GET_SETTINGS" });
+  </script>
+</body>
+</html>

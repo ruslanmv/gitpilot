@@ -344,7 +344,10 @@ export type WebviewToExtensionMessage =
   | { type: "REGENERATE_TASK_PLAN" }
   // ── V2 messages from webview (additive) ──
   | { type: "TOOL_APPROVAL_RESPONSE"; payload: { id: string; approved: boolean; scope?: "once" | "session" | "always" } }
-  | { type: "CANCEL_TASK" };
+  | { type: "CANCEL_TASK" }
+  | { type: "NEW_SESSION" }
+  | { type: "APPROVE_PLAN" }
+  | { type: "REJECT_PLAN" };
 
 export interface StatusResponse {
   server_ready: boolean;
