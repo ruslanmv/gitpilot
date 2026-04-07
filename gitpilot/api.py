@@ -1159,6 +1159,32 @@ async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Hea
                     ),
                 ) from exc
 
+            # ── Structured-output parse failure (common with small models) ─
+            _plan_parse_markers = (
+                "validation error for planresult",
+                "json_invalid",
+                "invalid json: key must be a string",
+            )
+            if any(marker in error_msg.lower() for marker in _plan_parse_markers):
+                logger.warning(
+                    "[GitPilot] Planner returned malformed structured output. "
+                    "Falling back to Lite planner. Error: %s",
+                    error_msg,
+                )
+                try:
+                    return await generate_plan_lite(
+                        req.goal,
+                        full_name,
+                        token=token,
+                        branch_name=req.branch_name,
+                    )
+                except Exception as lite_exc:
+                    logger.exception(
+                        "[GitPilot] Lite planner fallback also failed after parse error: %s",
+                        lite_exc,
+                    )
+                    raise
+
             # Re-raise anything else
             raise
 
