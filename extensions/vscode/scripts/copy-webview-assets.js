@@ -11,6 +11,10 @@ const filesToCopy = [
     from: path.join(root, "src", "ui", "webview", "gitpilotWorkspace.css"),
     to: path.join(root, "out", "ui", "webview", "gitpilotWorkspace.css"),
   },
+  {
+    from: path.join(root, "src", "ui", "webview", "gitpilotSettingsTemplate.html"),
+    to: path.join(root, "out", "ui", "webview", "gitpilotSettingsTemplate.html"),
+  },
 ];
 
 for (const file of filesToCopy) {

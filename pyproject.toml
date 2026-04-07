@@ -5,13 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 # PyPI project name – MUST match what you configured in PyPI Trusted Publishers
 name = "gitcopilot"
-version = "0.2.5"
-description = "Production-ready agentic AI assistant for GitHub repositories with multi-LLM support and visual workflow insights"
+version = "0.2.6"
+description = "Multi-agent AI coding assistant — four specialized agents (Explorer, Planner, Coder, Reviewer) that read your repo, plan safe changes, write code, run tests, and wait for your approval. Any LLM."
 requires-python = ">=3.11,<3.13"
 readme = "README.md"
 
 # Use a simple SPDX license string, not a table
-license = "MIT"
+license = "Apache-2.0"
 
 authors = [{ name = "Ruslan Magana Vsevolodovna" }]
 keywords = [

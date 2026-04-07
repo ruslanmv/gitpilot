@@ -234,8 +234,31 @@ textarea {
 .header-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 4px;
   justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 100ms ease, color 100ms ease, border-color 100ms ease;
+}
+.icon-btn:hover {
+  background: var(--surface-2);
+  color: var(--fg);
+  border-color: var(--border);
+}
+.icon-btn svg {
   flex-shrink: 0;
 }
 
@@ -689,22 +712,13 @@ details[open] .chevron {
   background: linear-gradient(180deg, color-mix(in srgb, var(--danger) 9%, transparent), color-mix(in srgb, var(--surface) 100%, transparent));
 }
 
+/* Busy overlay: disabled — the inline thinking bubble in chat is the
+   sole active-state indicator (follows ChatGPT/Claude pattern). The
+   overlay element stays in the DOM so JS refs don't break but is
+   never shown. */
 .busy-overlay {
-  position: fixed;
-  inset: auto 14px 14px 14px;
-  z-index: 50;
-  display: none;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--surface-2) 96%, transparent);
-  box-shadow: var(--shadow);
-  backdrop-filter: blur(8px);
+  display: none !important;
 }
-
-.busy-overlay.visible { display: flex; }
 
 .spinner {
   width: 14px;
@@ -1242,6 +1256,24 @@ details[open] .chevron {
   to {
     transform: translateX(120%);
   }
+}
+
+/* ─── Plan approval bar ─── */
+.plan-approval {
+  margin-top: 12px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+.plan-approval__text {
+  margin: 0 0 10px;
+  font-size: var(--font-md);
+  color: var(--muted);
+}
+.plan-approval__actions {
+  display: flex;
+  gap: 8px;
 }
 
 @keyframes thinkingCollapse {

@@ -1,6 +1,6 @@
 # GitPilot VS Code Extension — Full Documentation
 
-> Version 0.2.5
+> Version 0.1.5
 
 ## Table of Contents
 
@@ -43,13 +43,13 @@ GitPilot has **three components that must be version-aligned**: the VS Code exte
 
 | VS Code extension | Python backend (`gitcopilot`) | VS Code engine | Python |
 |---|---|---|---|
-| **0.1.x** | `>=0.2.5,<0.3.0` | `>=1.110.0` | `3.11` or `3.12` |
+| **0.1.x** | `>=0.1.5,<0.2.0` | `>=1.110.0` | `3.11` or `3.12` |
 
 **Install both at compatible versions:**
 
 ```bash
 # Backend (PyPI package is named "gitcopilot", command is "gitpilot")
-pip install "gitcopilot>=0.2.5,<0.3.0"
+pip install "gitcopilot>=0.1.5,<0.2.0"
 gitpilot serve   # starts backend on http://127.0.0.1:8000
 
 # Extension
@@ -80,7 +80,7 @@ code --install-extension ruslanmv.gitpilot-vscode
 ```bash
 cd extensions/vscode
 make package
-code --install-extension gitpilot-vscode-0.2.5.vsix
+code --install-extension gitpilot-vscode-0.1.5.vsix
 ```
 
 ### From Source (for developers)
@@ -380,4 +380,4 @@ Open an issue at [github.com/ruslanmv/gitpilot/issues](https://github.com/ruslan
 
 ---
 
-*GitPilot v0.2.5 | MIT License | [github.com/ruslanmv/gitpilot](https://github.com/ruslanmv/gitpilot)*
+*GitPilot v0.1.5 | MIT License | [github.com/ruslanmv/gitpilot](https://github.com/ruslanmv/gitpilot)*

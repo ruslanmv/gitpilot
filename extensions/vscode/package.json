@@ -1,11 +1,11 @@
 {
   "name": "gitpilot-vscode",
-  "displayName": "GitPilot Workspace — AI Repo Copilot",
-  "description": "Right-side Copilot workspace for VS Code with plan, files in scope, changes, chat, and apply/revert actions.",
-  "version": "0.2.5",
-  "preview": true,
+  "displayName": "GitPilot — Multi-Agent AI Coding Assistant",
+  "description": "The first multi-agent AI pair programmer for VS Code. Four specialized agents (Explorer, Planner, Coder, Reviewer) collaborate on every task — you approve every change. Works with OpenAI, Claude, Ollama, Watsonx.",
+  "version": "0.2.6",
+  "preview": false,
   "publisher": "ruslanmv",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -15,30 +15,37 @@
   "bugs": {
     "url": "https://github.com/ruslanmv/gitpilot/issues"
   },
+  "galleryBanner": {
+    "color": "#1C1C1F",
+    "theme": "dark"
+  },
   "engines": {
     "vscode": "^1.110.0"
   },
   "categories": [
     "Programming Languages",
     "Machine Learning",
-    "SCM Providers",
+    "Testing",
     "Linters",
-    "Other"
+    "Data Science"
   ],
   "keywords": [
     "ai",
-    "github",
+    "ai-coding",
     "copilot",
-    "agent",
-    "crewai",
-    "mcp",
-    "security",
+    "pair-programming",
     "code-review",
-    "multi-agent",
-    "llm",
+    "code-generation",
+    "refactoring",
     "openai",
     "claude",
-    "ollama"
+    "ollama",
+    "watsonx",
+    "github",
+    "agent",
+    "multi-agent",
+    "security",
+    "testing"
   ],
   "activationEvents": [
     "onCommand:gitpilot.explainSelection",
@@ -618,12 +625,12 @@
       {
         "id": "gitpilot.gettingStarted",
         "title": "Get Started with GitPilot",
-        "description": "Set up your AI-powered GitHub assistant in VS Code",
+        "description": "Set up GitPilot's multi-agent AI coding assistant in VS Code",
         "steps": [
           {
             "id": "startServer",
             "title": "Start the GitPilot Server",
-            "description": "Install the GitPilot backend (PyPI: `gitcopilot`) and start the API server. Requires Python 3.11 or 3.12.\n\n```bash\npip install 'gitcopilot>=0.2.5,<0.3.0'\ngitpilot serve\n```\n\nThe package on PyPI is **gitcopilot**; the command is **gitpilot**.\n\n[Open Terminal](command:workbench.action.terminal.new)",
+            "description": "Install the GitPilot backend (PyPI: `gitcopilot`) and start the API server. Requires Python 3.11 or 3.12.\n\n```bash\npip install 'gitcopilot>=0.2.6'\ngitpilot serve\n```\n\nThe package on PyPI is **gitcopilot**; the command is **gitpilot**.\n\n[Open Terminal](command:workbench.action.terminal.new)",
             "media": {
               "markdown": ""
             }

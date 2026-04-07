@@ -896,15 +896,36 @@ export function activate(context: vscode.ExtensionContext): void {
   const ensureSessionReady = async (): Promise<string | undefined> => {
     const state = stateStore.state;
 
+    // Fast path: session already exists
     if (state.session.sessionId) {
       return state.session.sessionId;
     }
 
+    // If readiness hasn't been evaluated yet (first click, cold start),
+    // wait for the status refresh to complete instead of returning
+    // undefined immediately. This prevents losing the user's first
+    // click on WSL where /api/status takes 10+ seconds.
     if (!state.readiness.canChat) {
+      output.appendLine(
+        "[GitPilot] Chat not ready yet — waiting for status refresh..."
+      );
+      try {
+        await vscode.commands.executeCommand("gitpilot.refreshStatus");
+      } catch {
+        // ignore — readiness will be re-evaluated below
+      }
+    }
+
+    // Re-check after refresh
+    const refreshedState = stateStore.state;
+    if (!refreshedState.readiness.canChat) {
+      output.appendLine(
+        "[GitPilot] Still not ready to chat after refresh"
+      );
       return undefined;
     }
 
-    if (!state.session.active && state.session.status !== "creating") {
+    if (!refreshedState.session.active && refreshedState.session.status !== "creating") {
       await sessionCoordinator.ensureActiveSession();
     }
 
@@ -1230,10 +1251,18 @@ export function activate(context: vscode.ExtensionContext): void {
     const sessionId = await ensureSessionReady();
 
     if (!sessionId) {
+      // Reset task status to idle so the webview clears the thinking
+      // bubble. Without this, the animation stays stuck forever
+      // because the early return skips the normal done/failed path.
+      stateStore.updateActiveTask({
+        ...(stateStore.state.activeTask || {}),
+        status: "idle",
+      });
       postErrorToPanel({
         code: "SESSION_NOT_READY",
         title: "GitPilot is finishing setup",
-        message: "A session is being prepared. Please try again in a moment.",
+        message:
+          "The backend is still starting up. Please try again in a few seconds.",
       });
       return;
     }
@@ -1289,6 +1318,16 @@ export function activate(context: vscode.ExtensionContext): void {
         output.appendLine(
           "[GitPilot] SSE streaming unavailable, falling back to batch mode"
         );
+
+        // The v2 stream's cleanup already set task status to "done" and
+        // the webview cleared the thinking animation. Re-activate both
+        // so the user sees the thinking bubble during the 30s+ batch call.
+        stateStore.updateActiveTask({
+          ...(stateStore.state.activeTask || {}),
+          status: "generating",
+          title: "Working on your request",
+          summary: "",
+        });
 
         const response = await chatClientV2.sendMessage({
           session_id: sessionId,
@@ -1495,12 +1534,11 @@ export function activate(context: vscode.ExtensionContext): void {
             return;
           }
 
-          case "OPEN_SETTINGS":
-            await vscode.commands.executeCommand(
-              "workbench.action.openSettings",
-              "@ext:ruslanmv.gitpilot-vscode"
-            );
+          case "OPEN_SETTINGS": {
+            const { GitPilotSettingsPanel } = await import("./ui/webview/GitPilotSettingsPanel");
+            GitPilotSettingsPanel.open(context.extensionUri);
             return;
+          }
 
           case "OPEN_WORKSPACE":
             await vscode.commands.executeCommand(
@@ -1650,6 +1688,56 @@ export function activate(context: vscode.ExtensionContext): void {
               error: "Cancelled by user",
             });
             return;
+
+          case "NEW_SESSION": {
+            output.appendLine("[GitPilot] New session requested — clearing state");
+            // Cancel any active stream
+            if (activeStreamAbort) {
+              activeStreamAbort.abort();
+              activeStreamAbort = null;
+            }
+            // Reset stateStore chat + task but keep provider/workspace config
+            stateStore.clearTaskState();
+            if (stateStore.state.chat) {
+              stateStore.state.chat.messages = [];
+            }
+            // Force a fresh session on the backend for the next message
+            stateStore.updateSession({ sessionId: "", status: "idle" });
+            // Notify webview — STATE_SYNC will fire via onDidChangeState
+            output.appendLine("[GitPilot] State cleared, ready for new chat");
+            return;
+          }
+
+          case "APPROVE_PLAN": {
+            output.appendLine("[GitPilot] Plan approved by user — executing");
+            // The plan is already stored in stateStore.activeTask.plan
+            // Trigger execution by sending the plan to the executor
+            const plan = stateStore.state.activeTask?.plan;
+            if (plan) {
+              stateStore.updateActiveTask({
+                ...(stateStore.state.activeTask || {}),
+                status: "generating",
+              });
+              // Execute via the existing chat send path with plan context
+              try {
+                await vscode.commands.executeCommand("gitpilot.executeApprovedPlan");
+              } catch {
+                // If no dedicated command exists, fall through — the status
+                // change to "generating" will be picked up by the stream
+                output.appendLine("[GitPilot] Plan execution delegated to active stream");
+              }
+            }
+            return;
+          }
+
+          case "REJECT_PLAN": {
+            output.appendLine("[GitPilot] Plan rejected by user");
+            stateStore.updateActiveTask({
+              ...(stateStore.state.activeTask || {}),
+              status: "idle",
+            });
+            return;
+          }
 
           default: {
             const exhaustiveCheck: never = msg;
@@ -1903,6 +1991,19 @@ export function activate(context: vscode.ExtensionContext): void {
       });
 
       clearProjectCaches();
+
+      // ── Project isolation: when the workspace folder changes,
+      // clear the chat and session so the new project starts fresh.
+      // Without this, chat messages from the previous project
+      // persist and confuse the user.
+      stateStore.clearTaskState();
+      if (stateStore.state.chat) {
+        stateStore.state.chat.messages = [];
+      }
+      stateStore.updateSession({ sessionId: "", status: "idle" });
+      output.appendLine(
+        `[GitPilot] Workspace changed to "${info.folderName || "(none)"}" — session reset for project isolation`
+      );
 
       if (info.folderPath) {
         try {
