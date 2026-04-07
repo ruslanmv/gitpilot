@@ -2,27 +2,45 @@
 
 # GitPilot for VS Code
 
-**AI coding assistant right in your sidebar. Ask questions. Get code. Ship faster.**
+### Not a chatbot. A team of AI agents that code together.
+
+Most AI coding tools are a single model guessing at your codebase. GitPilot is different: **four specialized agents** collaborate on every task — one explores your repo, one plans safe changes, one writes the code and runs your tests, and one reviews the result. You approve every step.
+
+**Open source · Multi-agent · Any LLM · Free with Ollama · Enterprise-ready**
 
 </div>
+
+### How is this different from Copilot, Cursor, or Cody?
+
+| | Single-model tools | **GitPilot** |
+|---|---|---|
+| Architecture | One model, one prompt | **4 specialized agents** working as a team |
+| Context | Reads the open file | **Explores** your full repo, git history, tests |
+| Safety | Suggests code inline | **Plans first**, shows diffs, waits for approval |
+| Testing | You run tests manually | **Runs your test suite** and self-corrects on failure |
+| Lock-in | One vendor | **Any LLM**: OpenAI, Claude, Ollama, Watsonx, OllaBridge |
+| Privacy | Cloud-only | **Fully local** with Ollama — nothing leaves your machine |
+| Source | Proprietary | **MIT open source** — fork it, audit it, extend it |
 
 ---
 
 ## Quick Start
 
-1. **Install the GitPilot backend** (runs locally, hosts the AI):
-   ```bash
-   pip install gitcopilot
-   gitpilot serve
-   ```
-2. **Install the VS Code extension** from the Marketplace
-3. **Click** the GitPilot icon in the left sidebar
-4. **Choose** your AI provider (Ollama is free and local)
-5. **Ask** anything: *"Explain this project"*, *"Fix the bug in login.ts"*, *"Write tests"*
+```bash
+pip install gitcopilot      # install the backend (one-time)
+gitpilot serve              # start the AI server locally
+```
 
-That's it. No account needed. No cloud required.
+Then in VS Code:
 
-> **Requirements**: Python 3.11 or 3.12 for the backend · VS Code 1.110 or later · **GitPilot backend 0.1.x** (`gitcopilot` on PyPI)
+1. **Install** "GitPilot" from the Extensions Marketplace
+2. **Click** the GitPilot icon in the sidebar
+3. **Choose** your AI provider (Ollama is free and local — no API key needed)
+4. **Ask** anything: *"Explain this project"*, *"Fix the bug in login.ts"*, *"Write tests for auth"*
+
+That's it. No account required. No data leaves your machine unless you choose a cloud provider.
+
+> **Requirements**: Python 3.11 or 3.12 · VS Code 1.110+ · The PyPI package is **`gitcopilot`** (the CLI command is `gitpilot`)
 
 ---
 
@@ -135,8 +153,8 @@ gitpilot serve
 The PyPI package is **`gitcopilot`** (the CLI is `gitpilot`). Requires Python 3.11 or 3.12.
 
 **"Version mismatch"**
-This VS Code extension (v0.1.x) requires **GitPilot backend v0.1.x** (`gitcopilot>=0.2.5,<0.3.0`).
-Upgrade both together: `pip install --upgrade 'gitcopilot>=0.2.5,<0.3.0'`.
+This VS Code extension (v0.2.x) requires **GitPilot backend v0.2.x** (`gitcopilot>=0.2.6`).
+Upgrade both together: `pip install --upgrade 'gitcopilot>=0.2.6'`.
 
 **Extension not loading?**
 Open the Output panel (`Ctrl+Shift+U`) and select "GitPilot" from the dropdown to see logs.
@@ -151,4 +169,4 @@ Open the Output panel (`Ctrl+Shift+U`) and select "GitPilot" from the dropdown t
 
 ---
 
-**Made by [Ruslan Magana Vsevolodovna](https://github.com/ruslanmv)** | MIT License | v0.2.5
+**Made by [Ruslan Magana Vsevolodovna](https://github.com/ruslanmv)** | MIT License | v0.2.6

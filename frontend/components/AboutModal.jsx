@@ -17,7 +17,7 @@ import { apiUrl, safeFetchJSON } from "../utils/api.js";
  */
 
 const FRONTEND_VERSION =
-  typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "0.2.5";
+  typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "0.1.5";
 
 export default function AboutModal({ isOpen, onClose }) {
   const [backendVersion, setBackendVersion] = useState(null);

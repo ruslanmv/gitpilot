@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>GitPilot — Your AI coding companion. Ask. Plan. Code. Ship.</title>
-  <meta name="description" content="GitPilot is an open-source AI coding assistant that reads your repo, plans changes, writes the code, runs your tests, and asks before it touches anything. Works with OpenAI, Claude, Ollama, Watsonx and OllaBridge. Web app, VS Code extension and CLI." />
+  <title>GitPilot — The first open-source multi-agent AI coding assistant.</title>
+  <meta name="description" content="GitPilot deploys four specialized AI agents (Explorer, Planner, Coder, Reviewer) that collaborate on every coding task. They read your repo, plan safe changes, write code, run tests, and wait for your approval. Open source, any LLM, free with Ollama." />
   <meta name="theme-color" content="#1C1C1F" />
 
   <!-- Open Graph -->
-  <meta property="og:title" content="GitPilot — Your AI coding companion" />
-  <meta property="og:description" content="Open-source AI coding assistant. Reads your repo, plans changes, writes code, runs tests. You approve every step." />
+  <meta property="og:title" content="GitPilot — Multi-Agent AI Coding Assistant" />
+  <meta property="og:description" content="Four specialized AI agents collaborate on every task. Not a chatbot — a team. Open source, any LLM, you approve every change." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://ruslanmv.github.io/gitpilot/" />
   <meta property="og:image" content="./logo.svg" />
@@ -48,18 +48,20 @@
       <div class="hero__copy">
         <span class="chip">
           <span class="chip__dot" aria-hidden="true"></span>
-          Open source &middot; MIT licensed &middot; v0.1.5
+          Open source &middot; MIT licensed &middot; v0.2.6
         </span>
 
         <h1 class="hero__title">
-          Your AI coding companion.<br />
-          <span class="accent-gradient">Ask. Plan. Code. Ship.</span>
+          Not a chatbot.<br />
+          <span class="accent-gradient">A team of AI agents that code together.</span>
         </h1>
 
         <p class="hero__sub">
-          GitPilot reads your repository, drafts a safe plan, writes the code, and runs your tests &mdash;
-          <strong>you approve every change</strong> before it touches a file.
-          Works with OpenAI, Claude, Ollama, Watsonx and OllaBridge. Free and local, or bring your own cloud key.
+          Most AI coding tools are a single model guessing at your codebase.
+          GitPilot deploys <strong>four specialized agents</strong> &mdash; Explorer, Planner, Coder, Reviewer &mdash;
+          that collaborate on every task. They read your repo, draft a plan, write the code, run your tests, and
+          <strong>wait for your approval</strong> before touching a single file.
+          Any LLM. Free and local with Ollama. Enterprise-ready.
         </p>
 
         <div class="hero__ctas">
@@ -108,9 +110,9 @@
   <section id="features" class="section">
     <div class="container">
       <header class="section__head">
-        <span class="eyebrow">Built for real engineers</span>
-        <h2>Everything you expect from an enterprise-grade AI pair programmer.</h2>
-        <p class="section__sub">Three surfaces, one brand, one consistent experience &mdash; and you keep full control of every keystroke the agent proposes.</p>
+        <span class="eyebrow">Why multi-agent matters</span>
+        <h2>A single chatbot guesses. A team of agents delivers.</h2>
+        <p class="section__sub">Four specialized AI agents share context, divide work, and check each other &mdash; the same pattern elite engineering teams use, automated at machine speed.</p>
       </header>
 
       <ul class="features">
@@ -169,30 +171,31 @@
   <section id="how" class="section section--alt">
     <div class="container">
       <header class="section__head">
-        <span class="eyebrow">How it works</span>
-        <h2>A small team of specialist agents, orchestrated by you.</h2>
+        <span class="eyebrow">The multi-agent pipeline</span>
+        <h2>Four agents. One mission. You stay in command.</h2>
+        <p class="section__sub">Each agent is a specialist. Together they do what no single model can: understand your repo deeply, plan safely, execute precisely, and catch their own mistakes.</p>
       </header>
 
       <ol class="steps">
         <li class="step">
           <span class="step__num">01</span>
-          <h3>Explore</h3>
-          <p>The Explorer reads your repo structure, git log, key files and tests so the plan starts with real context.</p>
+          <h3>Explorer</h3>
+          <p>Reads your full repo: file tree, git history, tests, dependencies, README. Builds the context the other agents need to make real decisions &mdash; not guesses.</p>
         </li>
         <li class="step">
           <span class="step__num">02</span>
-          <h3>Plan</h3>
-          <p>The Planner drafts a safe, step-by-step plan with diffs &mdash; and surfaces risks before anything is applied.</p>
+          <h3>Planner</h3>
+          <p>Drafts a safe, step-by-step plan with line-level diffs. Surfaces risks and trade-offs before a single file is touched. You review and approve.</p>
         </li>
         <li class="step">
           <span class="step__num">03</span>
-          <h3>Execute</h3>
-          <p>The Executor edits files, runs tests and terminal commands. Every risky action waits for your approval.</p>
+          <h3>Coder</h3>
+          <p>Edits files, runs your test suite, self-corrects on failure. Iterates until the build passes. Every risky action waits for your explicit OK.</p>
         </li>
         <li class="step">
           <span class="step__num">04</span>
-          <h3>Review</h3>
-          <p>The Reviewer validates the output, re-runs the suite, and summarises what changed for commit and PR.</p>
+          <h3>Reviewer</h3>
+          <p>Validates the output against the original plan, re-runs tests, and writes a commit message and PR summary ready to ship.</p>
         </li>
       </ol>
     </div>
@@ -287,8 +290,8 @@ make run</code></pre>
   <section class="cta">
     <div class="container cta__inner">
       <div>
-        <h2>Ship better code, faster &mdash; without giving up control.</h2>
-        <p>Open source. MIT licensed. Runs on your laptop, your VS Code, your cloud. Your repo, your rules.</p>
+        <h2>Stop chatting with a chatbot. Start working with a team of agents.</h2>
+        <p>Open source. MIT licensed. Four agents, any LLM, you approve every change. Your repo, your rules.</p>
       </div>
       <div class="cta__actions">
         <a class="btn btn--primary" href="#quickstart">Install GitPilot</a>
