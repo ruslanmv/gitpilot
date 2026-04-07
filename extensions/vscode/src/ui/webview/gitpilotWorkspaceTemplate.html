@@ -182,6 +182,11 @@
           </div>
 
           <div class="primary-row">
+            <div class="mode-selector" id="mode-selector" role="radiogroup" aria-label="Execution mode">
+              <button class="mode-btn" id="mode-auto" role="radio" aria-checked="false" data-mode="auto" type="button" title="Execute without prompts">Auto</button>
+              <button class="mode-btn active" id="mode-ask" role="radio" aria-checked="true" data-mode="ask" type="button" title="Approve each risky action">Ask</button>
+              <button class="mode-btn" id="mode-plan" role="radio" aria-checked="false" data-mode="plan" type="button" title="Read-only planning, no writes">Plan</button>
+            </div>
             <button id="send-btn" type="button">Send</button>
             <button class="ghost" id="new-chat-btn" type="button" title="Start a new conversation">New Chat</button>
           </div>
@@ -634,6 +639,14 @@
       const taskActive = task.status && task.status !== "idle";
       byId("task-pill").textContent = taskActive ? statusLabel(task.status) : "Ready";
       byId("task-pill").className = taskActive ? "pill pill-accent" : "pill";
+
+      // Sync execution mode selector with state
+      const execMode = state.executionMode || "ask";
+      document.querySelectorAll(".mode-btn").forEach((btn) => {
+        const active = btn.dataset.mode === execMode;
+        btn.classList.toggle("active", active);
+        btn.setAttribute("aria-checked", String(active));
+      });
     };
 
     const renderOverview = (state) => {
@@ -690,7 +703,9 @@
       byId("task-title").textContent = task.title || "";
       byId("task-status-pill").textContent = statusLabel(task.status);
       byId("task-status-pill").className = pillClassForStatus(task.status);
-      byId("task-step-pill").textContent = totalSteps > 0 ? ("Step " + Math.max(1, currentStep) + "/" + totalSteps) : "";
+      const stepPill = byId("task-step-pill");
+      stepPill.textContent = totalSteps > 0 ? ("Step " + Math.max(1, currentStep) + "/" + totalSteps) : "";
+      stepPill.classList.toggle("hidden", totalSteps === 0);
 
       byId("task-summary").textContent =
         task.status === "ready_to_apply" ? "Changes ready to review."
@@ -698,10 +713,14 @@
         : task.status === "failed" ? "See chat for details."
         : "";
 
-      byId("task-progress-bar").style.width = Math.round(ratio * 100) + "%";
-      byId("task-progress-label").textContent = totalSteps > 0
-        ? (completedCount + "/" + totalSteps + " steps")
-        : "";
+      const progressSection = byId("task-progress-bar").parentElement.parentElement;
+      if (totalSteps > 0) {
+        progressSection.classList.remove("hidden");
+        byId("task-progress-bar").style.width = Math.round(ratio * 100) + "%";
+        byId("task-progress-label").textContent = completedCount + "/" + totalSteps + " steps";
+      } else {
+        progressSection.classList.add("hidden");
+      }
     };
 
     const renderPlan = (state) => {
@@ -1254,6 +1273,19 @@
       byId("terminal-close")?.addEventListener("click", () => {
         const panel = byId("terminal-panel");
         if (panel) panel.classList.add("hidden");
+      });
+
+      // ── Execution mode selector ──
+      document.querySelectorAll(".mode-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          document.querySelectorAll(".mode-btn").forEach((b) => {
+            b.classList.remove("active");
+            b.setAttribute("aria-checked", "false");
+          });
+          btn.classList.add("active");
+          btn.setAttribute("aria-checked", "true");
+          post({ type: "SET_EXECUTION_MODE", payload: { mode: btn.dataset.mode } });
+        });
       });
     };
 

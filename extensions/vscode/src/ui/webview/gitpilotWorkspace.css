@@ -691,9 +691,48 @@ details[open] .chevron {
 }
 
 .primary-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
   gap: 8px;
+  align-items: center;
+}
+
+/* ─── Execution mode selector (Auto / Ask / Plan) ─── */
+.mode-selector {
+  display: inline-flex;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.mode-btn {
+  font-family: inherit;
+  font-size: var(--font-xs);
+  font-weight: 600;
+  padding: 5px 10px;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background 100ms ease, color 100ms ease;
+  line-height: 1;
+}
+.mode-btn:not(:last-child) {
+  border-right: 1px solid var(--border);
+}
+.mode-btn:hover {
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.04);
+}
+.mode-btn.active {
+  color: var(--accent-bright, #ff7a3c);
+  background: rgba(255, 122, 60, 0.1);
+}
+
+.primary-row #send-btn {
+  flex: 1;
+}
+.primary-row #new-chat-btn {
+  flex-shrink: 0;
 }
 
 .secondary-row {

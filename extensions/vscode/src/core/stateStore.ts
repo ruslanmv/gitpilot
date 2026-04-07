@@ -23,6 +23,7 @@ import {
   ChatMessagePayload,
   ChatState,
   WorkspaceUiState,
+  ExecutionMode,
 } from "./types";
 
 type StateChangeListener = (state: GitPilotState) => void;
@@ -83,6 +84,7 @@ const DEFAULT_STATE: GitPilotState = {
     warnings: [],
   },
   workflow: { selectedMode: "auto", source: "auto" },
+  executionMode: "ask",
   projectContextSummary: DEFAULT_PROJECT_CONTEXT_SUMMARY,
   activeTask: DEFAULT_ACTIVE_TASK,
   chat: DEFAULT_CHAT,
@@ -227,6 +229,10 @@ export class StateStore {
 
   appendChatMessage(message: ChatMessagePayload): void {
     this.setChatMessages([...this._state.chat.messages, message]);
+  }
+
+  setExecutionMode(mode: ExecutionMode): void {
+    this.update({ executionMode: mode } as Partial<GitPilotState>);
   }
 
   clearTaskState(): void {

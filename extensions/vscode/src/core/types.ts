@@ -5,6 +5,7 @@
 
 export type WorkspaceMode = "folder" | "local_git" | "github";
 export type WorkspaceUiMode = "idle" | "working" | "diff";
+export type ExecutionMode = "auto" | "ask" | "plan";
 
 export type ConnectionState =
   | "connected"
@@ -232,6 +233,7 @@ export interface GitPilotState {
   session: SessionState;
   readiness: ReadinessState;
   workflow: WorkflowState;
+  executionMode: ExecutionMode;
   projectContextSummary: ProjectContextSummaryState;
   activeTask: ActiveTaskState;
   chat: ChatState;
@@ -347,7 +349,8 @@ export type WebviewToExtensionMessage =
   | { type: "CANCEL_TASK" }
   | { type: "NEW_SESSION" }
   | { type: "APPROVE_PLAN" }
-  | { type: "REJECT_PLAN" };
+  | { type: "REJECT_PLAN" }
+  | { type: "SET_EXECUTION_MODE"; payload: { mode: "auto" | "ask" | "plan" } };
 
 export interface StatusResponse {
   server_ready: boolean;
