@@ -65,6 +65,30 @@ export default function ChatPanel({
 
     if (!sessionId) return;
 
+    // Wait for backend to be reachable before opening WebSocket.
+    // Without this, the WS connects immediately on session creation
+    // and fails repeatedly with "closed before established" when the
+    // backend is still starting up (common on WSL cold start).
+    let cancelled = false;
+    const backendUrl = import.meta.env.VITE_BACKEND_URL || '';
+    const pingUrl = backendUrl ? `${backendUrl}/api/ping` : '/api/ping';
+    const waitForBackend = async () => {
+      for (let i = 0; i < 10 && !cancelled; i++) {
+        try {
+          const res = await fetch(pingUrl, { method: 'GET', signal: AbortSignal.timeout(2000) });
+          if (res.ok) return true;
+        } catch { /* retry */ }
+        await new Promise(r => setTimeout(r, 1500));
+      }
+      return false;
+    };
+
+    waitForBackend().then((ok) => {
+      if (cancelled || !ok) return;
+      connectWs();
+    });
+
+    function connectWs() {
     const ws = new SessionWebSocket(sessionId, {
       onConnect: () => setWsConnected(true),
       onDisconnect: () => setWsConnected(false),
@@ -112,9 +136,11 @@ export default function ChatPanel({
 
     ws.connect();
     wsRef.current = ws;
+    } // end connectWs
 
     return () => {
-      ws.close();
+      cancelled = true;
+      if (wsRef.current) wsRef.current.close();
     };
   }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 

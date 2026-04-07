@@ -33,11 +33,17 @@ export class SessionWebSocket {
       // Production: replace http(s) with ws(s)
       wsUrl = backendUrl.replace(/^http/, 'ws') + `/ws/sessions/${this._sessionId}`;
     } else {
-      // Dev: same host
+      // Dev: same host (Vite proxy forwards /ws to backend)
       wsUrl = `${protocol}//${window.location.host}/ws/sessions/${this._sessionId}`;
     }
 
-    this._ws = new WebSocket(wsUrl);
+    try {
+      this._ws = new WebSocket(wsUrl);
+    } catch {
+      // WebSocket constructor can throw if URL is invalid
+      this._scheduleReconnect();
+      return;
+    }
 
     this._ws.onopen = () => {
       this._connectTime = Date.now();
@@ -74,8 +80,13 @@ export class SessionWebSocket {
       }
     };
 
-    this._ws.onerror = (error) => {
-      this._handlers.onError?.(error);
+    this._ws.onerror = () => {
+      // Suppress noisy console errors during reconnection attempts.
+      // The onclose handler already manages reconnection logic.
+      // Only notify the caller if we had a stable connection that broke.
+      if (this._connectTime && Date.now() - this._connectTime > MIN_STABLE_DURATION_MS) {
+        this._handlers.onError?.(new Error('WebSocket connection lost'));
+      }
     };
   }
 

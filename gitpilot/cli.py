@@ -559,3 +559,104 @@ def list_models_cmd(
     console.print(table)
     console.print()
 
+
+@cli.command("generate")
+def generate_cmd(
+    message: str = typer.Option(..., "--message", "-m", help="What to generate (e.g. 'Flask hello world app')"),
+    output_dir: str = typer.Option(".", "--output", "-o", help="Directory to write generated files into"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be generated without writing files"),
+):
+    """Generate code locally using the configured LLM.
+
+    Creates files on disk from a natural-language prompt. No GitHub
+    required — works with any LLM provider (Ollama, OpenAI, Claude).
+
+    Examples::
+
+        gitpilot generate -m "Create a Flask hello world app"
+        gitpilot generate -m "Python CLI with click" -o my-project
+        gitpilot generate -m "React component for a todo list" --dry-run
+    """
+    import re
+
+    settings = get_settings()
+    provider_name = settings.provider.value
+    model_name = "default"
+    provider_settings = getattr(settings, provider_name, None)
+    if provider_settings:
+        model_name = getattr(provider_settings, "model", None) or "default"
+
+    console.print(f"[dim]Provider:[/dim] {provider_name} · [dim]Model:[/dim] {model_name}")
+    console.print(f"[dim]Output:[/dim] {os.path.abspath(output_dir)}")
+    console.print()
+
+    prompt = (
+        "You are GitPilot, a code generation assistant.\n"
+        "Generate the requested project files. For EACH file, output it in this EXACT format:\n"
+        "\n"
+        "```language filepath\n"
+        "...complete file content...\n"
+        "```\n"
+        "\n"
+        "Example:\n"
+        "```python app.py\n"
+        "from flask import Flask\n"
+        "app = Flask(__name__)\n"
+        "```\n"
+        "\n"
+        "Rules:\n"
+        "- Opening fence: triple backticks + language + space + relative filepath\n"
+        "- Output COMPLETE file content, not snippets\n"
+        "- Generate ALL files needed for a working project\n"
+        "- Include a README.md if appropriate\n"
+        "\n"
+        f"User request: {message}\n"
+    )
+
+    console.print("[bold]Generating...[/bold]", end="")
+
+    try:
+        from .llm_provider import build_llm
+        llm = build_llm()
+        answer = llm.call([{"role": "user", "content": prompt}])
+    except Exception as e:
+        console.print(f"\n[red]LLM error:[/red] {e}")
+        raise typer.Exit(code=1)
+
+    console.print(" [green]done[/green]\n")
+
+    # Extract structured edits using the same extractor as the API
+    from .api import _extract_edits_from_answer
+
+    edits = _extract_edits_from_answer(answer)
+
+    if not edits:
+        console.print("[yellow]No files extracted from LLM response.[/yellow]")
+        console.print("[dim]Raw response (first 2000 chars):[/dim]")
+        console.print(answer[:2000])
+        raise typer.Exit(code=1)
+
+    files_written = []
+    for edit in edits:
+        safe_path = edit["file"]
+        if not safe_path:
+            continue
+
+        content = edit.get("content", "").rstrip()
+
+        if dry_run:
+            console.print(f"  [cyan]Would create:[/cyan] {safe_path} ({len(content)} bytes)")
+        else:
+            full_path = os.path.join(output_dir, safe_path)
+            os.makedirs(os.path.dirname(full_path) or ".", exist_ok=True)
+            with open(full_path, "w", encoding="utf-8") as f:
+                f.write(content + "\n")
+            files_written.append(safe_path)
+            console.print(f"  [green]Created:[/green] {safe_path} ({len(content)} bytes)")
+
+    console.print()
+    if dry_run:
+        console.print(f"[dim]Dry run: {len(edits)} file(s) would be created.[/dim]")
+    else:
+        console.print(f"[green]Generated {len(files_written)} file(s) in {os.path.abspath(output_dir)}[/green]")
+

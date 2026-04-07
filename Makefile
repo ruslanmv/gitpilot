@@ -12,6 +12,7 @@ DOCKER_COMPOSE := $(shell if command -v docker > /dev/null && docker compose ver
 
 .PHONY: help install uv-install frontend-install frontend-build \
         dev run test lint fmt build publish-test publish clean stop \
+        benchmark benchmark-quick benchmark-report \
         vercel vercel-build vercel-deploy \
         build-container run-container stop-container logs-container clean-container publish-container \
         extension-install extension-compile extension-package extension-publish publish-extension \
@@ -30,6 +31,9 @@ help:
 	@echo "  make run              Run GitPilot backend + frontend dev server"
 	@echo "  make stop             Stop all processes on ports 8000 and 5173"
 	@echo "  make test             Run tests with pytest via uv"
+	@echo "  make benchmark        Run code generation benchmark (all tiers)"
+	@echo "  make benchmark-quick  Run quick benchmark (tier 1 smoke test)"
+	@echo "  make benchmark-report Run benchmark + save HTML dashboard to reports/"
 	@echo "  make lint             Lint codebase with ruff via uv"
 	@echo "  make fmt              Format codebase with ruff via uv"
 	@echo "  make build            Build wheel and sdist (includes built frontend)"
@@ -176,6 +180,26 @@ test:
 test-fast:
 	@echo "🧪 Running tests (no isolation)..."
 	@$(UV) run pytest
+
+## Benchmark: code generation stress test
+benchmark:
+	@echo "📊 Running code generation benchmark (all tiers)..."
+	@$(UV) run python tests/benchmark.py --model $${GITPILOT_OLLAMA_MODEL:-llama3} --timeout $${BENCHMARK_TIMEOUT:-300}
+
+benchmark-quick:
+	@echo "📊 Running quick benchmark (tier 1 only)..."
+	@$(UV) run python tests/benchmark.py --quick --model $${GITPILOT_OLLAMA_MODEL:-llama3} --timeout $${BENCHMARK_TIMEOUT:-120}
+
+benchmark-report:
+	@echo "📊 Running benchmark with HTML dashboard..."
+	@mkdir -p reports
+	@$(UV) run python tests/benchmark.py \
+		--model $${GITPILOT_OLLAMA_MODEL:-llama3} \
+		--timeout $${BENCHMARK_TIMEOUT:-300} \
+		--output reports/benchmark-results.json \
+		--dashboard reports/benchmark-dashboard.html
+	@echo "📈 Results: reports/benchmark-results.json"
+	@echo "📈 Dashboard: reports/benchmark-dashboard.html"
 
 ## Lint code
 lint:
