@@ -6,8 +6,9 @@
 
 ### The first open-source multi-agent AI coding assistant.
 
-Four specialized agents &mdash; Explorer, Planner, Coder, Reviewer &mdash; collaborate on every task.<br/>
-By default, GitPilot asks before every risky action. Switch to Auto or Plan mode anytime.
+Multiple specialized agents — including Explorer, Planner, Coder, and Reviewer — collaborate seamlessly on every task.  
+
+By default, GitPilot requests confirmation before executing high-impact actions. Switch to Auto or Plan mode at any time.
 
 [![PyPI](https://img.shields.io/pypi/v/gitcopilot?style=flat-square&color=D95C3D&labelColor=1C1C1F&label=pypi)](https://pypi.org/project/gitcopilot/)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-D95C3D?style=flat-square&labelColor=1C1C1F)](https://www.python.org/)
