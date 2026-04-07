@@ -93,7 +93,7 @@ Install the extension, configure your LLM, and start chatting:
 ```
 
 ### Option 2: Web App
-
+![](assets/2026-04-07-14-22-32.png)
 Run the full web interface with Docker:
 
 ```bash
@@ -118,7 +118,7 @@ Open [http://localhost:8000](http://localhost:8000) and you're done.
 ---
 
 ## VS Code Extension
-
+![](assets/2026-04-07-14-15-33.png)
 The sidebar panel gives you everything in one place:
 
 | Feature | What it does |
