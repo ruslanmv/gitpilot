@@ -236,6 +236,8 @@ The web interface includes:
 ### Example multiple operations
 ![](assets/2025-11-27-00-25-53.png)
 
+### Example of multiagent topologies
+![](assets/2026-04-07-16-11-47.png)
 
 ---
 
