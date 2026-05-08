@@ -1,0 +1,175 @@
+# docker-compose.mcp.yml
+#
+# Optional MCP Context Forge stack for GitPilot. STRICTLY ADDITIVE:
+# default `docker compose up` does not see these services because they
+# all sit under the `mcp` profile.
+#
+# Build-from-source strategy (mirrors HomePilot's mcp-servers stack):
+# the upstream repos have no published Docker Hub images, so we clone
+# them into ./mcp-stack/ during `make install-mcp` and let Compose
+# build each image from its Dockerfile. Branches / refs are pinned via
+# .mcp.env (MCP_FORGE_REF, MCP_POSTGRE_REF, ...).
+#
+# Lifecycle:
+#   make install-mcp    clones upstreams into mcp-stack/, seeds .mcp.env
+#   make run-mcp        builds + brings up Forge + 3 reference servers
+#   make stop-mcp       stops the stack (volumes preserved)
+#   make uninstall-mcp  prompts, then removes images + volumes
+#
+# Industry conventions applied:
+#   * Profile-based opt-in (Compose v2)             — invisible to default `up`
+#   * build: context from cloned source             — reproducible, no registry deps
+#   * image: gitpilot/<svc>:local                    — names cached layers
+#   * Required env vars `${VAR:?}`                   — fail fast if .mcp.env absent
+#   * Healthcheck-gated `depends_on`                 — no startup races
+#   * Named network                                  — joinable by other stacks
+
+x-mcp-defaults: &mcp-defaults
+  profiles: ["mcp"]
+  restart: unless-stopped
+  networks: [gitpilot-mcp]
+
+services:
+
+  # MCP Context Forge — gateway / orchestrator.
+  # The upstream uses Containerfile (Podman/OCI convention), not Dockerfile.
+  #
+  # Critical env vars (required for the local-dev bundled flow):
+  #   HOST=0.0.0.0            Forge's gunicorn config defaults to bind 127.0.0.1
+  #                           (mcpgateway/config.py: host: str = "127.0.0.1").
+  #                           That makes the in-container healthcheck pass but
+  #                           prevents OTHER containers on the same docker
+  #                           network from reaching :4444. Override here.
+  #   AUTH_REQUIRED=false     Local-dev: lets the registration script's
+  #                           POST /gateways succeed without minting JWTs.
+  #                           Production: set true and configure JWT_SECRET_KEY
+  #                           + a real bearer-token issuer.
+  #   JWT_SECRET_KEY          Even when AUTH_REQUIRED=false, Forge logs a
+  #                           critical issue if the secret is the literal
+  #                           default "my-test-key". We tie it to MCP_AUTH_TOKEN
+  #                           so it's per-install unique.
+  #   BASIC_AUTH_PASSWORD     Same idea for the admin UI fallback.
+  mcp-context-forge:
+    <<: *mcp-defaults
+    build:
+      context: ./mcp-stack/mcp-context-forge
+      dockerfile: Containerfile
+    image: gitpilot/mcp-context-forge:local
+    container_name: gitpilot-mcp-context-forge
+    ports:
+      - "${MCP_FORGE_PORT:-4444}:4444"
+    environment:
+      HOST: 0.0.0.0
+      PORT: "4444"
+      AUTH_REQUIRED: "${MCP_FORGE_AUTH_REQUIRED:-false}"
+      JWT_SECRET_KEY: ${MCP_AUTH_TOKEN:?Run "make install-mcp" first or copy .env.template.mcp -> .mcp.env}
+      BASIC_AUTH_USER: ${MCP_FORGE_ADMIN_USER:-admin}
+      BASIC_AUTH_PASSWORD: ${MCP_AUTH_TOKEN}
+      MCPGATEWAY_UI_ENABLED: "true"
+      MCPGATEWAY_ADMIN_API_ENABLED: "true"
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN}
+      LOG_LEVEL: ${MCP_FORGE_LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:4444/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 30s
+    volumes:
+      - forge-data:/var/lib/forge
+
+  # PostgreSQL MCP server (reference) + the database it talks to.
+  mcp-postgre-server:
+    <<: *mcp-defaults
+    build:
+      context: ./mcp-stack/mcp-postgre-server
+    image: gitpilot/mcp-postgre-server:local
+    container_name: gitpilot-mcp-postgre-server
+    depends_on:
+      mcp-context-forge:
+        condition: service_healthy
+      mcp-postgre-db:
+        condition: service_healthy
+    ports:
+      - "${MCP_POSTGRE_PORT:-8080}:8080"
+    environment:
+      POSTGRES_DSN: postgresql://gitpilot:gitpilot@mcp-postgre-db:5432/gitpilot_dev
+      MCP_AUTH_TOKEN: ${MCP_POSTGRE_TOKEN:-${MCP_AUTH_TOKEN}}
+      POSTGRES_READ_ONLY: "true"
+      POSTGRES_BLOCK_DDL: "true"
+      POSTGRES_BLOCK_DML: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health || exit 1"]
+      interval: 10s
+      retries: 5
+      start_period: 15s
+
+  mcp-postgre-db:
+    <<: *mcp-defaults
+    image: postgres:16-alpine
+    container_name: gitpilot-mcp-postgre-db
+    environment:
+      POSTGRES_USER: gitpilot
+      POSTGRES_PASSWORD: gitpilot
+      POSTGRES_DB: gitpilot_dev
+    volumes:
+      - postgre-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gitpilot"]
+      interval: 5s
+      retries: 10
+
+  # Milvus MCP server. The new MCP backend lives in the upstream repo's
+  # mcp-server/ subdirectory; we point the build context there. Heavy by
+  # design (Milvus image), so we keep it on the `milvus` sub-profile.
+  mcp-milvus-server:
+    build:
+      context: ./mcp-stack/milvus-admin-ui/mcp-server
+    image: gitpilot/mcp-milvus-server:local
+    container_name: gitpilot-mcp-milvus-server
+    profiles: ["mcp", "milvus"]
+    restart: unless-stopped
+    networks: [gitpilot-mcp]
+    depends_on:
+      mcp-context-forge:
+        condition: service_healthy
+    ports:
+      - "${MCP_MILVUS_PORT:-8082}:8082"
+    environment:
+      MILVUS_URI: ${MILVUS_URI:-http://milvus:19530}
+      MCP_AUTH_TOKEN: ${MCP_MILVUS_TOKEN:-${MCP_AUTH_TOKEN}}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8082/health || exit 1"]
+      interval: 10s
+      retries: 5
+      start_period: 15s
+
+  # Inspector — light, always on.
+  mcp-inspector-server:
+    <<: *mcp-defaults
+    build:
+      context: ./mcp-stack/mcp-inspector-server
+    image: gitpilot/mcp-inspector-server:local
+    container_name: gitpilot-mcp-inspector-server
+    depends_on:
+      mcp-context-forge:
+        condition: service_healthy
+    ports:
+      - "${MCP_INSPECTOR_PORT:-8081}:8081"
+    environment:
+      MCP_AUTH_TOKEN: ${MCP_INSPECTOR_TOKEN:-${MCP_AUTH_TOKEN}}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8081/health || exit 1"]
+      interval: 10s
+      retries: 5
+      start_period: 15s
+
+networks:
+  gitpilot-mcp:
+    name: gitpilot-mcp
+
+volumes:
+  forge-data:
+    driver: local
+  postgre-data:
+    driver: local

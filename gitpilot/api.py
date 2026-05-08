@@ -297,6 +297,35 @@ if _env_bool("GITPILOT_ENABLE_A2A", False):
 else:
     logger.info("A2A adapter disabled (set GITPILOT_ENABLE_A2A=true to enable)")
 
+# MCP Context Forge admin API (Settings → MCP Servers tab).
+try:
+    from .mcp_admin_api import router as mcp_admin_router
+
+    app.include_router(mcp_admin_router)
+    logger.info("MCP admin API enabled (mounting /api/mcp/* endpoints)")
+except Exception:  # noqa: BLE001
+    logger.exception("MCP admin API failed to mount; tab will show as unavailable")
+
+# GitPilot-as-MCP-server (turns GitPilot into an MCP server other agents
+# can drive). Off by default; mount only when GITPILOT_EXPOSE_MCP_SERVER=true.
+try:
+    from .mcp_server import MCPServerConfig as _GPMCPConfig
+
+    _gp_mcp_config = _GPMCPConfig.from_env()
+    if _gp_mcp_config.enabled:
+        from . import mcp_server_bridge as _mcp_server_bridge
+
+        _mcp_server_bridge.mount(app, _gp_mcp_config)
+        logger.info(
+            "GitPilot MCP server enabled (mounting %s)", _gp_mcp_config.mount_path
+        )
+    else:
+        logger.info(
+            "GitPilot MCP server disabled (set GITPILOT_EXPOSE_MCP_SERVER=true to enable)"
+        )
+except Exception:  # noqa: BLE001
+    logger.exception("GitPilot MCP server failed to mount; check env config")
+
 # ============================================================================
 # CORS Configuration
 # ============================================================================

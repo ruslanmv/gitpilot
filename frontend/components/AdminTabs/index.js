@@ -3,6 +3,7 @@
 export { default as WorkspaceModesTab } from "./WorkspaceModesTab.jsx";
 export { default as SecurityTab } from "./SecurityTab.jsx";
 export { default as IntegrationsTab } from "./IntegrationsTab.jsx";
+export { default as MCPServersTab } from "./MCPServersTab.jsx";
 export { default as SkillsTab } from "./SkillsTab.jsx";
 export { default as SessionsTab } from "./SessionsTab.jsx";
 export { default as AdvancedTab } from "./AdvancedTab.jsx";

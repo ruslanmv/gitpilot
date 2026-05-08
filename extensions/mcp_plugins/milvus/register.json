@@ -1,0 +1,34 @@
+{
+  "name": "mcp-milvus-server",
+  "description": "Milvus MCP server for collection discovery, vector search, RAG code generation, and deterministic test vectors.",
+  "transport": "streamable-http",
+  "endpoint": "http://mcp-milvus-server:8082/mcp",
+  "enabled": true,
+  "tags": ["milvus", "vector-database", "rag", "semantic-search", "embeddings", "code-generation", "testing", "gitpilot"],
+  "auth": {
+    "type": "bearer",
+    "env": "MCP_MILVUS_SERVER_TOKEN"
+  },
+  "tool_policy": {
+    "default": "allow",
+    "deny": [
+      "milvus.create_collection",
+      "milvus.drop_collection",
+      "milvus.insert",
+      "milvus.delete",
+      "milvus.create_index",
+      "milvus.drop_index"
+    ]
+  },
+  "healthcheck": {
+    "url": "http://mcp-milvus-server:8082/health",
+    "interval_seconds": 30
+  },
+  "metadata": {
+    "owner": "gitpilot",
+    "risk_level": "medium",
+    "read_only_default": true,
+    "upstream": "https://github.com/ruslanmv/milvus-admin-ui",
+    "subpath": "mcp-server"
+  }
+}
