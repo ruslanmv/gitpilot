@@ -1,0 +1,171 @@
+name: 🐳 Build & Push Docker Image
+
+# Builds the mcp-inspector-server image and pushes it to Docker Hub.
+# Same shape as the gitpilot / mcp-postgre-server publish workflows so
+# all four MCP-stack images carry consistent tags and labels.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag (e.g., v1.2.3 or 1.2.3). Defaults to 'latest'."
+        required: true
+        default: "latest"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dockerhub-publish-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: 🔨 Build & Push
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 📝 Derive version tags
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            RAW="${GITHUB_REF#refs/tags/}"
+          else
+            RAW="${{ github.event.inputs.version }}"
+          fi
+          if [ -z "$RAW" ] || [ "$RAW" = "latest" ]; then
+            SEMVER="latest"
+          elif [[ "$RAW" =~ ^v ]]; then
+            SEMVER="${RAW#v}"
+          else
+            SEMVER="$RAW"
+          fi
+          echo "SEMVER=$SEMVER" >> $GITHUB_ENV
+          echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+          echo "BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_ENV
+          echo "✅ Version: $SEMVER (sha: ${GITHUB_SHA::7})"
+
+      - name: 🔧 Compute image name
+        shell: bash
+        run: |
+          USER_LC="${{ secrets.DOCKERHUB_USERNAME }}"
+          USER_LC="${USER_LC,,}"
+          IMAGE="docker.io/${USER_LC}/mcp-inspector-server"
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          echo "📦 Image: $IMAGE"
+
+      - name: 🏗️ Set up QEMU (multi-arch)
+        uses: docker/setup-qemu-action@v3
+
+      - name: 🏗️ Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🔐 Docker Hub login
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 🏷️ Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: |
+            latest=auto
+          tags: |
+            type=raw,value=${{ env.SEMVER }},enable=${{ env.SEMVER != 'latest' }}
+            type=raw,value=latest,enable=${{ github.event_name == 'release' || env.SEMVER == 'latest' }}
+            type=raw,value=sha-${{ env.SHORT_SHA }}
+            type=semver,pattern={{version}},value=${{ env.SEMVER }},enable=${{ env.SEMVER != 'latest' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.SEMVER }},enable=${{ env.SEMVER != 'latest' }}
+          labels: |
+            org.opencontainers.image.title=mcp-inspector-server
+            org.opencontainers.image.description=MCP inspector — validate, ping, contract-test, and report on other MCP servers (Node/TypeScript).
+            org.opencontainers.image.url=https://github.com/${{ github.repository }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ env.SEMVER }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ env.BUILD_DATE }}
+            org.opencontainers.image.licenses=MIT
+
+      - name: 🔨 Build & push (multi-arch)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=mcp-inspector-server
+          cache-to: type=gha,mode=max,scope=mcp-inspector-server
+          build-args: |
+            BUILD_VERSION=${{ env.SEMVER }}
+            BUILD_COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ env.BUILD_DATE }}
+
+      - name: ✅ Verify /health endpoint
+        shell: bash
+        run: |
+          REF="$(echo "${{ steps.meta.outputs.tags }}" | head -n1)"
+          echo "🔍 Testing $REF"
+          # Inspector is fully self-contained (no external deps), so we can
+          # do a real round-trip: start the container, hit /health, tear down.
+          docker run -d --name test-inspector \
+            -e MCP_AUTH_TOKEN=test-secret \
+            -e ALLOWED_TARGETS='http://localhost:9999/mcp' \
+            -p 8081:8081 \
+            "$REF"
+          for i in {1..30}; do
+            if docker exec test-inspector wget -qO- http://localhost:8081/health 2>/dev/null \
+                  | grep -q '"status":"ok"'; then
+              echo "✅ /health green after ${i}s"
+              docker stop test-inspector >/dev/null
+              docker rm test-inspector >/dev/null
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "❌ /health never went green"
+          docker logs test-inspector || true
+          docker stop test-inspector >/dev/null || true
+          docker rm test-inspector >/dev/null || true
+          exit 1
+
+      - name: 📋 Inspect multi-arch manifest
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ env.SEMVER }}" != "latest" ]; then
+            docker buildx imagetools inspect "${{ env.IMAGE }}:${{ env.SEMVER }}" || true
+          fi
+          if [ "${{ github.event_name }}" = "release" ] || [ "${{ env.SEMVER }}" = "latest" ]; then
+            docker buildx imagetools inspect "${{ env.IMAGE }}:latest" || true
+          fi
+
+      - name: 📊 Summary
+        if: always()
+        shell: bash
+        run: |
+          USER_LC="${{ secrets.DOCKERHUB_USERNAME }}"
+          USER_LC="${USER_LC,,}"
+          {
+            echo "## 🐳 Published mcp-inspector-server"
+            echo ""
+            echo "| Tag | Pull command |"
+            echo "|-----|--------------|"
+            echo "| \`${{ env.SEMVER }}\` | \`docker pull ${USER_LC}/mcp-inspector-server:${{ env.SEMVER }}\` |"
+            echo "| \`sha-${{ env.SHORT_SHA }}\` | \`docker pull ${USER_LC}/mcp-inspector-server:sha-${{ env.SHORT_SHA }}\` |"
+            if [ "${{ github.event_name }}" = "release" ] || [ "${{ env.SEMVER }}" = "latest" ]; then
+              echo "| \`latest\` | \`docker pull ${USER_LC}/mcp-inspector-server:latest\` |"
+            fi
+            echo ""
+            echo "Multi-arch: \`linux/amd64\`, \`linux/arm64\`"
+          } >> "$GITHUB_STEP_SUMMARY"

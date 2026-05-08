@@ -400,3 +400,6 @@ Apache License 2.0. See [LICENSE](LICENSE).
 [Star on GitHub](https://github.com/ruslanmv/gitpilot) &#8226; [Report a Bug](https://github.com/ruslanmv/gitpilot/issues) &#8226; [Request a Feature](https://github.com/ruslanmv/gitpilot/issues)
 
 </div>
+
+---
+**MCP Context Forge integration** — GitPilot now ships an opt-in MCP stack (Forge + PostgreSQL / Milvus / Inspector servers) wired into the agents like Claude Code's built-ins; `make run-all` brings everything up. See [INSTALL_MCP.md](./INSTALL_MCP.md) and [PRODUCTION_MCP.md](./PRODUCTION_MCP.md).

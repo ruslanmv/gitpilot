@@ -16,7 +16,10 @@ DOCKER_COMPOSE := $(shell if command -v docker > /dev/null && docker compose ver
         vercel vercel-build vercel-deploy \
         build-container run-container stop-container logs-container clean-container publish-container \
         extension-install extension-compile extension-package extension-publish publish-extension \
-        mcp mcp-down mcp-logs gateway gateway-down gateway-logs gateway-register
+        mcp mcp-down mcp-logs gateway gateway-down gateway-logs gateway-register \
+        install-mcp run-mcp run-all run-all-local stop-mcp logs-mcp sync-mcp uninstall-mcp \
+        fix-line-endings install-mcp-workflows register-mcp-servers \
+        stop-soft stop-all smoke-mcp
 
 ## Show available targets
 help:
@@ -80,9 +83,10 @@ help:
 	@echo "  make gateway-register Register GitPilot agent in ContextForge"
 	@echo ""
 
-## High-level install: backend + frontend
-install: uv-install frontend-install
-	@echo "✅ Backend (uv) and frontend (npm) dependencies installed."
+## High-level install: backend + frontend + MCP env (additive)
+install: uv-install frontend-install install-mcp
+	@echo "✅ Backend (uv), frontend (npm) and MCP env ready."
+	@echo "   Run 'make run' to start GitPilot, or 'make run-all' to also start the MCP stack."
 
 ## Create / sync the environment with uv (all extras)
 uv-install:
@@ -110,13 +114,24 @@ frontend-build: frontend-install
 ## Developer convenience alias
 dev: install
 
-## Run GitPilot from the uv-managed environment (backend + frontend)
+## Run GitPilot from the uv-managed environment (backend + frontend).
+## Idempotent: if a GitPilot backend is already responding on :$(PORT)
+## (because you ran `make run` earlier in another tab, or `make run-all`
+## was re-invoked), we skip the backend boot and go straight to the
+## frontend dev server. The port-in-use check only fires when the port
+## is held by *something else*.
 run:
-	@echo "🚀 Starting GitPilot backend on http://127.0.0.1:$(PORT)..."
-	@# Check if port is already in use
+	@echo "🚀 Starting GitPilot on http://127.0.0.1:$(PORT)..."
+	@# 1. Already a healthy GitPilot? → skip backend boot, go straight to frontend.
+	@if curl -sf http://127.0.0.1:$(PORT)/api/ping > /dev/null 2>&1; then \
+		echo "✅ GitPilot backend already running on :$(PORT) — skipping start."; \
+		echo "🎨 Starting frontend dev server on http://localhost:5173..."; \
+		cd frontend && exec npm run dev -- --open; \
+	fi
+	@# 2. Port held by something *else*? → stop and ask the user to clean up.
 	@if lsof -i:$(PORT) -sTCP:LISTEN > /dev/null 2>&1 || \
 	    nc -z 127.0.0.1 $(PORT) > /dev/null 2>&1; then \
-		echo "⚠️  Port $(PORT) is already in use. Run 'make stop' first."; \
+		echo "⚠️  Port $(PORT) is held by a non-GitPilot process. Run 'make stop' first."; \
 		exit 1; \
 	fi
 	@trap 'kill 0' EXIT; \
@@ -165,6 +180,31 @@ stop:
 	fi
 
 	@echo "✅ Stop attempt complete."
+
+## Soft-stop GitPilot WITHOUT sudo. Only kills processes the current user
+## owns; never prompts for a password. Suitable for `make run-all` to call
+## as a pre-step so a stale backend can't hide newly-pulled code paths.
+stop-soft:
+	@echo "🛑 Stopping user-owned GitPilot processes on :$(PORT) and :5173..."
+	@for port in $(PORT) 5173; do \
+		pids=$$(lsof -t -i:$$port -sTCP:LISTEN 2>/dev/null || true); \
+		if [ -n "$$pids" ]; then \
+			for pid in $$pids; do \
+				if [ -O /proc/$$pid 2>/dev/null ] || kill -0 $$pid 2>/dev/null; then \
+					kill -TERM $$pid 2>/dev/null && \
+						echo "  TERM $$pid (port $$port)" || true; \
+				fi; \
+			done; \
+			sleep 1; \
+			pids=$$(lsof -t -i:$$port -sTCP:LISTEN 2>/dev/null || true); \
+			[ -n "$$pids" ] && for pid in $$pids; do kill -KILL $$pid 2>/dev/null || true; done; \
+		fi; \
+	done
+	@echo "✅ Soft-stop done."
+
+## One-command full teardown: GitPilot (no sudo) + MCP stack.
+stop-all: stop-soft stop-mcp
+	@echo "✅ GitPilot + MCP stack stopped."
 
 
 ## Run tests
@@ -537,3 +577,106 @@ gateway-register:
 		exit 1; \
 	fi
 	@cd deploy/a2a-mcp && chmod +x register_agent.sh && ./register_agent.sh
+
+# =============================================================================
+# MCP Context Forge stack (additive; default `make run` is unchanged)
+# -----------------------------------------------------------------------------
+# `make install` chains `install-mcp` automatically: on machines with Docker
+# this pre-pulls images so `make run-mcp` is instant. On machines without
+# Docker the script prints a friendly skip message and exits 0, keeping the
+# baseline `install` flow unchanged.
+# =============================================================================
+
+## Pull MCP Context Forge stack images and seed .mcp.env (idempotent)
+install-mcp:
+	@bash scripts/install-mcp.sh
+
+## Bring up MCP Context Forge + 3 reference MCP servers (postgre, milvus, inspector)
+run-mcp:
+	@if [ ! -f .mcp.env ]; then \
+		echo "❌ .mcp.env missing. Run 'make install-mcp' first."; exit 1; \
+	fi
+	@echo "🚀 Starting MCP Context Forge stack..."
+	docker compose --env-file .mcp.env -f docker-compose.mcp.yml --profile mcp up -d
+	@echo "✅ Forge: http://localhost:$${MCP_FORGE_PORT:-4444}"
+	@echo "   Postgre: http://localhost:$${MCP_POSTGRE_PORT:-8080}"
+	@echo "   Inspector: http://localhost:$${MCP_INSPECTOR_PORT:-8081}"
+	@echo "   Milvus (opt-in): docker compose -f docker-compose.mcp.yml --profile milvus up -d"
+	@bash scripts/register-mcp-servers.sh
+
+## Register the 3 MCP servers with Forge (idempotent; called by run-mcp).
+register-mcp-servers:
+	@bash scripts/register-mcp-servers.sh
+
+## One-shot: GitPilot core + MCP Context Forge stack.
+##
+## We deliberately do a soft-stop of any stale GitPilot backend BEFORE
+## starting the new one. Reason: when run-all is invoked the user just
+## pulled new code, edited config, or rebuilt an MCP image -- they
+## expect the freshly-pulled code path to actually run, not the
+## leftover backend from the previous attempt. The 'run' target's
+## idempotent skip is great for the dev loop ('make run' twice in a
+## row), but it has to be sidestepped here so we don't silently keep
+## the old code path alive.
+run-all: run-mcp
+	@$(MAKE) --no-print-directory stop-soft
+	@$(MAKE) --no-print-directory run
+
+## Local-first: rebuild every MCP image from the cloned mcp-stack/ source
+## (mirrors HomePilot's docker-compose.mcp.yml `build:` pattern), then run.
+## Use this after pulling new commits in any mcp-stack/<repo>/ checkout
+## or when iterating on a local source change. Forces a fresh build
+## (`--no-cache`), so 'context.git' changes are guaranteed picked up,
+## and `--pull=false` keeps the build registry-free.
+run-all-local:
+	@if [ ! -d mcp-stack ]; then \
+		echo "❌ mcp-stack/ missing. Run 'make install-mcp' first to clone the upstream MCP repos."; \
+		exit 1; \
+	fi
+	@echo "🔨 Rebuilding MCP images from local mcp-stack/ sources (no cache)..."
+	docker compose --env-file .mcp.env -f docker-compose.mcp.yml --profile mcp build --no-cache --pull=false
+	@echo "✅ Local rebuild complete. Restarting full stack..."
+	@$(MAKE) --no-print-directory stop-soft
+	@$(MAKE) --no-print-directory stop-mcp 2>/dev/null || true
+	@$(MAKE) --no-print-directory run-all
+
+## Stop the MCP stack (volumes preserved)
+stop-mcp:
+	@docker compose --env-file .mcp.env -f docker-compose.mcp.yml --profile mcp down 2>/dev/null || true
+	@echo "🛑 MCP stack stopped (volumes kept). 'make uninstall-mcp' to remove data."
+
+## Tail logs from the MCP stack
+logs-mcp:
+	@docker compose --env-file .mcp.env -f docker-compose.mcp.yml --profile mcp logs -f --tail=100
+
+## Trigger a sync from the running GitPilot (REST POST /api/mcp/sync)
+sync-mcp:
+	@bash scripts/sync-mcp.sh
+
+## Tear down the MCP stack and remove all images + volumes (prompts y/N)
+uninstall-mcp:
+	@bash scripts/uninstall-mcp.sh
+
+## Recovery helper for Windows / WSL checkouts whose shell scripts and
+## Makefiles got CRLF-converted by core.autocrlf. Idempotent and safe
+## to run on a clean Linux/macOS checkout (no-op).
+fix-line-endings:
+	@echo "🔧 Stripping CRLF from shell scripts + Makefile (idempotent)..."
+	@find scripts -name "*.sh" -type f -exec sed -i 's/\r$$//' {} + 2>/dev/null || true
+	@sed -i 's/\r$$//' Makefile 2>/dev/null || true
+	@sed -i 's/\r$$//' docker-compose*.yml 2>/dev/null || true
+	@echo "✅ Line endings normalised. Run 'make install' again."
+
+## Install the three MCP-server docker-publish workflows into each
+## checkout under mcp-stack/. Commits locally; pushes only if
+## GH_PAT_WORKFLOW is set (must have repo + workflow scopes). When it
+## isn't, prints the per-repo 'git push' command so you can run it
+## with your own auth.
+install-mcp-workflows:
+	@bash scripts/install-mcp-workflows.sh
+
+## Post-deploy smoke test: hits every /health endpoint, runs a sync,
+## and checks the agent_tools surface. Run after 'make run-all'.
+## Add --milvus to also check the milvus profile.
+smoke-mcp:
+	@bash scripts/smoke-mcp.sh

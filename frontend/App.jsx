@@ -17,6 +17,7 @@ import {
   WorkspaceModesTab,
   SecurityTab,
   IntegrationsTab,
+  MCPServersTab,
   SkillsTab,
   SessionsTab,
   AdvancedTab,
@@ -921,7 +922,7 @@ export default function App() {
           {activePage === "admin" && (
             <div style={{ padding: "24px", maxWidth: "960px", margin: "0 auto" }}>
               <div style={{ display: "flex", gap: "8px", marginBottom: "24px", flexWrap: "wrap" }}>
-                {["overview", "providers", "workspace-modes", "integrations", "sessions", "skills", "security", "advanced"].map((tab) => (
+                {["overview", "providers", "workspace-modes", "integrations", "mcp-servers", "sessions", "skills", "security", "advanced"].map((tab) => (
                   <button
                     key={tab}
                     onClick={() => setAdminTab(tab)}
@@ -1036,6 +1037,10 @@ export default function App() {
                   onDisconnect={handleLogout}
                   showToast={showToast}
                 />
+              )}
+
+              {adminTab === "mcp-servers" && (
+                <MCPServersTab showToast={showToast} />
               )}
 
               {adminTab === "security" && (

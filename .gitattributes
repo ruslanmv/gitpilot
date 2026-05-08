@@ -1,0 +1,62 @@
+# Enforce LF line endings on every checkout, regardless of the host OS.
+#
+# Problem this prevents:
+#   On Windows, git's default core.autocrlf=true converts LF -> CRLF on
+#   checkout. Bash then chokes on the trailing \r in shell scripts:
+#       scripts/install-mcp.sh: line 18: $'\r': command not found
+#   The same applies to Makefile (TABs collide with CRLF) and Dockerfile.
+#
+# Convention applied: explicit "text eol=lf" for everything that runs
+# inside Linux containers / WSL / CI. Binaries are marked accordingly.
+# This file is itself an Apache-licensed best-practice for any repo with
+# both *nix and Windows contributors.
+
+# Default: let Git auto-detect text vs binary; normalise text on commit.
+* text=auto
+
+# Shell scripts MUST be LF. Bash refuses to parse CRLF.
+*.sh             text eol=lf
+*.bash           text eol=lf
+
+# Makefiles use TAB indentation; CRLF breaks recipes.
+Makefile         text eol=lf
+*.mk             text eol=lf
+makefile         text eol=lf
+
+# Dockerfiles run in Linux containers.
+Dockerfile       text eol=lf
+*.dockerfile     text eol=lf
+
+# Compose / config formats consumed by Linux tooling.
+*.yml            text eol=lf
+*.yaml           text eol=lf
+*.toml           text eol=lf
+*.json           text eol=lf
+
+# Python sources -- harmless on Windows but consistent is better.
+*.py             text eol=lf
+
+# Web assets stay LF too (Vite + ESLint expect it).
+*.js             text eol=lf
+*.jsx            text eol=lf
+*.ts             text eol=lf
+*.tsx            text eol=lf
+*.css            text eol=lf
+*.html           text eol=lf
+
+# Common binaries -- mark explicitly so Git never mangles them.
+*.png            binary
+*.jpg            binary
+*.jpeg           binary
+*.gif            binary
+*.ico            binary
+*.webp           binary
+*.pdf            binary
+*.zip            binary
+*.gz             binary
+*.tgz            binary
+*.tar            binary
+*.whl            binary
+*.so             binary
+*.dylib          binary
+*.dll            binary

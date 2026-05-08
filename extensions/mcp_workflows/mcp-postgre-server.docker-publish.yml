@@ -1,0 +1,159 @@
+name: 🐳 Build & Push Docker Image
+
+# Builds the mcp-postgre-server image and pushes it to Docker Hub on:
+#   * a published GitHub Release (the canonical 'release pipeline'), or
+#   * an explicit workflow_dispatch from the Actions tab (lets maintainers
+#     publish a one-off `:latest` outside the release cadence).
+#
+# Strictly additive: no edits to existing CI; this is a sibling workflow.
+# Same shape as ruslanmv/gitpilot's docker-publish workflow so the four
+# images publish with consistent tags and labels.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag (e.g., v1.2.3 or 1.2.3). Defaults to 'latest'."
+        required: true
+        default: "latest"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dockerhub-publish-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: 🔨 Build & Push
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 📝 Derive version tags
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            RAW="${GITHUB_REF#refs/tags/}"
+          else
+            RAW="${{ github.event.inputs.version }}"
+          fi
+          if [ -z "$RAW" ] || [ "$RAW" = "latest" ]; then
+            SEMVER="latest"
+          elif [[ "$RAW" =~ ^v ]]; then
+            SEMVER="${RAW#v}"
+          else
+            SEMVER="$RAW"
+          fi
+          echo "SEMVER=$SEMVER" >> $GITHUB_ENV
+          echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+          echo "BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_ENV
+          echo "✅ Version: $SEMVER (sha: ${GITHUB_SHA::7})"
+
+      - name: 🔧 Compute image name
+        shell: bash
+        run: |
+          USER_LC="${{ secrets.DOCKERHUB_USERNAME }}"
+          USER_LC="${USER_LC,,}"
+          IMAGE="docker.io/${USER_LC}/mcp-postgre-server"
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          echo "📦 Image: $IMAGE"
+
+      - name: 🏗️ Set up QEMU (multi-arch)
+        uses: docker/setup-qemu-action@v3
+
+      - name: 🏗️ Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🔐 Docker Hub login
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 🏷️ Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: |
+            latest=auto
+          tags: |
+            type=raw,value=${{ env.SEMVER }},enable=${{ env.SEMVER != 'latest' }}
+            type=raw,value=latest,enable=${{ github.event_name == 'release' || env.SEMVER == 'latest' }}
+            type=raw,value=sha-${{ env.SHORT_SHA }}
+            type=semver,pattern={{version}},value=${{ env.SEMVER }},enable=${{ env.SEMVER != 'latest' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.SEMVER }},enable=${{ env.SEMVER != 'latest' }}
+          labels: |
+            org.opencontainers.image.title=mcp-postgre-server
+            org.opencontainers.image.description=PostgreSQL MCP server for GitPilot — schema discovery, safe SELECT, migration validation, fixtures, repository scaffolding.
+            org.opencontainers.image.url=https://github.com/${{ github.repository }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ env.SEMVER }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ env.BUILD_DATE }}
+            org.opencontainers.image.licenses=Apache-2.0
+
+      - name: 🔨 Build & push (multi-arch)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=mcp-postgre-server
+          cache-to: type=gha,mode=max,scope=mcp-postgre-server
+          build-args: |
+            BUILD_VERSION=${{ env.SEMVER }}
+            BUILD_COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ env.BUILD_DATE }}
+
+      - name: ✅ Smoke-test image (import only — DB not required)
+        shell: bash
+        run: |
+          REF="$(echo "${{ steps.meta.outputs.tags }}" | head -n1)"
+          echo "🔍 Smoke testing $REF"
+          # /health endpoint requires a DB pool; the import smoke is enough
+          # for the publish gate. Full integration test runs in the gitpilot
+          # docker-compose.mcp.yml stack.
+          docker run --rm --pull=never --entrypoint python "$REF" \
+            -c "import mcp_postgre_server; print('ok', mcp_postgre_server.__name__)"
+
+      - name: 📋 Inspect multi-arch manifest
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ env.SEMVER }}" != "latest" ]; then
+            docker buildx imagetools inspect "${{ env.IMAGE }}:${{ env.SEMVER }}" || true
+          fi
+          if [ "${{ github.event_name }}" = "release" ] || [ "${{ env.SEMVER }}" = "latest" ]; then
+            docker buildx imagetools inspect "${{ env.IMAGE }}:latest" || true
+          fi
+
+      - name: 📊 Summary
+        if: always()
+        shell: bash
+        run: |
+          USER_LC="${{ secrets.DOCKERHUB_USERNAME }}"
+          USER_LC="${USER_LC,,}"
+          {
+            echo "## 🐳 Published mcp-postgre-server"
+            echo ""
+            echo "| Tag | Pull command |"
+            echo "|-----|--------------|"
+            echo "| \`${{ env.SEMVER }}\` | \`docker pull ${USER_LC}/mcp-postgre-server:${{ env.SEMVER }}\` |"
+            echo "| \`sha-${{ env.SHORT_SHA }}\` | \`docker pull ${USER_LC}/mcp-postgre-server:sha-${{ env.SHORT_SHA }}\` |"
+            if [ "${{ github.event_name }}" = "release" ] || [ "${{ env.SEMVER }}" = "latest" ]; then
+              echo "| \`latest\` | \`docker pull ${USER_LC}/mcp-postgre-server:latest\` |"
+            fi
+            echo ""
+            echo "Multi-arch: \`linux/amd64\`, \`linux/arm64\`"
+          } >> "$GITHUB_STEP_SUMMARY"
