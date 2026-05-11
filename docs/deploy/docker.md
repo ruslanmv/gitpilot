@@ -388,7 +388,7 @@ Already implemented for frontend to minimize image size!
 
 ## 🔗 Related Documentation
 
-- [Render Deployment](./DEPLOYMENT_RENDER.md)
-- [Vercel Testing](./VERCEL_TESTING.md)
+- [Render deployment](./render.md)
+- [Vercel testing](./vercel-testing.md)
 - [Docker Documentation](https://docs.docker.com/)
 - [Docker Compose Documentation](https://docs.docker.com/compose/)

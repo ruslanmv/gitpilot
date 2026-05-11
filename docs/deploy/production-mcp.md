@@ -2,7 +2,7 @@
 
 This document is the operator's guide to running GitPilot with the
 optional MCP Context Forge stack in production. It complements
-[INSTALL_MCP.md](./INSTALL_MCP.md) (which targets developers).
+[install-mcp.md](./install-mcp.md) (which targets developers).
 
 The stack is **strictly additive**: enabling it never changes how
 GitPilot core behaves. Disabling it (`GITPILOT_MCP_ENABLED=false`) is a
@@ -14,7 +14,7 @@ single env-var flip that returns the system to its baseline shape.
 
 ```bash
 make install         # uv + npm + MCP image cache (skip-safe without Docker)
-make run-all         # GitPilot core + Forge + 3 reference MCP servers
+make run             # Forge + 3 reference MCP servers + GitPilot core
 make smoke-mcp       # post-deploy health sweep
 make sync-mcp        # mirror Forge's registry into GitPilot's local store
 ```
@@ -69,10 +69,10 @@ All four MCP services live under the Compose **`mcp` profile** in
 ```bash
 git pull
 make install        # idempotent; safe on already-running hosts
-make run-all
+make run
 ```
 
-The first `make run-all` builds four images (3-8 minutes on a warm
+The first `make run` builds four images (3-8 minutes on a warm
 broadband link). Subsequent runs reuse the build cache.
 
 ### 2. Verify
@@ -123,8 +123,8 @@ Claude Code sees its built-ins.
 
 ```bash
 git pull
-make install-mcp     # re-clones / fetches upstream repos to the pinned ref
-make run-mcp         # rebuilds + recreates only what changed
+MCP_UPDATE=1 MCP_BUILD=1 make install-mcp  # fetch pinned refs and force image rebuild
+make run             # starts updated MCP stack + GitPilot
 make smoke-mcp
 ```
 
@@ -161,7 +161,7 @@ make uninstall-mcp     # prompts y/N; removes containers, volumes, images
 ## Pinning to release tags (post-publish)
 
 Once Docker Hub publish workflows have run (see
-[`extensions/mcp_workflows/README.md`](./extensions/mcp_workflows/README.md))
+[`extensions/mcp_workflows/README.md`](../../extensions/mcp_workflows/README.md))
 and tags exist for each image, you have two ways to pin to a known good
 release:
 

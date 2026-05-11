@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # scripts/install-mcp.sh
 #
-# Prepare the MCP Context Forge environment so `make run-mcp` is one
-# command. Strategy mirrors HomePilot's mcp-servers stack: build each
-# image from a cloned upstream rather than pulling pre-built images
-# from a registry. The four upstreams are cloned (or fetched + checked
-# out) under ./mcp-stack/.
+# Prepare the MCP Context Forge environment so `make run` can start
+# GitPilot and the MCP stack together. Strategy mirrors HomePilot's
+# mcp-servers stack: build each image from a cloned upstream rather
+# than pulling pre-built images from a registry. The four upstreams
+# are cloned (or fetched + checked out) under ./mcp-stack/.
 #
 # Idempotent: safe to re-run; on a fully-warm system every step prints
 # a status glyph so you can see the script actually executed.
@@ -26,6 +26,12 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${ROOT_DIR}"
+
+# Re-running `make install` should be fast and offline-friendly. By default we
+# clone/build only missing MCP assets. Set MCP_UPDATE=1 to fetch pinned refs
+# again, and MCP_BUILD=1 to force a compose build. Set MCP_BUILD=0 to skip.
+MCP_UPDATE="${MCP_UPDATE:-0}"
+MCP_BUILD="${MCP_BUILD:-auto}"
 
 # --- pretty printing -------------------------------------------------------
 bold()  { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -119,6 +125,10 @@ clone_or_update() {
   fi
 
   if [[ -d "${target}/.git" ]]; then
+    if [[ "${MCP_UPDATE}" != "1" ]]; then
+      skip "${name}: checkout exists; skipping network fetch (set MCP_UPDATE=1 to update)."
+      return
+    fi
     step "Updating ${name} to ${ref}..."
     git -C "${target}" fetch --quiet --depth 1 origin "${ref}" 2>/dev/null \
       || { warn "fetch failed for ${name} (network?). Keeping current checkout."; return; }
@@ -155,29 +165,46 @@ else
   skip "Docker unavailable; upstream clones skipped (run after starting Docker)."
 fi
 
-# 7. Optionally pre-build the images so `make run-mcp` is fast --------------
+# 7. Optionally pre-build the images so `make run` is fast --------------
+mcp_images_ready() {
+  local image
+  for image in \
+    gitpilot/mcp-context-forge:local \
+    gitpilot/mcp-postgre-server:local \
+    gitpilot/mcp-milvus-server:local \
+    gitpilot/mcp-inspector-server:local; do
+    docker image inspect "${image}" >/dev/null 2>&1 || return 1
+  done
+  return 0
+}
+
 if [[ "${DOCKER_OK}" -eq 1 && "${DAEMON_OK}" -eq 1 && -d mcp-stack/mcp-context-forge ]]; then
-  step "Pre-building MCP images (one-time cost; subsequent runs reuse cache)..."
-  if docker compose --env-file .mcp.env -f docker-compose.mcp.yml \
-        --profile mcp build --quiet 2>&1 | tail -10; then
-    ok "Image build complete."
+  if [[ "${MCP_BUILD}" == "0" ]]; then
+    skip "Image build skipped by MCP_BUILD=0."
+  elif [[ "${MCP_BUILD}" != "1" ]] && mcp_images_ready; then
+    skip "MCP images already exist; skipping rebuild (set MCP_BUILD=1 to rebuild)."
   else
-    warn "One or more images failed to build. Run 'make run-mcp' to see details."
+    step "Pre-building missing MCP images (set MCP_BUILD=0 to skip, MCP_BUILD=1 to force)..."
+    if docker compose --env-file .mcp.env -f docker-compose.mcp.yml \
+          --profile mcp build --quiet 2>&1 | tail -10; then
+      ok "Image build complete."
+    else
+      warn "One or more images failed to build. Run 'make run' to see details."
+    fi
   fi
 else
-  skip "Image build skipped (will happen on first 'make run-mcp')."
+  skip "Image build skipped (will happen on first 'make run')."
 fi
 
 # 8. Final summary ----------------------------------------------------------
 echo
 bold "✨ MCP environment ready."
 if [[ "${DOCKER_OK}" -eq 1 && "${DAEMON_OK}" -eq 1 ]]; then
-  info "Next: 'make run-mcp' to start Forge + 3 reference servers,"
-  info "      then 'make run' to start GitPilot."
-  info "      Or 'make run-all' to do both."
+  info "Next: 'make run' to start MCP Context Forge + GitPilot."
+  info "      Use 'make run-all' when you want to force-restart the backend too."
 else
-  info "Next: install / start Docker, then 'make install-mcp && make run-all'."
-  info "      'make run' alone still works without the MCP stack."
+  info "Next: install / start Docker, then 'make run'."
+  info "      No Docker?  'make run-bare' starts GitPilot without the MCP stack."
 fi
 
 # Always exit 0 so the make pipeline keeps going.

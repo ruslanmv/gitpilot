@@ -561,6 +561,57 @@ export default function App() {
   }) => {
     if (!repoKey || !branch) return;
 
+    // Clear the session-keyed chat cache's ``plan`` AND append the
+    // completion message synchronously, before any branch change can
+    // trigger ChatPanel's session-sync effect.  Two bugs need to be
+    // fixed in the same write:
+    //
+    // 1. Stale plan: without clearing, the sync effect re-reads the
+    //    old approved plan and restores the Approve & execute / Reject
+    //    plan buttons, enabling accidental double-execution.
+    //
+    // 2. Wiped completion: in hard-switch mode the sync effect runs
+    //    BEFORE the persistence effect (declared earlier in
+    //    ChatPanel), so it overwrites local ``messages`` with
+    //    ``sessionChatState.messages`` — which doesn't yet contain
+    //    completionMsg.  The user's "Answer / Execution Log" block
+    //    then vanishes from the session view.
+    //
+    // By appending normalizedCompletion here, sessionChatState already
+    // carries the completion when the sync effect reads it.  No
+    // duplicate is introduced: local ``messages`` already has the same
+    // entry, so the subsequent persistence pass is a no-op write.
+    if (activeSessionId) {
+      const normalizedCompletion =
+        completionMsg &&
+        (completionMsg.answer || completionMsg.content || completionMsg.executionLog)
+          ? {
+              from: completionMsg.from || "ai",
+              role: completionMsg.role || "assistant",
+              answer: completionMsg.answer,
+              content: completionMsg.content,
+              executionLog: completionMsg.executionLog,
+              diff: completionMsg.diff,
+            }
+          : null;
+      setChatBySession((prev) => {
+        const existing = prev[activeSessionId];
+        if (!existing) return prev;
+        const noPlanChange = existing.plan == null;
+        if (noPlanChange && !normalizedCompletion) return prev;
+        return {
+          ...prev,
+          [activeSessionId]: {
+            ...existing,
+            messages: normalizedCompletion
+              ? [...(existing.messages || []), normalizedCompletion]
+              : existing.messages,
+            plan: null,
+          },
+        };
+      });
+    }
+
     setRepoStateByKey((prev) => {
       const cur =
         prev[repoKey] || {

@@ -225,6 +225,48 @@ def build_llm() -> Any:
     raise ValueError(f"Unsupported provider: {provider}")
 
 
+# ---------------------------------------------------------------------------
+# Batch P2-A — structured system-prompt builder.
+#
+# This helper is purely additive: it composes a :class:`SystemPayload` with
+# cacheable / non-cacheable segments via :mod:`gitpilot.prompt_cache`.  The
+# legacy code path (callers that feed a flat ``system`` string into
+# ``build_llm()`` results) is untouched — they keep working with no behaviour
+# change.  Callers that want the cache markers should adopt this helper
+# incrementally.
+# ---------------------------------------------------------------------------
+def build_system_blocks(
+    *,
+    base_system: str = "",
+    workspace: Any = None,
+    mode_slug: Any = None,
+    tool_defs: Any = None,
+    session_conventions: str = "",
+) -> Any:
+    """Return the structured system payload for the active provider.
+
+    The active provider is read from settings; the prompt-cache markers
+    are emitted only when both ``prompt_cache`` is on and the provider
+    is Anthropic.  For every other provider the payload still carries
+    the same content and a stable ordering, just without cache markers.
+    """
+    from .prompt_cache import build_system_blocks as _build  # local import
+
+    try:
+        provider = get_settings().provider.value  # type: ignore[union-attr]
+    except Exception:
+        provider = None
+
+    return _build(
+        base_system=base_system,
+        workspace=workspace,
+        mode_slug=mode_slug,
+        tool_defs=tool_defs,
+        session_conventions=session_conventions,
+        provider=provider,
+    )
+
+
 def validate_provider_config(settings) -> tuple[bool, list[str]]:
     """Validate provider configuration and return (is_valid, errors)."""
     errors = []

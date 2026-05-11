@@ -1333,6 +1333,19 @@ body {
   border: 1px solid #272832;
 }
 
+/* Compact thinking bubble — defensive isolation so the global
+   .chat-message-ai span rule (which gives every span a chunky
+   10×14 padded pill with a dark background) cannot leak into the
+   thinking indicator's tiny inline-styled dots and label. */
+.gitpilot-thinking-indicator,
+.gitpilot-thinking-indicator span {
+  background: transparent;
+  border: none;
+  padding: 0;
+  max-width: none;
+  line-height: 1.4;
+}
+
 .chat-empty-state {
   display: flex;
   flex-direction: column;

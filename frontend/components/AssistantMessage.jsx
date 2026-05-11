@@ -1,7 +1,13 @@
 import React from "react";
 import PlanView from "./PlanView.jsx";
 
-export default function AssistantMessage({ answer, plan, executionLog }) {
+export default function AssistantMessage({ answer, plan, executionLog, planStatus }) {
+  // ``planStatus`` is optional metadata about the lifecycle of the plan
+  // attached to this message: "executed" | "rejected" | null.  It drives
+  // the badge next to the Action Plan header so the user can tell at a
+  // glance, in chat history, whether a previous plan was approved or
+  // dismissed.  Defaults to null (no badge) to keep the legacy render
+  // path untouched.
   const styles = {
     container: {
       marginBottom: "20px",
@@ -89,8 +95,48 @@ export default function AssistantMessage({ answer, plan, executionLog }) {
       {/* Action Plan section — only when there are file changes */}
       {plan && hasFileActions && (
         <section style={styles.section}>
-          <header style={styles.header}>
-            <h3 style={{ ...styles.title, color: "#D95C3D" }}>Action Plan</h3>
+          <header style={{ ...styles.header, display: "flex", alignItems: "center", gap: "10px" }}>
+            <h3 style={{ ...styles.title, color: "#D95C3D", margin: 0 }}>Action Plan</h3>
+            {planStatus === "executed" && (
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  color: "#10B981",
+                  border: "1px solid rgba(16, 185, 129, 0.35)",
+                  background: "rgba(16, 185, 129, 0.08)",
+                  borderRadius: "6px",
+                  padding: "2px 6px",
+                  letterSpacing: "0.02em",
+                }}
+                title="This plan was approved and executed."
+              >
+                ✓ Executed
+              </span>
+            )}
+            {planStatus === "rejected" && (
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  color: "#9CA3AF",
+                  border: "1px solid rgba(156, 163, 175, 0.35)",
+                  background: "rgba(156, 163, 175, 0.08)",
+                  borderRadius: "6px",
+                  padding: "2px 6px",
+                  letterSpacing: "0.02em",
+                }}
+                title="This plan was rejected. No files were changed."
+              >
+                ✕ Rejected
+              </span>
+            )}
           </header>
           <div>
             <PlanView plan={plan} />

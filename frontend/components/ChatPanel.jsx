@@ -1,6 +1,8 @@
 // frontend/components/ChatPanel.jsx
 import React, { useEffect, useRef, useState } from "react";
 import AssistantMessage from "./AssistantMessage.jsx";
+import ThinkingIndicator from "./ThinkingIndicator.jsx";
+import ContextMeter from "./ContextMeter.jsx";
 import DiffStats from "./DiffStats.jsx";
 import DiffViewer from "./DiffViewer.jsx";
 import CreatePRButton from "./CreatePRButton.jsx";
@@ -109,7 +111,12 @@ export default function ChatPanel({
           setLoadingPlan(false);
 
           // Consolidate streaming events into a chat message (use ref to
-          // avoid stale closure — streamingEvents state would be stale here)
+          // avoid stale closure — streamingEvents state would be stale here).
+          //
+          // We also commit the FINAL consolidated text to the backend session
+          // here.  Previously this branch never called persistMessage, so the
+          // assistant turn looked correct in the live view but vanished on the
+          // next session reload — the canonical "streaming truncation" symptom.
           const events = streamingEventsRef.current;
           if (events.length > 0) {
             const textParts = events
@@ -123,6 +130,7 @@ export default function ChatPanel({
                 content: textParts.join(""),
               };
               setMessages((prev) => [...prev, consolidated]);
+              persistMessage(sessionId, "assistant", consolidated.content);
             }
             setStreamingEvents([]);
           }
@@ -211,15 +219,43 @@ export default function ChatPanel({
   // HANDLERS
   // ---------------------------------------------------------------------------
   // ---------------------------------------------------------------------------
-  // Persist a message to the backend session (fire-and-forget)
+  // Persist a message to the backend session (fire-and-forget).
+  //
+  // The fourth argument carries the *structured* payload of the assistant
+  // response — the Action Plan, the Execution Log, diff stats, etc. The
+  // backend stores it on Message.metadata; on session reload App.jsx
+  // spreads metadata back into the local message via normalizeBackendMessage,
+  // so the same AssistantMessage renderer can re-draw the Plan / Steps /
+  // Create buttons identically to the live view.
+  //
+  // Before this fix the structured payload was dropped at persist time —
+  // the session reloaded as raw text, and the UI degraded to a plain
+  // paragraph. This is the canonical "state loss during hydration" bug.
   // ---------------------------------------------------------------------------
-  const persistMessage = (sid, role, content) => {
+  const persistMessage = (sid, role, content, metadata = null) => {
     if (!sid) return;
+    const body = { role, content };
+    if (metadata && typeof metadata === "object" && Object.keys(metadata).length > 0) {
+      body.metadata = metadata;
+    }
     fetch(`/api/sessions/${sid}/message`, {
       method: "POST",
       headers: getHeaders(),
-      body: JSON.stringify({ role, content }),
+      body: JSON.stringify(body),
     }).catch(() => {}); // best-effort
+  };
+
+  // Pick the structured fields a message can carry across a reload.
+  // Keep this in one place so every call-site stores the same shape and
+  // the renderer never has to guess.
+  const pickAssistantMetadata = (m) => {
+    if (!m || typeof m !== "object") return null;
+    const meta = {};
+    if (m.plan)         meta.plan         = m.plan;
+    if (m.executionLog) meta.executionLog = m.executionLog;
+    if (m.diff)         meta.diff         = m.diff;
+    if (m.actions)      meta.actions      = m.actions;
+    return Object.keys(meta).length > 0 ? meta : null;
   };
 
   const send = async () => {
@@ -313,27 +349,61 @@ export default function ChatPanel({
         throw new Error(detail || "Failed to generate plan");
       }
 
-      setPlan(data);
+      // Guard: a plan with no executable file actions is not a plan we
+      // can approve.  This happens when the planner/explorer agents
+      // refused (tool-loop hallucination or a real safety refusal) and
+      // CrewAI returned a schema-valid but empty payload.  Without
+      // this guard the Approve & execute / Reject plan buttons would
+      // render against a payload that can't actually be executed.
+      const planSteps = Array.isArray(data?.steps)
+        ? data.steps
+        : Array.isArray(data?.plan?.steps)
+        ? data.plan.steps
+        : [];
+      const hasExecutableFiles = planSteps.some(
+        (s) =>
+          Array.isArray(s?.files) &&
+          s.files.some((f) => ["CREATE", "MODIFY", "DELETE"].includes(f?.action)),
+      );
 
       // Extract summary from nested plan structure or top-level
       const summary =
         data.plan?.summary || data.summary || data.message ||
         "Here is the proposed plan for your request.";
 
-      // Assistant response (Answer + Action Plan)
-      setMessages((prev) => [
-        ...prev,
-        {
+      if (hasExecutableFiles) {
+        setPlan(data);
+        const assistantMsg = {
           from: "ai",
           role: "assistant",
           answer: summary,
           content: summary,
           plan: data,
-        },
-      ]);
-
-      // Persist assistant response to backend session
-      persistMessage(sid, "assistant", summary);
+        };
+        setMessages((prev) => [...prev, assistantMsg]);
+        persistMessage(sid, "assistant", summary, pickAssistantMetadata(assistantMsg));
+      } else {
+        // No executable steps — surface a clear failure to the user
+        // instead of half-rendering a plan card and dangling buttons.
+        // The most common cause is the explorer/planner agent loop
+        // (CrewAI same-input limiter blocks repeat tool calls, the
+        // agent panics and "refuses").  Encourage a retry rather than
+        // letting the user click Approve on nothing.
+        setPlan(null);
+        const failureText =
+          "I couldn't produce a plan for that request. The agent may have " +
+          "got stuck reading the same file twice. Try rephrasing, or " +
+          "switch to a stronger model in Settings → Provider.";
+        const failureMsg = {
+          from: "ai",
+          role: "system",
+          content: failureText,
+        };
+        setMessages((prev) => [...prev, failureMsg]);
+        persistMessage(sid, "system", failureText);
+        setStatus("No executable plan produced.");
+        return;
+      }
     } catch (err) {
       const msg = String(err?.message || err);
       console.error(err);
@@ -344,6 +414,36 @@ export default function ChatPanel({
       ]);
     } finally {
       setLoadingPlan(false);
+    }
+  };
+
+  // ---------------------------------------------------------------------------
+  // Reject the active plan — minimal first cut.
+  //
+  // Industry rule we follow from the start: never write to disk on a path the
+  // user did not approve.  Rejecting is the cheapest expression of that —
+  // discard the proposed plan locally, leave the workspace untouched, record
+  // the rejection in chat history so the user sees it after a session reload.
+  //
+  // No backend endpoint is needed yet because plans are not persisted as
+  // first-class objects today; they ride along on the assistant message's
+  // metadata.  When we later add per-plan state tracking, this handler will
+  // also POST /api/chat/plan/{id}/reject — leaving that for a follow-up.
+  // ---------------------------------------------------------------------------
+  const rejectPlan = () => {
+    if (!plan || executing) return;
+    setPlan(null);
+    setStatus("Plan rejected. No files were changed.");
+
+    const rejectionMsg = {
+      from: "ai",
+      role: "system",
+      content: "Plan rejected. No files were changed.",
+    };
+    setMessages((prev) => [...prev, rejectionMsg]);
+
+    if (sessionId) {
+      persistMessage(sessionId, "system", rejectionMsg.content);
     }
   };
 
@@ -385,10 +485,22 @@ export default function ChatPanel({
         answer: data.message || "Execution completed.",
         content: data.message || "Execution completed.",
         executionLog: data.executionLog,
+        diff: data.diff,
       };
 
       // Show completion immediately (keeps old "Execution Log" section)
       setMessages((prev) => [...prev, completionMsg]);
+
+      // Persist the execution log + diff alongside the message text so
+      // the History view re-renders the green "Execution Log" panel and
+      // the "View diff" affordance.  Without this, reloading the session
+      // shows just the one-line "Execution completed." summary.
+      persistMessage(
+        sessionId,
+        "assistant",
+        completionMsg.content,
+        pickAssistantMetadata(completionMsg),
+      );
 
       // Clear active plan UI
       setPlan(null);
@@ -571,13 +683,39 @@ export default function ChatPanel({
             );
           }
 
-          // Assistant message (Answer / Plan / Execution Log)
+          // Assistant message (Answer / Plan / Execution Log).
+          //
+          // Lifecycle audit signal: if this message carries a plan, look
+          // ahead in the timeline for any subsequent message that
+          // records an execution log (=> the plan was approved+executed)
+          // or a system "Plan rejected" entry (=> the plan was
+          // rejected).  The status is rendered as a small green/grey
+          // badge next to the Action Plan header so users can tell at a
+          // glance — in history — whether a previous plan was acted on.
+          let planStatus = null;
+          if (m.plan) {
+            const after = messages.slice(idx + 1);
+            if (after.some((later) => later.executionLog)) {
+              planStatus = "executed";
+            } else if (
+              after.some(
+                (later) =>
+                  later.role === "system" &&
+                  typeof later.content === "string" &&
+                  later.content.includes("Plan rejected"),
+              )
+            ) {
+              planStatus = "rejected";
+            }
+          }
+
           return (
             <div key={idx}>
               <AssistantMessage
                 answer={m.answer || m.content}
                 plan={m.plan}
                 executionLog={m.executionLog}
+                planStatus={planStatus}
               />
               {/* Diff stats indicator (Claude-Code-on-Web parity) */}
               {m.diff && (
@@ -597,10 +735,34 @@ export default function ChatPanel({
           </div>
         )}
 
+        {/* Enterprise Pulse — agentic thinking state shown after the user
+            hits Send and before the first streamed/planned chunk arrives.
+            Falls back gracefully to nothing once streamingEvents start
+            flowing in (StreamingMessage takes over the live feedback). */}
         {loadingPlan && streamingEvents.length === 0 && (
-          <div className="chat-message-ai" style={{ color: "#A1A1AA", fontStyle: "italic", padding: "10px" }}>
-            Thinking...
-          </div>
+          <ThinkingIndicator />
+        )}
+
+        {/* Live execution status — visible in the chat timeline while
+            ``executing`` is true, sits between the Action Plan card and
+            where the Execution Log (green panel in AssistantMessage)
+            will land once the backend returns.  Removes the "did the
+            app freeze?" feeling caused by only the bottom button
+            saying "Executing…".
+
+            Reuses the ThinkingIndicator with execution-specific labels.
+            When the executor finishes, ``setExecuting(false)`` removes
+            this bubble and the completionMsg lands in the timeline as
+            a normal assistant message with its green Execution Log
+            block — already rendered by AssistantMessage today. */}
+        {executing && (
+          <ThinkingIndicator
+            labels={[
+              "Executing plan",
+              "Applying changes",
+              "Verifying result",
+            ]}
+          />
         )}
 
         {!messages.length && !plan && !loadingPlan && streamingEvents.length === 0 && (
@@ -699,14 +861,44 @@ export default function ChatPanel({
             {loadingPlan ? "Planning..." : wsConnected ? "Send" : "Generate plan"}
           </button>
 
-          <button
-            className="chat-btn secondary"
-            type="button"
-            onClick={execute}
-            disabled={!plan || executing || loadingPlan}
-          >
-            {executing ? "Executing..." : "Approve & execute"}
-          </button>
+          {/* Approve & execute — visible only while a plan is awaiting
+              approval, or while an execution is already in flight (so
+              the user sees the "Executing…" label, not a missing
+              button).  Previously this was always rendered with
+              ``disabled={!plan}``, which meant after a successful
+              execute() the button stayed on screen as a dimmed ghost
+              and a second click could trigger a duplicate run —
+              causing the executor to re-write the same file with the
+              same content (~50 s of wasted LLM time per accidental
+              click).  Hiding the button entirely once ``plan`` is
+              null makes the bug impossible. */}
+          {(plan || executing) && (
+            <button
+              className="chat-btn secondary"
+              type="button"
+              onClick={execute}
+              disabled={executing || loadingPlan}
+            >
+              {executing ? "Executing..." : "Approve & execute"}
+            </button>
+          )}
+
+          {/* Reject plan — same visibility window as Approve. */}
+          {plan && !executing && !loadingPlan && (
+            <button
+              className="chat-btn ghost"
+              type="button"
+              onClick={rejectPlan}
+              title="Discard this plan. No files will be changed."
+              style={{
+                color: "#F87171",
+                borderColor: "rgba(248, 113, 113, 0.35)",
+                background: "transparent",
+              }}
+            >
+              Reject plan
+            </button>
+          )}
 
           {/* Create PR button (Claude-Code-on-Web parity) */}
           {isOnSessionBranch && (
@@ -720,17 +912,20 @@ export default function ChatPanel({
           )}
         </div>
 
-        {/* WebSocket connection indicator */}
-        {sessionId && (
-          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 8 }}>
-            <span className="ws-indicator">
-              <span className="ws-dot" style={{
-                backgroundColor: wsConnected ? "#10B981" : "#EF4444",
-              }} />
-              {wsConnected ? "Live" : "Connecting..."}
-            </span>
-          </div>
-        )}
+        {/* WebSocket connection indicator + context-window meter */}
+        <div style={{ marginTop: 6, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <span>
+            {sessionId && (
+              <span className="ws-indicator">
+                <span className="ws-dot" style={{
+                  backgroundColor: wsConnected ? "#10B981" : "#EF4444",
+                }} />
+                {wsConnected ? "Live" : "Connecting..."}
+              </span>
+            )}
+          </span>
+          <ContextMeter sessionId={sessionId} />
+        </div>
       </div>
 
       {/* Diff Viewer overlay */}

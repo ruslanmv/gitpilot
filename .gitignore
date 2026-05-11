@@ -105,6 +105,7 @@ Desktop.ini
 # -----------------
 # uv will create .venv at project root by default (covered above)
 .uv/
+.uv-cache/
 uv.lock.old
 
 # Local environment files

@@ -49,6 +49,7 @@ import { registerSetupCommands } from "./commands/setupCommands";
 import { registerProviderCommands } from "./commands/providerCommands";
 import { registerSessionCommands } from "./commands/sessionCommands";
 import { registerChatCommandsV2 } from "./commands/chatCommands";
+import { registerPhase4Commands } from "./commands/phase4Commands";
 
 import { StateStore } from "./core/stateStore";
 import { GitPilotEvents } from "./core/events";
@@ -1849,6 +1850,8 @@ export function activate(context: vscode.ExtensionContext): void {
   registerProviderCommands(context, stateStore, settingsClient);
   registerSessionCommands(context, stateStore, sessionCoordinator);
   registerChatCommandsV2(context, stateStore, chatClientV2);
+  // Phase 1–4 backend feature commands (doctor, wizard, runbooks, flags).
+  registerPhase4Commands(context);
 
   registerCommand("gitpilot.showAgentFlow", () => {
     AgentFlowPanel.show(client, context.extensionUri);

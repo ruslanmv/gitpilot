@@ -253,11 +253,21 @@ def build_mcp_agent_tools(
     store: MCPStore | None = None,
     include_mutation: bool = False,
     max_tools: int | None = None,
+    policy: Any = None,
 ) -> list[Any]:
     """Build the live list of CrewAI tools backed by enabled MCP tools.
 
     Returns an empty list if MCP is disabled, no servers are enabled,
     or CrewAI is not importable. Never raises.
+
+    Batch P2-B — accepts an optional ``policy`` (a
+    :class:`gitpilot.tool_groups.ToolPolicy`).  When the
+    ``lazy_tool_defs`` flag is on and ``policy`` is supplied, the
+    descriptors are filtered through
+    :func:`gitpilot.tool_def_pruner.prune_descriptors` *before* they
+    enter the LLM tool definitions; smaller tool list → smaller
+    prompt.  When ``policy`` is ``None`` or the flag is off, behaviour
+    is identical to the legacy code path.
     """
     s = store or MCPStore()
     snap = s.load()
@@ -272,6 +282,16 @@ def build_mcp_agent_tools(
         else os.environ.get(ENV_MAX_TOOLS, DEFAULT_MAX_TOOLS)
     )
     descriptors = descriptors[:cap]
+
+    if policy is not None:
+        # Lazy import to keep this module decoupled from the pruner.
+        from .tool_def_pruner import prune_descriptors as _prune
+        descriptors, report = _prune(descriptors, policy=policy)
+        if report.dropped:
+            logger.info(
+                "mcp-bridge: lazy_tool_defs pruned %d/%d descriptor(s) (%s)",
+                report.dropped, report.dropped + report.kept, report.reason_counts,
+            )
 
     try:
         from crewai.tools import tool as crewai_tool

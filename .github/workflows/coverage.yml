@@ -1,0 +1,79 @@
+name: 📈 Coverage gate
+
+# Batch P1-B — enforces the >= 80 % coverage threshold declared in
+# pyproject.toml [tool.coverage.report].  Runs on every PR + push to main.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    name: 🧪 Pytest + coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: 🐍 Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: 📦 Install project + dev extras
+        run: |
+          uv venv
+          uv pip install -e ".[dev]"
+
+      - name: ⚡ Warm bytecode cache
+        run: uv run python -m compileall -q gitpilot tests || true
+
+      - name: 🔎 Strict type-check (Batch P1-C gated modules)
+        run: uv run mypy --config-file mypy.ini
+
+      - name: 🧪 Run tests with coverage
+        env:
+          GITPILOT_LITE_MODE: "0"
+          PYTHONWARNINGS: "ignore::RuntimeWarning"
+        run: |
+          TMP_CFG="$(mktemp -d)"
+          GITPILOT_CONFIG_DIR="$TMP_CFG" uv run pytest \
+            --cov \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --cov-report=html
+          rm -rf "$TMP_CFG"
+
+      - name: 📤 Upload coverage HTML artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: htmlcov/
+          retention-days: 7
+
+      - name: 📤 Upload coverage XML artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          retention-days: 7

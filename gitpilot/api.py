@@ -10,6 +10,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .version import __version__
+# Batch P1-D — error-envelope decorator (opt-in via the `error_envelope` flag).
+# Re-exported here so endpoint authors can `@wrap_errors_envelope` without
+# reaching into the implementation module.  Importing the symbol is a no-op
+# when the flag is off, so this is fully backwards compatible.
+from .errors import GitPilotError, wrap_errors_envelope  # noqa: F401
 from .github_api import (
     list_user_repos,
     list_user_repos_paginated,  # Pagination support
@@ -1118,6 +1123,93 @@ async def api_update_llm_settings(updates: dict):
 
 
 # ============================================================================
+# Context-window meter
+# ============================================================================
+
+@app.get("/api/context/usage")
+async def api_context_usage(session_id: Optional[str] = Query(None)):
+    """Return a snapshot of the active model's context-window utilisation.
+
+    When ``session_id`` is supplied, the ``messages`` row reflects the
+    real token total of that session's persisted conversation.  Without
+    it the row is 0 and the popover shows the structure-only view (still
+    useful: tool schemas + system prompt + reserved are all populated).
+    """
+    from . import flags
+    from .context_meter import (
+        FLAG_CONTEXT_METER,
+        build_usage,
+        count_messages_tokens,
+        count_system_prompt_tokens,
+        count_tool_schema_tokens,
+    )
+
+    if not flags.is_on(FLAG_CONTEXT_METER, default=True):
+        raise HTTPException(status_code=404, detail="Context meter is disabled")
+
+    s: AppSettings = get_settings()
+    lite_mode = _is_lite_mode_active()
+
+    # Tool count + tool-schema tokens — best-effort, lazy import so we
+    # don't pay the agent-tools cost on a settings-only client.  In lite
+    # mode the planner doesn't see tools at all, so we report zero.
+    tool_count = 0
+    tool_lists: list[list[object]] = []
+    if not lite_mode:
+        try:
+            from .agentic import _tools
+
+            t = _tools()
+            for key in (
+                "REPOSITORY_TOOLS",
+                "WRITE_TOOLS",
+                "ISSUE_TOOLS",
+                "PR_TOOLS",
+                "SEARCH_TOOLS",
+                "LOCAL_TOOLS",
+            ):
+                group = t.get(key) or []
+                tool_lists.append(list(group))
+                tool_count += len(group)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("[context-meter] tool count unavailable: %s", exc)
+
+    tool_schema_tokens = count_tool_schema_tokens(tool_lists) if tool_lists else 0
+    system_prompt_tokens = count_system_prompt_tokens(lite_mode=lite_mode)
+
+    # Conversation messages — only when the caller passes a session_id.
+    # Failure to load is silent: the popover stays useful with messages=0
+    # rather than erroring on a freshly-created session.
+    messages_tokens = 0
+    if session_id:
+        try:
+            session = _session_mgr.load(session_id)
+            messages_tokens = count_messages_tokens(session.messages)
+        except Exception as exc:
+            logger.debug(
+                "[context-meter] session %s not loadable: %s", session_id, exc
+            )
+
+    # Repo context summary is computed fresh per plan and not cached
+    # per-session, so we leave the row at 0.  When we add per-session
+    # caching (planned), populate this from the cache.
+    breakdown = {
+        "messages": messages_tokens,
+        "system_prompt": system_prompt_tokens,
+        "repo_context": 0,
+        "tool_schemas": tool_schema_tokens,
+    }
+
+    usage = build_usage(
+        s,
+        breakdown=breakdown,
+        tool_count=tool_count,
+        lite_mode=lite_mode,
+    )
+    return usage.to_dict()
+
+
+# ============================================================================
 # Chat Endpoints
 # ============================================================================
 
@@ -1189,10 +1281,20 @@ async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Hea
                 ) from exc
 
             # ── Structured-output parse failure (common with small models) ─
+            # New markers match the friendly RuntimeError surfaces we
+            # raise in gitpilot/agentic.py::generate_plan for refusal /
+            # ValidationError / tool-loop hallucination paths.  Catching
+            # them here routes the user to the single-agent Lite planner
+            # automatically — much better than the previous outcome where
+            # those RuntimeErrors leaked through as raw HTTP 500.
             _plan_parse_markers = (
                 "validation error for planresult",
                 "json_invalid",
                 "invalid json: key must be a string",
+                "did not return a valid plan structure",
+                "did not return a usable result",
+                "the planner refused to produce a plan",
+                "the planner produced paths that do not match",
             )
             if any(marker in error_msg.lower() for marker in _plan_parse_markers):
                 logger.warning(
@@ -1212,10 +1314,32 @@ async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Hea
                         "[GitPilot] Lite planner fallback also failed after parse error: %s",
                         lite_exc,
                     )
-                    raise
+                    # Surface a clear 502 with actionable guidance rather
+                    # than leaking the raw RuntimeError as a generic 500.
+                    raise HTTPException(
+                        status_code=502,
+                        detail=(
+                            "The planner couldn't produce a usable plan even "
+                            "with the simplified Lite-mode fallback.  This is "
+                            "almost always a small-model issue — the LLM is "
+                            "looping on tool calls or losing its instruction "
+                            "format mid-task.  Solutions:\n"
+                            "• Switch to a larger Ollama model (llama3.1:8b → "
+                            "llama3.1:70b, qwen2.5:14b+, mistral)\n"
+                            "• Use a cloud provider (OpenAI, Claude) for "
+                            "complex multi-step tasks\n"
+                            "• Try simplifying the request (one file at a time)"
+                        ),
+                    ) from lite_exc
 
-            # Re-raise anything else
-            raise
+            # Anything else — surface a clean 500 with a clear message
+            # so the UI's existing error handler renders something
+            # actionable instead of a bare "Internal Server Error".
+            logger.exception("[GitPilot] /api/chat/plan failed: %s", error_msg)
+            raise HTTPException(
+                status_code=500,
+                detail=error_msg or "Plan generation failed.",
+            ) from exc
 
 
 @app.post("/api/chat/execute")

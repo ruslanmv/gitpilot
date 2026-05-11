@@ -821,6 +821,96 @@ T8_LITE_MODE = Topology(
 )
 
 
+# ---------------------------------------------------------------------------
+# T9 — Tool-Augmented ReAct (experimental, opt-in)
+# Wires the Phase 1–4 primitives — mode-bound MCP servers, lazy MCP tool
+# pruning, sandboxed exec, Anthropic prompt cache, mode tool policies —
+# into a Claude-Code-style ReAct loop.  Surfaced in the UI as an
+# "experimental" card so users can try it without affecting existing
+# topologies.  Disabled by default for the routing layer; users pick it
+# explicitly.
+# ---------------------------------------------------------------------------
+
+_T9_FLOW_GRAPH: Dict[str, Any] = {
+    "nodes": [
+        {"id": "user_request", "type": "user",   "data": {"label": "User Request", "description": "Task, refactor, or question"},
+         "position": {"x": 400, "y": 0}},
+        {"id": "prompt_cache", "type": "system", "data": {"label": "Prompt Cache (Anthropic)", "icon": "🚀",
+                                                          "description": "AGENTS.md + rules + tool defs cached as a stable prefix; ~90% input-token savings on multi-turn",
+                                                          "feature_flag": "prompt_cache"},
+         "position": {"x": 700, "y": 80}},
+        {"id": "mode",         "type": "system", "data": {"label": "Active Mode (YAML)", "icon": "🎛️",
+                                                          "description": ".gitpilot/modes.yaml — declarative persona + tool policy + bound MCP servers"},
+         "position": {"x": 100, "y": 80}},
+        {"id": "react_main",   "type": "agent",  "data": {"label": "Main Agent (ReAct)",
+                                                          "model": "Sonnet 4.6", "mode": "policy-bound",
+                                                          "tools": ["Read","Grep","Glob","mode-allowed MCP tools","Sandboxed Bash"],
+                                                          "description": "Single main agent in a Thought/Action/Observation loop, scoped to the active mode's tool policy"},
+         "position": {"x": 400, "y": 180}},
+        {"id": "tool_pruner",  "type": "system", "data": {"label": "Tool-Def Pruner", "icon": "✂️",
+                                                          "description": "Lazy MCP tool defs — only descriptors the active mode allows are emitted to the model",
+                                                          "feature_flag": "lazy_tool_defs"},
+         "position": {"x": 200, "y": 300}},
+        {"id": "mcp_servers",  "type": "agent",  "data": {"label": "Mode-bound MCP Servers", "icon": "🧩",
+                                                          "tools": ["postgres.*","github.search_code","milvus.query","custom servers"],
+                                                          "description": "MCP servers declared inline in the mode; start/stop with the mode"},
+         "position": {"x": 400, "y": 320}},
+        {"id": "sandbox",      "type": "system", "data": {"label": "Sandbox (subprocess / matrixlab)", "icon": "🛡️",
+                                                          "description": "Shell execution jailed to the workspace, secrets stripped; switch to containerised matrixlab via env var"},
+         "position": {"x": 600, "y": 300}},
+        {"id": "context_cache","type": "system", "data": {"label": "Context-Pack LRU", "icon": "🗂️",
+                                                          "description": "Memoised by workspace + mode + file mtimes; instant hits across turns",
+                                                          "feature_flag": "context_cache"},
+         "position": {"x": 700, "y": 220}},
+        {"id": "approval",     "type": "system", "data": {"label": "Approval Batcher", "icon": "✅",
+                                                          "description": "Batches consecutive read-only tool calls into a single user prompt"},
+         "position": {"x": 400, "y": 460}},
+        {"id": "output",       "type": "output", "data": {"label": "Answer / Diff", "description": "Streamed via SSE (/chat/stream) when stream_v2=1"},
+         "position": {"x": 400, "y": 580}},
+    ],
+    "edges": [
+        {"id": "e-user-main",    "source": "user_request", "target": "react_main",   "animated": True},
+        {"id": "e-mode-pruner",  "source": "mode",         "target": "tool_pruner",  "label": "tool policy", "animated": True},
+        {"id": "e-pruner-main",  "source": "tool_pruner",  "target": "react_main",   "label": "pruned defs",  "animated": True},
+        {"id": "e-cache-main",   "source": "prompt_cache", "target": "react_main",   "label": "stable prefix", "animated": True},
+        {"id": "e-ctx-main",     "source": "context_cache","target": "react_main",   "label": "context pack",  "animated": True},
+        {"id": "e-main-mcp",     "source": "react_main",   "target": "mcp_servers",  "label": "tool call",   "animated": True},
+        {"id": "e-main-sandbox", "source": "react_main",   "target": "sandbox",      "label": "shell",       "animated": True},
+        {"id": "e-mcp-main",     "source": "mcp_servers",  "target": "react_main",   "label": "observation", "animated": True},
+        {"id": "e-sandbox-main", "source": "sandbox",      "target": "react_main",   "label": "stdout",      "animated": True},
+        {"id": "e-main-approval","source": "react_main",   "target": "approval",     "label": "edit/exec",   "animated": True},
+        {"id": "e-approval-out", "source": "approval",     "target": "output",       "label": "approved",    "animated": True},
+    ],
+}
+
+T9_TOOL_AUGMENTED_REACT = Topology(
+    id="tool_augmented_react",
+    name="Tool-Augmented ReAct (experimental)",
+    description=(
+        "ReAct loop wired through the Phase 1–4 primitives: mode-bound MCP "
+        "servers, lazy MCP tool pruning, prompt cache, context LRU, "
+        "sandboxed shell, approval batcher."
+    ),
+    category=TopologyCategory.system,
+    icon="\U0001f9ea",   # test tube — flags it as experimental
+    agents_used=[
+        "main_react_agent",
+        "mode_resolver",
+        "tool_def_pruner",
+        "mcp_servers",
+        "sandbox_runner",
+        "approval_batcher",
+    ],
+    execution_style=ExecutionStyle.react_loop,
+    routing_policy=RoutingPolicy(
+        strategy=RoutingStrategy.always_main_agent,
+        primary_agent="main_react_agent",
+        classifier_hints=[],
+    ),
+    flow_graph=_T9_FLOW_GRAPH,
+)
+
+
 # ===========================================================================
 # Registry singleton
 # ===========================================================================
@@ -836,6 +926,7 @@ TOPOLOGY_REGISTRY: Dict[str, Topology] = {
         T6_ARCHITECT_MODE,
         T7_QUICK_FIX,
         T8_LITE_MODE,
+        T9_TOOL_AUGMENTED_REACT,
     ]
 }
 
