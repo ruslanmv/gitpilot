@@ -255,6 +255,10 @@ export default function ChatPanel({
     if (m.executionLog) meta.executionLog = m.executionLog;
     if (m.diff)         meta.diff         = m.diff;
     if (m.actions)      meta.actions      = m.actions;
+    // Informational plans (READ-only answers to "what does X do?" style
+    // questions) carry no Approve/Reject controls — pin the flag so the
+    // session reload re-renders the same shape.
+    if (m.informational) meta.informational = true;
     return Object.keys(meta).length > 0 ? meta : null;
   };
 
@@ -349,29 +353,56 @@ export default function ChatPanel({
         throw new Error(detail || "Failed to generate plan");
       }
 
-      // Guard: a plan with no executable file actions is not a plan we
-      // can approve.  This happens when the planner/explorer agents
-      // refused (tool-loop hallucination or a real safety refusal) and
-      // CrewAI returned a schema-valid but empty payload.  Without
-      // this guard the Approve & execute / Reject plan buttons would
-      // render against a payload that can't actually be executed.
+      // Classify the plan into one of three kinds so we can render the
+      // right shape — not just "valid or banner":
+      //
+      // * executable    — at least one CREATE/MODIFY/DELETE → plan card
+      //                   with Approve & execute / Reject controls.
+      // * informational — every file is READ (or no files at all on a
+      //                   step that still has a meaningful description)
+      //                   AND the summary is a real answer, not the
+      //                   placeholder.  This is what happens when the
+      //                   user asks "what do you think about this
+      //                   project?" — the planner correctly READs the
+      //                   relevant files and the summary IS the answer.
+      //                   Render the summary as a normal assistant
+      //                   message; do not show plan controls.
+      // * empty         — no steps OR no actionable signal at all →
+      //                   honest failure banner.
+      //
+      // Before this classifier the second case was treated as the
+      // third, surfacing "I couldn't produce a plan" on perfectly
+      // valid READ-only plans.
       const planSteps = Array.isArray(data?.steps)
         ? data.steps
         : Array.isArray(data?.plan?.steps)
         ? data.plan.steps
         : [];
-      const hasExecutableFiles = planSteps.some(
+      const PLACEHOLDER_SUMMARY = "Here is the proposed plan for your request.";
+      const summary =
+        data.plan?.summary || data.summary || data.message || PLACEHOLDER_SUMMARY;
+      const hasExecutable = planSteps.some(
         (s) =>
           Array.isArray(s?.files) &&
           s.files.some((f) => ["CREATE", "MODIFY", "DELETE"].includes(f?.action)),
       );
+      const isReadOnly =
+        planSteps.length > 0 &&
+        !hasExecutable &&
+        planSteps.every(
+          (s) =>
+            !Array.isArray(s?.files) ||
+            s.files.length === 0 ||
+            s.files.every((f) => f?.action === "READ"),
+        );
+      const hasRealSummary = Boolean(summary) && summary !== PLACEHOLDER_SUMMARY;
+      const planKind = hasExecutable
+        ? "executable"
+        : isReadOnly && hasRealSummary
+        ? "informational"
+        : "empty";
 
-      // Extract summary from nested plan structure or top-level
-      const summary =
-        data.plan?.summary || data.summary || data.message ||
-        "Here is the proposed plan for your request.";
-
-      if (hasExecutableFiles) {
+      if (planKind === "executable") {
         setPlan(data);
         const assistantMsg = {
           from: "ai",
@@ -382,18 +413,30 @@ export default function ChatPanel({
         };
         setMessages((prev) => [...prev, assistantMsg]);
         persistMessage(sid, "assistant", summary, pickAssistantMetadata(assistantMsg));
+      } else if (planKind === "informational") {
+        // The summary is the answer.  No plan card, no Approve/Reject —
+        // there is nothing to execute.  We deliberately do NOT attach
+        // ``plan: data`` here so AssistantMessage renders this turn
+        // exactly like a chat reply.
+        setPlan(null);
+        const assistantMsg = {
+          from: "ai",
+          role: "assistant",
+          answer: summary,
+          content: summary,
+          informational: true,
+        };
+        setMessages((prev) => [...prev, assistantMsg]);
+        persistMessage(sid, "assistant", summary, pickAssistantMetadata(assistantMsg));
       } else {
-        // No executable steps — surface a clear failure to the user
-        // instead of half-rendering a plan card and dangling buttons.
-        // The most common cause is the explorer/planner agent loop
-        // (CrewAI same-input limiter blocks repeat tool calls, the
-        // agent panics and "refuses").  Encourage a retry rather than
-        // letting the user click Approve on nothing.
+        // empty — be honest about what we know.  The earlier wording
+        // ("got stuck reading the same file twice") was a guess from
+        // an older bug; for the cases that actually still hit this
+        // branch the real signal is just "no actionable steps".
         setPlan(null);
         const failureText =
-          "I couldn't produce a plan for that request. The agent may have " +
-          "got stuck reading the same file twice. Try rephrasing, or " +
-          "switch to a stronger model in Settings → Provider.";
+          "The model returned an empty plan. Try rephrasing more concretely, " +
+          "or pick a stronger model in Settings → Provider.";
         const failureMsg = {
           from: "ai",
           role: "system",
@@ -401,7 +444,7 @@ export default function ChatPanel({
         };
         setMessages((prev) => [...prev, failureMsg]);
         persistMessage(sid, "system", failureText);
-        setStatus("No executable plan produced.");
+        setStatus("No actionable plan produced.");
         return;
       }
     } catch (err) {
