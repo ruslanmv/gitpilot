@@ -109,7 +109,7 @@ export default function GatewayHeader({
             title={
               reachable
                 ? "Pull the server registry from MCP Context Forge"
-                : "Gateway unreachable — start MCP Context Forge first (make run-mcp)"
+                : "Gateway unreachable — start MCP Context Forge first (make run)"
             }
             style={{
               padding: "6px 12px",

@@ -6,12 +6,21 @@
 UV      ?= uv
 PYTHON  ?= python3.11
 PORT    ?= 8000
+# Keep uv's cache beside the project so WSL /mnt/c checkouts do not copy
+# wheels from Linux home-dir cache across filesystems on every install.
+UV_CACHE_DIR ?= .uv-cache
+# WSL /mnt/c and some Docker/VM filesystems do not support uv hardlinks,
+# causing the noisy "Failed to hardlink files" fallback warning. Use copy
+# mode by default; override with `make install UV_LINK_MODE=hardlink` on
+# native Linux/macOS filesystems if you want hardlinks.
+UV_LINK_MODE ?= copy
+UV_ENV       := UV_CACHE_DIR=$(UV_CACHE_DIR) UV_LINK_MODE=$(UV_LINK_MODE)
 
 # Docker Compose command (prefer v2 over v1)
 DOCKER_COMPOSE := $(shell if command -v docker > /dev/null && docker compose version > /dev/null 2>&1; then echo "docker compose"; elif command -v docker-compose > /dev/null; then echo "docker-compose"; else echo "docker compose"; fi)
 
-.PHONY: help install uv-install frontend-install frontend-build \
-        dev run test lint fmt build publish-test publish clean stop \
+.PHONY: help install install-dev install-full uv-install uv-install-dev uv-install-docs frontend-install frontend-build \
+        dev run run-bare test lint fmt build publish-test publish clean stop \
         benchmark benchmark-quick benchmark-report \
         vercel vercel-build vercel-deploy \
         build-container run-container stop-container logs-container clean-container publish-container \
@@ -26,12 +35,17 @@ help:
 	@echo ""
 	@echo "GitPilot Make targets"
 	@echo "---------------------"
-	@echo "  make install          Install backend (uv) + frontend (npm install)"
-	@echo "  make uv-install       Create/refresh Python env and install deps via uv"
+	@echo "  make install          Install runtime deps + frontend + MCP stack"
+	@echo "  make install-dev      Install developer/test tooling"
+	@echo "  make install-full     Install runtime + dev/docs tooling + MCP stack"
+	@echo "  make uv-install       Create/refresh Python env with runtime deps only"
+	@echo "  make uv-install-dev   Add developer/test tooling via uv"
+	@echo "  make uv-install-docs  Add documentation tooling via uv"
 	@echo "  make frontend-install Install frontend npm dependencies"
 	@echo "  make frontend-build   Build React/Vite frontend into gitpilot/web"
-	@echo "  make dev              Alias for install"
-	@echo "  make run              Run GitPilot backend + frontend dev server"
+	@echo "  make dev              Alias for install-dev"
+	@echo "  make run              Run MCP stack + GitPilot backend/frontend"
+	@echo "  make run-bare         Run GitPilot backend + frontend WITHOUT MCP (no Docker required)"
 	@echo "  make stop             Stop all processes on ports 8000 and 5173"
 	@echo "  make test             Run tests with pytest via uv"
 	@echo "  make benchmark        Run code generation benchmark (all tiers)"
@@ -83,24 +97,55 @@ help:
 	@echo "  make gateway-register Register GitPilot agent in ContextForge"
 	@echo ""
 
-## High-level install: backend + frontend + MCP env (additive)
+## High-level install: runtime backend + frontend + MCP stack.
+## GitPilot uses the MCP stack by default, so keep MCP in the happy path while
+## leaving heavyweight developer/docs tooling opt-in.
 install: uv-install frontend-install install-mcp
-	@echo "✅ Backend (uv), frontend (npm) and MCP env ready."
-	@echo "   Run 'make run' to start GitPilot, or 'make run-all' to also start the MCP stack."
+	@echo "✅ Backend runtime (uv), frontend (npm) and MCP env ready."
+	@echo "   Run 'make run' to start MCP Context Forge + GitPilot."
+	@echo "   No Docker?  Use 'make run-bare' to start GitPilot without MCP."
+	@echo "   Optional:   'make install-dev' for test/lint/build tooling."
 
-## Create / sync the environment with uv (all extras)
+## Custom developer install: add dev/test/build tooling when you need it.
+install-dev: uv-install-dev frontend-install
+	@echo "✅ Developer tooling ready."
+
+## Full local workstation install: runtime + MCP + dev/docs tooling.
+install-full: install
+	@echo "🔧 Syncing Python environment with dev + docs tooling..."
+	@$(UV_ENV) $(UV) sync --extra dev --extra docs
+	@echo "✅ Full local environment ready."
+	@echo "   Run 'make run-all' to start GitPilot plus the MCP stack."
+
+## Create / sync the environment with uv (runtime dependencies only).
 uv-install:
-	@echo "🔧 Syncing Python environment with uv (all extras)..."
-	@$(UV) sync --all-extras
-	@echo "✅ Python environment ready."
+	@echo "🔧 Syncing Python environment with uv (runtime deps only)..."
+	@$(UV_ENV) $(UV) sync
+	@echo "✅ Python runtime environment ready."
 	@echo "⚡ Precompiling bytecode for faster startup (WSL/HF Spaces)..."
-	@$(UV) run python -m compileall -q -j 4 gitpilot/ 2>/dev/null || true
+	@$(UV_ENV) $(UV) run --no-dev python -m compileall -q -j 4 gitpilot/ 2>/dev/null || true
 	@echo "✅ Bytecode cache warmed."
+
+## Add developer/test/build tooling without docs dependencies.
+uv-install-dev:
+	@echo "🔧 Syncing Python environment with dev/test tooling..."
+	@$(UV_ENV) $(UV) sync --extra dev
+	@echo "✅ Python developer environment ready."
+
+## Add docs tooling only when building or serving documentation.
+uv-install-docs:
+	@echo "🔧 Syncing Python environment with docs tooling..."
+	@$(UV_ENV) $(UV) sync --extra docs
+	@echo "✅ Python docs environment ready."
 
 ## Install frontend dependencies
 frontend-install:
 	@echo "📦 Installing frontend dependencies (npm)..."
-	@cd frontend && npm install
+	@if [ -f frontend/package-lock.json ] && [ ! -d frontend/node_modules ]; then \
+		cd frontend && npm ci --prefer-offline --no-audit --no-fund; \
+	else \
+		cd frontend && npm install --prefer-offline --no-audit --no-fund; \
+	fi
 	@echo "✅ Frontend dependencies installed."
 
 ## Build the React/Vite frontend and copy dist -> gitpilot/web
@@ -112,15 +157,26 @@ frontend-build: frontend-install
 	@echo "✅ Frontend build complete (gitpilot/web)."
 
 ## Developer convenience alias
-dev: install
+dev: install-dev
 
-## Run GitPilot from the uv-managed environment (backend + frontend).
-## Idempotent: if a GitPilot backend is already responding on :$(PORT)
+## Run GitPilot from the uv-managed environment (MCP stack + backend + frontend).
+## Idempotent: `run-mcp` starts/keeps Context Forge healthy first; if a
+## GitPilot backend is already responding on :$(PORT)
 ## (because you ran `make run` earlier in another tab, or `make run-all`
 ## was re-invoked), we skip the backend boot and go straight to the
 ## frontend dev server. The port-in-use check only fires when the port
 ## is held by *something else*.
-run:
+##
+## No Docker?  Use `make run-bare` for the Docker-free path: it starts
+## GitPilot backend + frontend without the MCP stack.  The UI will show
+## the gateway as Unreachable but everything else works.
+run: run-mcp run-bare
+
+## Docker-free run path.  Starts GitPilot backend + frontend without
+## the MCP stack — useful on Hugging Face Spaces, CI smoke runs, and
+## any environment where Docker is unavailable.  The MCP Servers tab
+## will show the gateway as Unreachable; clicking Sync is a no-op.
+run-bare:
 	@echo "🚀 Starting GitPilot on http://127.0.0.1:$(PORT)..."
 	@# 1. Already a healthy GitPilot? → skip backend boot, go straight to frontend.
 	@if curl -sf http://127.0.0.1:$(PORT)/api/ping > /dev/null 2>&1; then \
@@ -135,7 +191,7 @@ run:
 		exit 1; \
 	fi
 	@trap 'kill 0' EXIT; \
-	$(UV) run python -m gitpilot serve --host 127.0.0.1 --port $(PORT) --no-open & \
+	$(UV_ENV) $(UV) run --no-dev python -m gitpilot serve --host 127.0.0.1 --port $(PORT) --no-open & \
 	BACKEND_PID=$$!; \
 	echo "⏳ Waiting for backend to be ready (up to 60s for WSL/first-start)..."; \
 	READY=0; \
@@ -157,7 +213,10 @@ run:
 	echo "🎨 Starting frontend dev server on http://localhost:5173..."; \
 	cd frontend && npm run dev -- --open
 
-## Stop all running processes (ports 8000 and 5173)
+## Stop all running processes (ports 8000 and 5173) AND the MCP stack.
+## Now that `make run` starts the MCP Context Forge stack by default, `make
+## stop` is symmetric: it stops both GitPilot and Forge.  `stop-mcp` is
+## idempotent — running it when nothing is up is a clean no-op.
 stop:
 	@echo "🛑 Attempting to stop processes on ports $(PORT) and 5173..."
 
@@ -179,7 +238,9 @@ stop:
 		echo "No process found on port 5173."; \
 	fi
 
-	@echo "✅ Stop attempt complete."
+	@# Tear down the MCP stack started by `make run` (idempotent).
+	@$(MAKE) --no-print-directory stop-mcp
+	@echo "✅ GitPilot + MCP stack stopped."
 
 ## Soft-stop GitPilot WITHOUT sudo. Only kills processes the current user
 ## owns; never prompts for a password. Suitable for `make run-all` to call
@@ -212,28 +273,100 @@ test:
 	@echo "🧪 Running tests with isolated GitPilot config..."
 	@TMP_CFG="$$(mktemp -d)"; \
 	echo "Using GITPILOT_CONFIG_DIR=$$TMP_CFG"; \
-	GITPILOT_CONFIG_DIR="$$TMP_CFG" GITPILOT_LITE_MODE=0 PYTHONWARNINGS="ignore::RuntimeWarning" $(UV) run pytest; \
+	GITPILOT_CONFIG_DIR="$$TMP_CFG" GITPILOT_LITE_MODE=0 PYTHONWARNINGS="ignore::RuntimeWarning" $(UV_ENV) $(UV) run --extra dev pytest; \
 	STATUS=$$?; \
 	rm -rf "$$TMP_CFG"; \
 	exit $$STATUS
 
 test-fast:
 	@echo "🧪 Running tests (no isolation)..."
-	@$(UV) run pytest
+	@$(UV_ENV) $(UV) run --extra dev pytest
+
+## Coverage gate — Batch P1-B
+## Enforces the >= 80 % threshold on the gated modules listed in
+## pyproject.toml [tool.coverage.run] include.  Use `make coverage` locally;
+## CI runs the same command.  `make coverage-full` reports the whole tree
+## without enforcement, useful for spotting candidates to add to the gate.
+coverage:
+	@echo "📈 Running coverage gate (gated modules only)..."
+	@TMP_CFG="$$(mktemp -d)"; \
+	echo "Using GITPILOT_CONFIG_DIR=$$TMP_CFG"; \
+	GITPILOT_CONFIG_DIR="$$TMP_CFG" GITPILOT_LITE_MODE=0 PYTHONWARNINGS="ignore::RuntimeWarning" \
+		$(UV_ENV) $(UV) run --extra dev pytest --cov --cov-report=term-missing --cov-report=xml --cov-report=html; \
+	STATUS=$$?; \
+	rm -rf "$$TMP_CFG"; \
+	exit $$STATUS
+
+coverage-html: coverage
+	@echo "📈 HTML report: htmlcov/index.html"
+
+coverage-full:
+	@echo "📈 Full-tree coverage report (informational, no gate)..."
+	@TMP_CFG="$$(mktemp -d)"; \
+	GITPILOT_CONFIG_DIR="$$TMP_CFG" GITPILOT_LITE_MODE=0 PYTHONWARNINGS="ignore::RuntimeWarning" \
+		$(UV_ENV) $(UV) run --extra dev pytest --cov=gitpilot --cov-report=term --no-cov-on-fail --cov-config=/dev/null; \
+	rm -rf "$$TMP_CFG"
+
+## Type-check gate — Batch P1-C
+## Strict mypy on the modules listed in mypy.ini.  Run via `make typecheck`.
+typecheck:
+	@echo "🔎 Running mypy --strict on gated modules..."
+	@$(UV_ENV) $(UV) run --extra dev mypy --config-file mypy.ini
+
+## Docs site — Batch P4-D
+## mkdocs serve + mkdocs build (requires mkdocs-material; install with
+## `pip install mkdocs mkdocs-material` or via uv).
+docs-serve:
+	@echo "📚 Serving docs at http://127.0.0.1:8001 ..."
+	@$(UV_ENV) $(UV) run --extra docs mkdocs serve -a 127.0.0.1:8001
+
+docs-build:
+	@echo "📚 Building static docs site -> site/ ..."
+	@$(UV_ENV) $(UV) run --extra docs mkdocs build --strict
+
+linkcheck:
+	@echo "🔗 Running in-repo markdown link checker..."
+	@$(UV_ENV) $(UV) run --extra dev pytest tests/test_docs_links.py -q
+
+## Supply chain — Batch P4-E
+## Generate a CycloneDX SBOM for the installed Python deps.  Output is
+## artefacts/sbom.json.  Run via `make sbom`.  CI uploads it alongside
+## the signed wheel.
+sbom:
+	@echo "🧾 Generating CycloneDX SBOM..."
+	@mkdir -p artefacts
+	@$(UV_ENV) $(UV) run --extra dev python -m cyclonedx_py environment \
+		--output-format json \
+		--output-file artefacts/sbom.json \
+		--PEP-639 || \
+		(echo "Falling back to pip freeze SBOM..." && \
+		 $(UV_ENV) $(UV) run --extra dev python scripts/sbom_fallback.py > artefacts/sbom.json)
+	@echo "✅ artefacts/sbom.json"
+
+sbom-verify:
+	@echo "🧾 Verifying artefacts/sbom.json shape..."
+	@$(UV_ENV) $(UV) run --no-dev python -c "import json,sys; d=json.load(open('artefacts/sbom.json')); \
+		assert d.get('bomFormat')=='CycloneDX', 'Not a CycloneDX SBOM'; \
+		print(f'OK: {len(d.get(\"components\", []))} components')"
+
+audit-npm:
+	@echo "🛡  npm audit (dev deps)..."
+	@npm --prefix frontend audit --omit=dev --audit-level=high || \
+		(echo '⚠️  npm audit found issues; see report above.' && exit 1)
 
 ## Benchmark: code generation stress test
 benchmark:
 	@echo "📊 Running code generation benchmark (all tiers)..."
-	@$(UV) run python tests/benchmark.py --model $${GITPILOT_OLLAMA_MODEL:-llama3} --timeout $${BENCHMARK_TIMEOUT:-300}
+	@$(UV_ENV) $(UV) run --extra dev python tests/benchmark.py --model $${GITPILOT_OLLAMA_MODEL:-llama3} --timeout $${BENCHMARK_TIMEOUT:-300}
 
 benchmark-quick:
 	@echo "📊 Running quick benchmark (tier 1 only)..."
-	@$(UV) run python tests/benchmark.py --quick --model $${GITPILOT_OLLAMA_MODEL:-llama3} --timeout $${BENCHMARK_TIMEOUT:-120}
+	@$(UV_ENV) $(UV) run --extra dev python tests/benchmark.py --quick --model $${GITPILOT_OLLAMA_MODEL:-llama3} --timeout $${BENCHMARK_TIMEOUT:-120}
 
 benchmark-report:
 	@echo "📊 Running benchmark with HTML dashboard..."
 	@mkdir -p reports
-	@$(UV) run python tests/benchmark.py \
+	@$(UV_ENV) $(UV) run --extra dev python tests/benchmark.py \
 		--model $${GITPILOT_OLLAMA_MODEL:-llama3} \
 		--timeout $${BENCHMARK_TIMEOUT:-300} \
 		--output reports/benchmark-results.json \
@@ -244,29 +377,29 @@ benchmark-report:
 ## Lint code
 lint:
 	@echo "🔍 Linting with ruff..."
-	@$(UV) run ruff check gitpilot
+	@$(UV_ENV) $(UV) run --extra dev ruff check gitpilot
 
 ## Format code
 fmt:
 	@echo "🎨 Formatting with ruff..."
-	@$(UV) run ruff format gitpilot
+	@$(UV_ENV) $(UV) run --extra dev ruff format gitpilot
 
 ## Build wheel + sdist (includes built frontend)
 build: frontend-build
 	@echo "📦 Building distribution (wheel + sdist)..."
-	@$(UV) run $(PYTHON) -m build
+	@$(UV_ENV) $(UV) run --extra dev $(PYTHON) -m build
 	@echo "✅ Build artifacts are in ./dist"
 
 ## Upload to TestPyPI
 publish-test:
 	@echo "🚚 Uploading to TestPyPI..."
-	@$(UV) run twine upload -r testpypi dist/*
+	@$(UV_ENV) $(UV) run --extra dev twine upload -r testpypi dist/*
 	@echo "✅ Uploaded to TestPyPI"
 
 ## Upload to PyPI
 publish:
 	@echo "🚀 Uploading to PyPI..."
-	@$(UV) run twine upload dist/*
+	@$(UV_ENV) $(UV) run --extra dev twine upload dist/*
 	@echo "✅ Uploaded to PyPI"
 
 ## Clean build artifacts and caches (cross-platform)
@@ -579,12 +712,11 @@ gateway-register:
 	@cd deploy/a2a-mcp && chmod +x register_agent.sh && ./register_agent.sh
 
 # =============================================================================
-# MCP Context Forge stack (additive; default `make run` is unchanged)
+# MCP Context Forge stack (additive services; default `make run` starts it)
 # -----------------------------------------------------------------------------
-# `make install` chains `install-mcp` automatically: on machines with Docker
-# this pre-pulls images so `make run-mcp` is instant. On machines without
-# Docker the script prints a friendly skip message and exits 0, keeping the
-# baseline `install` flow unchanged.
+# `make install` includes this target because GitPilot uses the MCP stack by
+# default. The script is skip-safe and incremental: it only clones/builds what
+# is missing unless MCP_UPDATE=1 or MCP_BUILD=1 is supplied.
 # =============================================================================
 
 ## Pull MCP Context Forge stack images and seed .mcp.env (idempotent)
@@ -592,35 +724,64 @@ install-mcp:
 	@bash scripts/install-mcp.sh
 
 ## Bring up MCP Context Forge + 3 reference MCP servers (postgre, milvus, inspector)
-run-mcp:
+run-mcp: install-mcp
 	@if [ ! -f .mcp.env ]; then \
 		echo "❌ .mcp.env missing. Run 'make install-mcp' first."; exit 1; \
 	fi
+	@if ! command -v docker >/dev/null 2>&1; then \
+		echo "❌ Docker is required because 'make run' starts MCP Context Forge by default."; \
+		echo "   Install/start Docker Desktop, then rerun 'make run'."; \
+		echo "   Or run without MCP:  make run-bare"; \
+		exit 1; \
+	fi
+	@if ! docker compose version >/dev/null 2>&1; then \
+		echo "❌ Docker Compose v2 is required for the MCP stack."; \
+		echo "   Upgrade Docker Desktop or install the compose v2 plugin."; \
+		echo "   Or run without MCP:  make run-bare"; \
+		exit 1; \
+	fi
+	@if ! docker info >/dev/null 2>&1; then \
+		echo "❌ Docker daemon is not running; MCP Context Forge cannot start."; \
+		echo "   Start Docker Desktop, then rerun 'make run'."; \
+		echo "   Or run without MCP:  make run-bare"; \
+		exit 1; \
+	fi
 	@echo "🚀 Starting MCP Context Forge stack..."
 	docker compose --env-file .mcp.env -f docker-compose.mcp.yml --profile mcp up -d
-	@echo "✅ Forge: http://localhost:$${MCP_FORGE_PORT:-4444}"
-	@echo "   Postgre: http://localhost:$${MCP_POSTGRE_PORT:-8080}"
-	@echo "   Inspector: http://localhost:$${MCP_INSPECTOR_PORT:-8081}"
-	@echo "   Milvus (opt-in): docker compose -f docker-compose.mcp.yml --profile milvus up -d"
+	@set -a; . ./.mcp.env; set +a; \
+	forge_port="$${MCP_FORGE_PORT:-4444}"; \
+	echo "⏳ Waiting for MCP Context Forge on http://localhost:$$forge_port/health..."; \
+	ready=0; \
+	for i in $$(seq 1 60); do \
+		if curl -fsS "http://localhost:$$forge_port/health" >/dev/null 2>&1; then \
+			echo "✅ MCP Context Forge reachable after $$((i * 2))s."; \
+			ready=1; \
+			break; \
+		fi; \
+		sleep 2; \
+	done; \
+	if [ $$ready -ne 1 ]; then \
+		echo "❌ MCP Context Forge did not become host-reachable on http://localhost:$$forge_port."; \
+		echo "   Tail logs with: make logs-mcp"; \
+		exit 1; \
+	fi
+	@set -a; . ./.mcp.env; set +a; \
+	echo "✅ Forge: http://localhost:$${MCP_FORGE_PORT:-4444}"; \
+	echo "   Postgre: http://localhost:$${MCP_POSTGRE_PORT:-8080}"; \
+	echo "   Inspector: http://localhost:$${MCP_INSPECTOR_PORT:-8081}"; \
+	echo "   Milvus (opt-in): docker compose --env-file .mcp.env -f docker-compose.mcp.yml --profile milvus up -d"
 	@bash scripts/register-mcp-servers.sh
 
 ## Register the 3 MCP servers with Forge (idempotent; called by run-mcp).
 register-mcp-servers:
 	@bash scripts/register-mcp-servers.sh
 
-## One-shot: GitPilot core + MCP Context Forge stack.
+## One-shot with a forced GitPilot backend restart.
 ##
-## We deliberately do a soft-stop of any stale GitPilot backend BEFORE
-## starting the new one. Reason: when run-all is invoked the user just
-## pulled new code, edited config, or rebuilt an MCP image -- they
-## expect the freshly-pulled code path to actually run, not the
-## leftover backend from the previous attempt. The 'run' target's
-## idempotent skip is great for the dev loop ('make run' twice in a
-## row), but it has to be sidestepped here so we don't silently keep
-## the old code path alive.
-run-all: run-mcp
-	@$(MAKE) --no-print-directory stop-soft
-	@$(MAKE) --no-print-directory run
+## `make run` now starts the MCP stack by default. Keep `run-all` as the
+## explicit "fresh backend" path for users who just pulled code, changed
+## config, or rebuilt MCP images and do not want to reuse an old backend.
+run-all: stop-soft run
 
 ## Local-first: rebuild every MCP image from the cloned mcp-stack/ source
 ## (mirrors HomePilot's docker-compose.mcp.yml `build:` pattern), then run.

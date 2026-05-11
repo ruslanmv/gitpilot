@@ -234,6 +234,36 @@
         "icon": "$(settings-gear)"
       },
       {
+        "command": "gitpilot.runDoctor",
+        "title": "Run Doctor (environment check)",
+        "category": "GitPilot",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "gitpilot.runInitWizard",
+        "title": "Run First-Run Wizard",
+        "category": "GitPilot",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "gitpilot.openApiStability",
+        "title": "Open API Stability Contract",
+        "category": "GitPilot",
+        "icon": "$(book)"
+      },
+      {
+        "command": "gitpilot.openPhaseRunbooks",
+        "title": "Open Phase Runbook…",
+        "category": "GitPilot",
+        "icon": "$(notebook)"
+      },
+      {
+        "command": "gitpilot.showFeatureFlags",
+        "title": "Copy Feature Flag…",
+        "category": "GitPilot",
+        "icon": "$(beaker)"
+      },
+      {
         "command": "gitpilot.ollaBridgePair",
         "title": "Pair with OllaBridge Cloud",
         "category": "GitPilot",

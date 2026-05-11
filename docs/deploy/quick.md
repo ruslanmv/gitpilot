@@ -226,8 +226,8 @@ docker push your-username/gitpilot-backend:latest
 - [Render Docker Deployment](https://render.com/docs/deploy-an-image)
 - [Vercel Environment Variables](https://vercel.com/docs/environment-variables)
 - [Docker Hub](https://hub.docker.com/)
-- [DEPLOYMENT_DOCKER.md](./DEPLOYMENT_DOCKER.md) - Full Docker guide
-- [DEPLOYMENT_RENDER.md](./DEPLOYMENT_RENDER.md) - Render deployment details
+- [docker.md](./docker.md) - Full Docker guide
+- [render.md](./render.md) - Render deployment details
 
 ---
 

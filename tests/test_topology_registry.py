@@ -67,13 +67,14 @@ class TestRegistryIntegrity:
     """Verify the registry itself is well-formed."""
 
     def test_registry_has_expected_topologies(self):
-        assert len(TOPOLOGY_REGISTRY) == 8
+        assert len(TOPOLOGY_REGISTRY) == 9
 
     def test_all_expected_ids_present(self):
         expected = {
             "default", "gitpilot_code",
             "feature_builder", "bug_hunter", "code_inspector",
             "architect_mode", "quick_fix", "lite_mode",
+            "tool_augmented_react",
         }
         assert set(TOPOLOGY_REGISTRY.keys()) == expected
 
@@ -103,9 +104,9 @@ class TestRegistryIntegrity:
 
     def test_system_topologies(self):
         systems = [t for t in TOPOLOGY_REGISTRY.values() if t.category == TopologyCategory.system]
-        assert len(systems) == 3
+        assert len(systems) == 4
         ids = {t.id for t in systems}
-        assert ids == {"default", "gitpilot_code", "lite_mode"}
+        assert ids == {"default", "gitpilot_code", "lite_mode", "tool_augmented_react"}
 
     def test_pipeline_topologies(self):
         pipelines = [t for t in TOPOLOGY_REGISTRY.values() if t.category == TopologyCategory.pipeline]
@@ -264,7 +265,7 @@ class TestClassifier:
 class TestListAndGet:
     def test_list_topologies_returns_all(self):
         result = list_topologies()
-        assert len(result) == 8
+        assert len(result) == 9
         for item in result:
             assert "id" in item
             assert "name" in item
@@ -663,11 +664,12 @@ class TestAPIEndpoints:
         assert resp.status_code == 200
         data = resp.json()
         assert isinstance(data, list)
-        assert len(data) == 8
+        assert len(data) == 9
         ids = {t["id"] for t in data}
         assert "default" in ids
         assert "gitpilot_code" in ids
         assert "feature_builder" in ids
+        assert "tool_augmented_react" in ids
 
     def test_get_topology_by_id(self, client):
         resp = client.get("/api/flow/topology/bug_hunter")

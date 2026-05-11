@@ -45,8 +45,8 @@ This guide explains how to deploy GitPilot with:
 3. **Configure**:
    - **Name**: `gitpilot-backend`
    - **Environment**: `Python 3`
-   - **Build Command**: `pip install uv && uv sync --all-extras`
-   - **Start Command**: `uv run gitpilot serve --host 0.0.0.0 --port $PORT`
+   - **Build Command**: `pip install uv && uv sync --no-dev`
+   - **Start Command**: `uv run --no-dev gitpilot serve --host 0.0.0.0 --port $PORT`
    - **Health Check Path**: `/api/health`
 4. **Set environment variables** (same as above)
 5. **Deploy**

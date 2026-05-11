@@ -20,17 +20,43 @@ def _sanitize_tool_arg(value: Any, fallback_key: str = "description") -> str:
     instead of:
         "README.md"
 
-    This helper unwraps the dict and returns a plain string.
+    Worst case: the LLM copies the schema verbatim with a literal
+    ``"None"`` value (because the tool exposes ``description: None``):
+        {"description": "None", "type": "str"}
+
+    This helper unwraps every variant we have seen in production and
+    returns a plain string.  Raises ``ValueError`` only when the value
+    cannot be recovered (e.g. the LLM passed a list or an empty dict)
+    so the caller can surface a clear error instead of querying
+    GitHub with a stringified Python dict.
     """
     if isinstance(value, str):
         return value
     if isinstance(value, dict):
-        # Try common keys the LLM might stuff the value into
-        for key in (fallback_key, "description", "value", "default", "title"):
-            if key in value and isinstance(value[key], str) and value[key]:
-                return value[key]
-        # Last resort: stringify
-        return str(next(iter(value.values()), ""))
+        # 1. Try the most likely human-supplied keys.
+        for key in (fallback_key, "description", "value", "default", "title", "path"):
+            v = value.get(key)
+            if isinstance(v, str) and v and v.lower() != "none":
+                return v
+        # 2. Any other string field on the dict that isn't the schema
+        #    ``type`` marker.
+        for key, v in value.items():
+            if key in {"type", "anyOf", "format"}:
+                continue
+            if isinstance(v, str) and v and v.lower() != "none":
+                return v
+        raise ValueError(
+            f"tool argument arrived as a schema-shaped dict with no "
+            f"usable value (got keys: {sorted(value.keys())!r}). "
+            f"Pass the parameter as a plain string."
+        )
+    if value is None:
+        raise ValueError("tool argument is required but received None")
+    if isinstance(value, (list, tuple, set)):
+        raise ValueError(
+            f"tool argument expected a string, got a {type(value).__name__}; "
+            f"pass a single value, not a sequence."
+        )
     return str(value)
 
 # Global context for current repository
@@ -173,8 +199,14 @@ def get_directory_structure() -> str:
 
 
 @tool("Read file content")
-def read_file(file_path: str) -> str:
-    """Reads the content of a specific file."""
+def read_file(file_path: Any) -> str:
+    """Read the content of a file from the active repository.
+
+    file_path: the file's path relative to the repository root, e.g.
+    "README.md" or "src/main.py".  Pass a plain string — do **not** pass
+    a dict like ``{"description": "...", "type": "str"}`` (that is the
+    parameter's schema, not its value).
+    """
     file_path = _sanitize_tool_arg(file_path)
     try:
         owner, repo, token, branch = get_repo_context()
@@ -216,8 +248,14 @@ def get_repository_summary() -> str:
 # ---------------------------------------------------------------------------
 
 @tool("Write or update a file in the repository")
-def write_file(file_path: str, content: str, commit_message: str) -> str:
-    """Creates or updates a file in the repository. Provide the full file content."""
+def write_file(file_path: Any, content: Any, commit_message: Any) -> str:
+    """Create or update a file in the repository.
+
+    file_path: path relative to the repo root (plain string, e.g.
+    ``"src/main.py"``).  content: the full new file content (plain
+    string).  commit_message: a short imperative commit summary.  Do
+    **not** wrap any of these in a ``{description, type}`` schema dict.
+    """
     file_path = _sanitize_tool_arg(file_path)
     content = _sanitize_tool_arg(content, fallback_key="value")
     commit_message = _sanitize_tool_arg(commit_message, fallback_key="value")
@@ -241,8 +279,13 @@ def write_file(file_path: str, content: str, commit_message: str) -> str:
 
 
 @tool("Delete a file from the repository")
-def delete_repo_file(file_path: str, commit_message: str) -> str:
-    """Deletes a file from the repository."""
+def delete_repo_file(file_path: Any, commit_message: Any) -> str:
+    """Delete a file from the repository.
+
+    file_path: the path relative to the repo root (plain string, e.g.
+    ``"docs/old.md"``).  commit_message: a short imperative commit
+    summary.  Both are plain strings — never wrap them in a schema dict.
+    """
     file_path = _sanitize_tool_arg(file_path)
     commit_message = _sanitize_tool_arg(commit_message, fallback_key="value")
     try:

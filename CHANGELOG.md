@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — `make run` now starts the MCP Context Forge stack by default
+
+**Heads-up for upgraders.**  Until this release, `make run` started only the
+GitPilot backend and frontend; the MCP stack was opt-in via `make run-mcp`
+or `make run-all`.  As of this release the happy path is:
+
+```bash
+make install     # uv + npm + MCP image cache
+make run         # MCP Context Forge + GitPilot backend + frontend
+```
+
+`make run` now:
+
+* depends on `run-mcp`, which itself depends on `install-mcp`;
+* fails loudly when Docker / Docker Compose v2 / the daemon are missing
+  (with a clear hint pointing at `make run-bare`);
+* polls `http://localhost:${MCP_FORGE_PORT:-4444}/health` after
+  `docker compose up -d`, so it only continues once the gateway is
+  actually reachable by the GitPilot backend and UI.
+
+**No-Docker escape hatch** — added `make run-bare`, which starts only the
+GitPilot backend + frontend.  The MCP Servers tab will show the gateway
+as Unreachable, but the rest of the app is fully functional.  Use this
+on Hugging Face Spaces, CI smoke runs, and any minimal host.
+
+`make run-all` is preserved as the "force-restart the backend" path
+(now equivalent to `stop-soft && run`).  External tooling that called
+it keeps working.
+
+### Other build / docs updates
+
+* `make install` is now opinionated as **runtime-only**: dev/test/build
+  tooling moves to `make install-dev`; docs tooling to
+  `make uv-install-docs`; a `make install-full` superset is available.
+  Existing CI that calls `make test` keeps working — the target now
+  uses `uv run --extra dev pytest` internally.
+* Re-running `make install-mcp` is now incremental: existing clones skip
+  network fetch unless `MCP_UPDATE=1`; existing images skip rebuild
+  unless `MCP_BUILD=1`.
+* Render deploy doc updated: build command is now
+  `pip install uv && uv sync --no-dev` (was `uv sync --all-extras`),
+  start command is `uv run --no-dev gitpilot serve ...`.  Hosted users
+  that relied on dev tooling at runtime should keep the old commands or
+  switch to `--extra dev`.
+* WSL-friendly `uv` defaults — `UV_LINK_MODE=copy` and
+  `UV_CACHE_DIR=.uv-cache` to avoid hardlink fallback warnings on
+  `/mnt/c` checkouts.
+
 ### Added — MCP Context Forge integration (additive, opt-in)
 
 - **`gitpilot/mcp_plugin/`** — Context Forge plugin (forge_client,

@@ -1,0 +1,92 @@
+name: 🔐 Supply chain — SBOM + Sigstore
+
+# Batch P4-E.  Additive workflow that produces a CycloneDX SBOM and
+# Sigstore signatures for every Python distribution published in a
+# GitHub Release.  The existing ``release.yml`` workflow is untouched;
+# this one runs in parallel after a release is created, then uploads
+# the SBOM + signature blobs back to the same release.
+#
+# Dry-run support: pushing a tag or pressing "Run workflow" with
+# ``dry_run: true`` exercises the whole chain (build, SBOM, sign)
+# against a temporary tree.  Nothing is uploaded.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run the pipeline without uploading any artefact"
+        required: false
+        default: "true"
+
+permissions:
+  contents: write    # upload SBOM + sig to the GitHub release
+  id-token: write    # OIDC for Sigstore keyless signing
+
+concurrency:
+  group: supply-chain-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  attestations:
+    name: 🧾 SBOM + 🔏 Sigstore
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐍 Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: 🐍 Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: 📦 Install project + dev extras
+        run: |
+          uv venv
+          uv pip install -e ".[dev]"
+
+      - name: 🛠️ Build wheel + sdist
+        run: uv run python -m build --outdir dist/
+
+      - name: 🧾 Generate CycloneDX SBOM
+        run: |
+          mkdir -p artefacts
+          uv run python scripts/sbom_fallback.py > artefacts/sbom.json
+          uv run python - <<'PY'
+          import json
+          d = json.load(open("artefacts/sbom.json"))
+          assert d["bomFormat"] == "CycloneDX", d
+          print(f"SBOM ok: {len(d['components'])} components")
+          PY
+
+      - name: 🔏 Sign distributions with Sigstore (keyless OIDC)
+        if: ${{ github.event_name == 'release' || github.event.inputs.dry_run == 'false' }}
+        uses: sigstore/gh-action-sigstore-python@v3.0.0
+        with:
+          inputs: ./dist/*.whl ./dist/*.tar.gz
+
+      - name: 📤 Upload SBOM + signatures to the release
+        if: ${{ github.event_name == 'release' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          fail_on_unmatched_files: true
+          files: |
+            artefacts/sbom.json
+            dist/*.sigstore.json
+            dist/*.sigstore
+
+      - name: 📤 Upload artefacts (dry-run / debugging)
+        if: ${{ github.event_name != 'release' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: supply-chain
+          path: |
+            artefacts/sbom.json
+            dist/*
+          retention-days: 7

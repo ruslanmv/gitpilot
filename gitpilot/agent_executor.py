@@ -342,3 +342,75 @@ class StreamingAgentExecutor:
             passed = output.count("\nok")
 
         return passed, failed, skipped
+
+
+    # ---------------------------------------------------------------------
+    # Batch P2-D — additive streaming co-method.
+    #
+    # Adapts the legacy ``execute(...)`` to the :mod:`gitpilot.streaming`
+    # adapter contract.  Yields :class:`StreamEvent` objects so the SSE
+    # route can flush each as it arrives.  Behaviour falls back to a
+    # single ``assistant_chunk`` when the underlying executor has nothing
+    # to stream (e.g. folder-only sessions).  No legacy method is
+    # modified.
+    # ---------------------------------------------------------------------
+    async def run_streaming(self, payload):
+        """Yield ``StreamEvent`` instances for the request *payload*.
+
+        Recognised keys (every key is optional; sensible defaults apply):
+
+        * ``user_message`` (str)  — the user's request
+        * ``repo_full_name`` (str) — ``owner/repo`` for GitHub sessions
+        * ``branch`` (str), ``token`` (str), ``mode`` (str)
+
+        The method itself does not import ``gitpilot.streaming`` at
+        module top-level so the agent executor stays usable in
+        contexts where the streaming layer isn't wired (CLI, tests).
+        """
+        from .streaming import StreamEvent  # local import — keep agent_executor lean
+
+        user_message = str(payload.get("user_message", ""))
+        repo_full_name = str(payload.get("repo_full_name", ""))
+        branch = payload.get("branch")
+        token = payload.get("token")
+        mode = payload.get("mode", "auto")
+
+        yield StreamEvent(
+            event="agent_event",
+            data={"type": "executor_started", "mode": mode},
+        )
+
+        try:
+            result = await self.execute(
+                user_message=user_message,
+                repo_full_name=repo_full_name,
+                branch=branch,
+                token=token,
+                mode=mode,
+            )
+        except Exception as exc:  # noqa: BLE001 — boundary adapter
+            yield StreamEvent(
+                event="error",
+                data={"code": "executor.failed", "message": str(exc)[:240]},
+            )
+            return
+
+        if result is None:
+            yield StreamEvent(
+                event="assistant_chunk",
+                data={"text": "(no plan produced — streaming fallback)"},
+            )
+            return
+
+        plan_text = result.get("summary") if isinstance(result, dict) else None
+        if not plan_text and isinstance(result, dict):
+            plan_text = "\n".join(
+                str(step.get("title") or step) for step in (result.get("steps") or [])[:5]
+            )
+        if plan_text:
+            yield StreamEvent(
+                event="assistant_chunk",
+                data={"text": plan_text},
+            )
+
+        yield StreamEvent(event="agent_event", data={"type": "executor_finished"})

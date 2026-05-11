@@ -70,8 +70,16 @@ dev = [
   "ruff>=0.6",
   "pytest>=8.2",
   "pytest-asyncio>=0.23",
+  "pytest-cov>=5.0",
+  "coverage[toml]>=7.5",
+  "mypy>=1.11",
+  "types-PyYAML>=6.0.12",
   "build>=1.2.1",
   "twine>=5.0.0",
+]
+docs = [
+  "mkdocs>=1.6",
+  "mkdocs-material>=9.5",
 ]
 
 [project.scripts]
@@ -103,3 +111,54 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
+
+# Coverage configuration — Batch P1-B
+#
+# Strategy: rather than gating the entire codebase (which would force fake
+# tests on legacy modules and fight backwards-compatibility), we maintain
+# an explicit allowlist of *gated modules*.  Each module on the list must
+# stay at >= 80 % coverage; new well-tested modules join the list as they
+# land.  This locks current quality without blocking unrelated PRs.
+#
+# Run via `make coverage` or `pytest --cov=gitpilot --cov-report=term-missing`.
+[tool.coverage.run]
+branch = true
+# `include` restricts the report to the gated modules.  The full-tree run
+# is still available via `make coverage-full` for visibility.
+include = [
+  "gitpilot/flags.py",
+  "gitpilot/agents_md.py",
+  "gitpilot/mentions.py",
+  "gitpilot/context_budget.py",
+  "gitpilot/tool_groups.py",
+  "gitpilot/mcp_toggles.py",
+  "gitpilot/modes.py",
+  "gitpilot/slash_commands.py",
+  "gitpilot/checkpoints.py",
+  "gitpilot/rules.py",
+  "gitpilot/sandbox.py",
+  "gitpilot/trusted_folders.py",
+  "gitpilot/errors.py",
+  "gitpilot/doctor.py",
+  "gitpilot/prompt_cache.py",
+  "gitpilot/tool_def_pruner.py",
+  "gitpilot/context_cache.py",
+  "gitpilot/streaming.py",
+  "gitpilot/warmup.py",
+  "gitpilot/init_wizard.py",
+  "gitpilot/_deprecation.py",
+  "gitpilot/plan_guards.py",
+]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_covered = false
+precision = 2
+exclude_lines = [
+  "pragma: no cover",
+  "raise NotImplementedError",
+  "if TYPE_CHECKING:",
+  "if __name__ == .__main__.:",
+  "\\.\\.\\.",
+]

@@ -1,0 +1,80 @@
+site_name: GitPilot
+site_description: Open-source multi-agent AI coding assistant.
+site_author: Ruslan Magana Vsevolodovna
+repo_url: https://github.com/ruslanmv/gitpilot
+edit_uri: edit/main/docs/
+docs_dir: docs
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: deep orange
+      accent: orange
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: deep orange
+      accent: orange
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.tabs
+    - navigation.top
+    - search.highlight
+    - search.share
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - footnotes
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+
+nav:
+  - Home: index.md
+  - Quickstart: quickstart.md
+  - Upgrade catalogue: UPGRADES.md
+  - API stability: API_STABILITY.md
+  - Deploy:
+      - deploy/index.md
+      - Docker: deploy/docker.md
+      - Render: deploy/render.md
+      - Render (detailed): deploy/render-detailed.md
+      - Vercel: deploy/vercel.md
+      - Vercel setup: deploy/vercel-setup.md
+      - Vercel testing: deploy/vercel-testing.md
+      - Quick deploy: deploy/quick.md
+      - Production: deploy/production.md
+      - Production (MCP): deploy/production-mcp.md
+      - Install MCP: deploy/install-mcp.md
+  - Contributing:
+      - Packaging: contributing/packaging.md
+      - Frontend reference: contributing/frontend-code-reference.md
+  - Phase history:
+      - Phase 1 — Foundations: PHASE1.md
+      - Phase 2 — Performance: PHASE2.md
+      - Phase 3-G — First-run wizard: PHASE3_G.md
+  - Other:
+      - GitHub setup: GITHUB_SETUP.md
+      - Enterprise login: ENTERPRISE_LOGIN.md
+      - Patch notes: patch-notes.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/ruslanmv/gitpilot
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/gitcopilot/

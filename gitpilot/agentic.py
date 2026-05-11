@@ -6,7 +6,7 @@ import logging
 from textwrap import dedent
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError as _PydanticValidationError
 from .agent_router import AgentType, RequestCategory, WorkflowPlan, route as route_request
 from .context_pack import build_context_pack
 from .topology_registry import (
@@ -207,6 +207,56 @@ class PlanResult(BaseModel):
     steps: List[PlanStep]
 
 
+# ---------------------------------------------------------------------------
+# Markdown-fence stripper for agent file-content output.
+#
+# The Code Writer agent's system prompt asks it to return ONLY the file
+# content, no markdown code blocks.  In practice every small LLM and
+# even some large ones wrap the output in ``` ... ``` (and sometimes
+# ~~~ ... ~~~).  This helper removes that wrapper before the content
+# is written to disk, including a few real-world variants the previous
+# inline logic missed:
+#
+#   * tilde fences ``~~~python ... ~~~``
+#   * fenced block with a leading language tag (``` ```python ... ``` ```)
+#   * leading or trailing whitespace / blank lines outside the fence
+#   * fenced block embedded in explanatory prose
+#     ("Here is the file:\n```python\n...\n```\nLet me know if…")
+#
+# The fallback is the input unchanged — if no clear single fenced block
+# is found, we leave the content alone (better to commit slightly
+# wrapped content than to corrupt it by guessing).
+# ---------------------------------------------------------------------------
+
+_FENCE_BLOCK_RE = __import__("re").compile(
+    r"(?P<f>```|~~~)[^\n]*\n(?P<body>.*?)\n[ \t]*(?P=f)\s*$",
+    __import__("re").DOTALL | __import__("re").MULTILINE,
+)
+
+
+def _strip_markdown_fences(content: str) -> str:
+    """Strip a wrapping markdown code fence from agent-produced file
+    content.  Returns the bare body when a clean fence pair is found;
+    returns the input unchanged otherwise."""
+    if not isinstance(content, str) or not content:
+        return content
+    stripped = content.strip()
+
+    # Fast path: the whole payload is one fenced block with nothing
+    # before it.  Walk every fence occurrence and pick the largest body
+    # — this gives the right answer when the agent prepends a sentence
+    # like "Here is the file:".
+    best_body: str | None = None
+    for match in _FENCE_BLOCK_RE.finditer(stripped):
+        body = match.group("body")
+        if best_body is None or len(body) > len(best_body):
+            best_body = body
+    if best_body is not None:
+        return best_body
+
+    return stripped
+
+
 async def generate_plan(
     goal: str,
     repo_full_name: str,
@@ -305,7 +355,25 @@ async def generate_plan(
 
     # Propagate context to thread for CrewAI execution
     ctx = contextvars.copy_context()
-    exploration_result = await _guarded_agent_call(ctx, _explore, label="explore_repo")
+    try:
+        exploration_result = await _guarded_agent_call(ctx, _explore, label="explore_repo")
+    except _PydanticValidationError as exc:
+        # Same failure mode as the planner-side validation error: the
+        # explorer's Final Answer didn't match the expected schema, so
+        # CrewAI's converter blew up before we could even ask the
+        # planner anything.  Surface the same friendly message — the
+        # underlying agent-quality issue is identical.
+        logger.warning(
+            "[GitPilot] Explorer emitted output that failed schema "
+            "validation: %s",
+            (exc.errors()[0].get("msg") if exc.errors() else "(no detail)"),
+        )
+        raise RuntimeError(
+            "The repository explorer did not return a usable result.  "
+            "This usually means the LLM lost its instruction format "
+            "(common with smaller / quantised models).  Re-run the "
+            "request, or switch to a stronger LLM via Settings → Provider."
+        ) from exc
 
     exploration_report = exploration_result.raw if hasattr(exploration_result, "raw") else str(exploration_result)
     logger.info("[GitPilot] Exploration complete. Report length: %s chars", len(exploration_report))
@@ -445,15 +513,135 @@ async def generate_plan(
         return plan_crew.kickoff(inputs={"goal": goal})
 
     ctx = contextvars.copy_context()
-    result = await _guarded_agent_call(ctx, _plan, label="generate_plan")
+    try:
+        result = await _guarded_agent_call(ctx, _plan, label="generate_plan")
+    except _PydanticValidationError as exc:
+        # CrewAI tried to coerce the planner's Final Answer into the
+        # ``PlanResult`` schema and failed.  We have seen two real
+        # production payloads cause this:
+        #
+        #   1. The agent emitted a ReAct-format "Thought / Action /
+        #      Action Input" block instead of JSON (its instruction
+        #      formatting collapsed).  CrewAI's converter still tries
+        #      to find a ``{...}`` substring, lands on ``Input: {}``,
+        #      validates that, and Pydantic complains:
+        #        "3 validation errors for PlanResult: goal / summary
+        #         / steps - Field required"
+        #
+        #   2. The agent returned plain refusal prose with an empty
+        #      ``{}`` somewhere in it.
+        #
+        # Both cases are agent-quality failures, not user errors.
+        # Translate to the same friendly RuntimeError surface the
+        # refusal path already uses so the UI shows "couldn't produce
+        # a plan" rather than a 500 with a Pydantic traceback.
+        logger.warning(
+            "[GitPilot] Planner emitted output that failed PlanResult "
+            "validation (%d error%s).  First error: %s",
+            len(exc.errors()),
+            "" if len(exc.errors()) == 1 else "s",
+            (exc.errors()[0].get("msg") if exc.errors() else "(no detail)"),
+        )
+        raise RuntimeError(
+            "The planner did not return a valid plan structure.  This "
+            "usually means the LLM lost its instruction format mid-task "
+            "(common with smaller / quantised models).  Re-run the "
+            "request, or switch to a stronger LLM via Settings → Provider."
+        ) from exc
+
+    # ------------------------------------------------------------------
+    # Post-hoc guards — catch the failure mode where the planner LLM
+    # returns either a refusal or a hallucinated stock plan that has
+    # nothing to do with the user's repository.
+    # ------------------------------------------------------------------
+    from .plan_guards import (
+        PlanHallucinationError,
+        assess_plan,
+        detect_refusal,
+        enrich_plan_with_reads,
+    )
+
+    refusal = detect_refusal(result)
+    if refusal is not None:
+        logger.warning(
+            "[GitPilot] Planner returned a refusal-shaped response (%r); "
+            "treating as failure rather than rendering a hallucinated plan.",
+            refusal,
+        )
+        raise RuntimeError(
+            "The planner refused to produce a plan.  This usually means "
+            "the explorer could not read repository content.  Re-run the "
+            "request, or switch to a stronger LLM via Settings → Provider."
+        )
 
     if hasattr(result, "pydantic") and result.pydantic:
         plan = result.pydantic
         logger.info("[GitPilot] Plan created with %s steps (ref=%s)", len(plan.steps), active_ref)
+
+        # Cross-check the plan against the real repo file list.  Suspicious
+        # placeholder-shaped paths combined with a 0% hit-rate on
+        # MODIFY/DELETE actions strongly suggests the planner hallucinated
+        # a generic stock plan rather than working from the actual repo.
+        try:
+            repo_files: list[str] = []
+            tools_cache = _tools()
+            owner, repo, token, branch = await _resolve_repo_target(tools_cache)
+            if owner and repo:
+                ctx_summary = await tools_cache["get_repository_context_summary"](
+                    owner, repo, token=token, branch=branch,
+                )
+                repo_files = list(ctx_summary.get("all_files", []) or [])
+        except Exception:
+            logger.debug("[GitPilot] could not fetch repo file list for plausibility check", exc_info=True)
+            repo_files = []
+
+        if repo_files:
+            # Small / quantised LLMs (llama3:8b is the canonical case)
+            # consistently drop READ entries from plan steps even when
+            # the step's description clearly says "Read the content of
+            # README.md".  Enrich the plan before the plausibility
+            # check so the Action Plan card surfaces the complete set
+            # of files the agent will touch — both the READ inputs and
+            # the CREATE / MODIFY / DELETE outputs.
+            added_reads = enrich_plan_with_reads(plan, repo_files)
+            if added_reads:
+                logger.info(
+                    "[GitPilot] Auto-injected %d READ entr%s based on plan "
+                    "step descriptions (small-model READ-drop mitigation).",
+                    added_reads, "y" if added_reads == 1 else "ies",
+                )
+
+            assessment = assess_plan(plan, repo_files)
+            if assessment.hallucinated:
+                logger.warning(
+                    "[GitPilot] Plausibility check failed (suspicious=%s, hit_ratio=%.2f); "
+                    "treating plan as hallucinated.",
+                    len(assessment.suspicious_paths), assessment.hit_ratio,
+                )
+                raise PlanHallucinationError(
+                    "The planner produced paths that do not match this "
+                    "repository.  Re-run the request, or switch to a "
+                    "stronger LLM via Settings → Provider.",
+                    assessment=assessment,
+                )
+
         return plan
 
     logger.warning("[GitPilot] Unexpected planning result type: %r", type(result))
     return result
+
+
+async def _resolve_repo_target(tools_cache: dict) -> tuple[str, str, str | None, str | None]:
+    """Best-effort lookup of (owner, repo, token, branch) for the active
+    planning session.  Returns empty strings when the context is not
+    available — callers must tolerate that and skip the plausibility
+    check rather than fail."""
+    try:
+        from .agent_tools import get_repo_context
+        owner, repo, token, branch = get_repo_context()
+        return owner, repo, token, branch
+    except Exception:
+        return "", "", None, None
 
 
 # ============================================================================
@@ -830,13 +1018,7 @@ async def execute_plan_lite(
 
                     ctx = contextvars.copy_context()
                     content = await _guarded_agent_call(ctx, _create, label="create_file")
-                    content = content.strip()
-                    if content.startswith("```"):
-                        lines = content.split("\n")
-                        if lines[-1].strip() == "```":
-                            content = "\n".join(lines[1:-1])
-                        else:
-                            content = "\n".join(lines[1:])
+                    content = _strip_markdown_fences(content)
 
                     await put_file(owner, repo, file.path, content,
                                    f"GitPilot Lite: Create {file.path}", token=token, branch=branch_name)
@@ -1014,14 +1196,7 @@ async def execute_plan(
 
                     ctx = contextvars.copy_context()
                     content = await _guarded_agent_call(ctx, _create, label="exec_create_file")
-
-                    content = content.strip()
-                    if content.startswith("```"):
-                        lines = content.split("\n")
-                        if lines[-1].strip() == "```":
-                            content = "\n".join(lines[1:-1])
-                        else:
-                            content = "\n".join(lines[1:])
+                    content = _strip_markdown_fences(content)
 
                     await put_file(
                         owner,

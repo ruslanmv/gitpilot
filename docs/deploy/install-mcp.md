@@ -1,21 +1,25 @@
 # Installing the MCP Context Forge stack
 
-The GitPilot **MCP Context Forge** is an optional second environment
+The GitPilot **MCP Context Forge** is a bundled sidecar environment
 that runs alongside GitPilot core. When it is up, GitPilot's agents can
 call out to external MCP servers (PostgreSQL schema discovery, Milvus
 vector search, MCP inspector, plus anything else you attach) **as
 first-class tools during code generation**, the way Claude Code uses
 its built-in toolbox.
 
-The whole stack is **opt-in and additive**:
+The stack is **installed by default and runtime-additive**:
 
-* `make install` works exactly as before for everyone. On machines with
-  Docker it now *also* pre-pulls the Forge images. Without Docker, it
-  prints a friendly skip message and exits 0 — the baseline flow is
-  byte-identical.
-* `make run` is unchanged.
-* The new `make run-mcp`, `make run-all`, `make sync-mcp` etc. are the
-  only way to involve Forge.
+* `make install` prepares GitPilot core, the frontend, and the MCP stack.
+  On machines without Docker, MCP preparation prints a friendly skip
+  message and exits 0 so the baseline app install still succeeds.
+* Re-running `make install` is incremental: existing MCP checkouts skip
+  network fetches unless `MCP_UPDATE=1` is set, and existing Docker images
+  skip rebuilds unless `MCP_BUILD=1` is set.
+* `make run` starts the MCP stack first, verifies the Forge health endpoint
+  is host-reachable, then starts GitPilot backend/frontend. Use `make run-all`
+  only when you also want to force-restart an already-running backend.
+* No Docker?  Use `make run-bare` to start GitPilot without the MCP stack;
+  the UI will show the gateway as Unreachable, but everything else works.
 
 ---
 
@@ -23,7 +27,7 @@ The whole stack is **opt-in and additive**:
 
 ```bash
 make install        # backend + frontend + (if Docker) MCP image cache
-make run-all        # GitPilot + Forge + 3 reference servers
+make run            # MCP Context Forge + GitPilot backend/frontend
 # In a browser: Settings → MCP Servers → click "Sync"
 ```
 
@@ -54,7 +58,8 @@ the same approach HomePilot uses for its MCP servers stack: clone each
 upstream repo into `./mcp-stack/` and let Compose build the image from
 its Dockerfile. Branches / refs are pinned via `.mcp.env`
 (`MCP_FORGE_REF`, `MCP_POSTGRE_REF`, `MCP_MILVUS_REF`,
-`MCP_INSPECTOR_REF`) so each `make install-mcp` is reproducible.
+`MCP_INSPECTOR_REF`). Re-run with `MCP_UPDATE=1` when you want to fetch
+those pinned refs again.
 
 `./mcp-stack/` is git-ignored — it's a build-time scratch dir, not part
 of the repo.
@@ -84,10 +89,11 @@ No existing service, route, test or build target is modified.
 | Target | What it does | Needs Docker? |
 |--------|--------------|---------------|
 | `make install` | uv + npm + `install-mcp` (skip-safe) | no |
-| `make install-mcp` | Pull Forge images, seed `.mcp.env` if missing | yes (else no-op) |
-| `make run` | Start GitPilot core (unchanged) | no |
+| `make install-mcp` | Seed `.mcp.env`, clone missing MCP repos, build missing images | yes (else no-op) |
+| `make run` | Start MCP stack, verify Forge, then start GitPilot core/frontend | yes for MCP |
+| `make run-bare` | Start GitPilot core/frontend WITHOUT the MCP stack | no |
 | `make run-mcp` | Start Forge + 3 reference servers | yes |
-| `make run-all` | `run-mcp` then `run` | yes |
+| `make run-all` | Stop stale backend, then `run` | yes |
 | `make stop-mcp` | Stop the MCP stack (volumes preserved) | yes |
 | `make logs-mcp` | Tail logs from the MCP stack | yes |
 | `make sync-mcp` | Trigger `/api/mcp/sync` against running GitPilot | no (curl) |
@@ -99,9 +105,10 @@ No existing service, route, test or build target is modified.
 
 This is the bit that makes it feel like Claude Code:
 
-1. `make run-mcp` brings up Forge with three pre-registered servers.
-2. `make run` starts GitPilot. Its **MCP Servers** tab now shows the
-   gateway as **Connected** instead of *Unreachable*.
+1. `make run` brings up Forge with three pre-registered servers, verifies
+   `http://localhost:4444/health`, and starts GitPilot.
+2. Its **MCP Servers** tab now shows the gateway as **Connected** instead
+   of *Unreachable*.
 3. Click **Sync**. GitPilot calls Forge's registry, mirrors every
    server into its local store, and shows a banner:
    `+3 added · 0 refreshed · 0 orphaned`.
@@ -151,7 +158,7 @@ distinction. A custom server you add (real DNS / IP) is left untouched.
 | Reversible | `uninstall-mcp.sh` cleans containers + volumes + images |
 | Token never committed | `.mcp.env` auto-added to `.gitignore`; tokens generated locally |
 | Skip-safe on minimal hosts | `install-mcp.sh` exits 0 when Docker is absent |
-| One-command happy path | `make install && make run-all` |
+| One-command happy path | `make install && make run` |
 
 ---
 

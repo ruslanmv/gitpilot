@@ -147,14 +147,106 @@ def _run_server(host: str, port: int, reload: bool = False):
     )
 
 
+def _maybe_bootstrap_workspace(workspace: Path) -> None:
+    """Silently run the first-run wizard when the workspace is fresh.
+
+    Triggers only when *all* of these are true:
+
+      - ``.env`` does not exist
+      - ``.gitpilot/`` does not exist
+      - ``AGENTS.md`` does not exist
+
+    Picks a sensible non-interactive default for the model provider:
+
+      - if ``OPENAI_API_KEY`` / ``ANTHROPIC_API_KEY`` / ``WATSONX_API_KEY``
+        is already set in the environment, use that provider;
+      - otherwise default to Ollama (which needs no key) so the user
+        can keep going without picking up extra credentials.
+
+    Errors are logged and swallowed — bootstrapping must never block
+    ``gitpilot serve``.
+    """
+    try:
+        env_file = workspace / ".env"
+        gitpilot_dir = workspace / ".gitpilot"
+        agents_md = workspace / "AGENTS.md"
+        if env_file.exists() or gitpilot_dir.exists() or agents_md.exists():
+            return  # workspace already configured, leave it alone
+
+        # Pick a provider that won't fail on missing credentials.
+        provider = "ollama"
+        api_key = None
+        for env_var, name in (
+            ("ANTHROPIC_API_KEY", "anthropic"),
+            ("OPENAI_API_KEY", "openai"),
+            ("WATSONX_API_KEY", "watsonx"),
+        ):
+            value = os.environ.get(env_var)
+            if value:
+                provider = name
+                api_key = value
+                break
+
+        # Turn the flag on locally; the wizard rejects calls otherwise.
+        from . import flags as _flags
+        from .init_wizard import (
+            FLAG_INIT_WIZARD,
+            WizardAnswers,
+            run_wizard,
+        )
+
+        previous = _flags.is_on(FLAG_INIT_WIZARD)
+        _flags.set_override(FLAG_INIT_WIZARD, True)
+        try:
+            result = run_wizard(
+                workspace,
+                presets=WizardAnswers(
+                    provider=provider,
+                    api_key=api_key,
+                    mode_slug="coder",
+                    workspace_trust=True,
+                ),
+            )
+        finally:
+            _flags.set_override(FLAG_INIT_WIZARD, previous)
+
+        if result.aborted:
+            return
+        console.print(
+            f"[green]✓[/green] First-run bootstrap: wrote "
+            f"{len(result.files_written)} file(s), provider={provider} "
+            f"(re-run with --skip-init to disable)."
+        )
+    except Exception:
+        # Never block serve startup on a bootstrap hiccup.
+        import logging
+        logging.getLogger(__name__).debug("workspace bootstrap failed", exc_info=True)
+
+
 @cli.command()
 def serve(
     host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind"),
     port: int = typer.Option(8000, "--port", "-p", help="Port to bind"),
     reload: bool = typer.Option(False, "--reload", help="Enable auto-reload"),
     open_browser: bool = typer.Option(True, "--open/--no-open", help="Open browser"),
+    skip_init: bool = typer.Option(
+        False, "--skip-init",
+        help="Do not auto-run the first-run wizard when the workspace is fresh.",
+    ),
 ):
-    """Start the GitPilot server with web UI."""
+    """Start the GitPilot server with web UI.
+
+    First-run convenience: when the current workspace has no ``.env``,
+    no ``.gitpilot/`` directory, and no ``AGENTS.md``, we silently
+    bootstrap a minimal config with sensible defaults (Ollama if no
+    provider env var is set; otherwise the matching provider).  The
+    user gets a two-command onboarding — ``pip install`` then
+    ``gitpilot serve`` — without giving up the explicit-flag flow.
+    Pass ``--skip-init`` to opt out.
+    """
+    if not skip_init:
+        _maybe_bootstrap_workspace(Path.cwd())
+
     # Check if port is already in use (prevent double-start)
     import socket
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -262,6 +354,23 @@ def version():
     console.print(f"GitPilot [cyan]v{__version__}[/cyan]")
 
 
+# ---------------------------------------------------------------------------
+# Batch P1-E — `gitpilot doctor` health-check sub-command.  Additive.
+# Removal is a one-line revert.
+# ---------------------------------------------------------------------------
+@cli.command("doctor", help="Run install / environment health checks.")
+def doctor_command(
+    workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w", help="Workspace directory"),
+    offline: bool = typer.Option(False, "--offline", help="Skip every network probe"),
+    json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+) -> None:
+    from .doctor import render_json, render_text, run_checks
+
+    report = run_checks(workspace, offline=offline)
+    console.print(render_json(report) if json_out else render_text(report))
+    raise typer.Exit(code=report.exit_code)
+
+
 def main():
     """Main entry point - run server by default."""
     if len(sys.argv) == 1:
@@ -347,12 +456,88 @@ def run(
 @cli.command("init")
 def init_project(
     path: str = typer.Argument(".", help="Project directory to initialise"),
+    wizard: bool = typer.Option(
+        False, "--wizard",
+        help="Run the interactive first-run wizard (provider, key, mode, trust).",
+    ),
+    provider: str = typer.Option(
+        None, "--provider",
+        help="Wizard preset: anthropic | openai | watsonx | ollama (non-interactive).",
+    ),
+    mode_slug: str = typer.Option(
+        None, "--mode",
+        help="Wizard preset: coder | planner | reviewer (non-interactive).",
+    ),
+    api_key: str = typer.Option(
+        None, "--api-key",
+        help="Wizard preset: API key for the chosen provider (non-interactive).",
+    ),
+    no_trust: bool = typer.Option(
+        False, "--no-trust",
+        help="Wizard preset: skip recording workspace trust.",
+    ),
+    overwrite: bool = typer.Option(
+        False, "--overwrite",
+        help="Wizard: overwrite existing .env / .gitpilot/modes.yaml / AGENTS.md.",
+    ),
 ):
-    """Initialize .gitpilot/ directory with template GITPILOT.md."""
+    """Initialize .gitpilot/ directory with template GITPILOT.md.
+
+    Default behaviour is unchanged.  Pass ``--wizard`` for the
+    Batch P3-G first-run flow that also writes a provider-aware ``.env``,
+    a starter ``.gitpilot/modes.yaml``, and a trust entry.  Provider /
+    mode / key can be pre-supplied for CI use; missing prompts are
+    asked interactively.
+    """
     from pathlib import Path as StdPath
     from .memory import MemoryManager
 
     workspace = StdPath(path).resolve()
+
+    if wizard:
+        from . import flags as _flags
+        from .init_wizard import (
+            FLAG_INIT_WIZARD,
+            WizardAnswers,
+            WizardError,
+            run_wizard,
+        )
+        if not _flags.is_on(FLAG_INIT_WIZARD):
+            console.print(
+                "[yellow]The init_wizard flag is off.[/yellow]  "
+                "Enable it with [bold]GITPILOT_FLAGS=\"init_wizard=1\"[/bold] "
+                "and re-run, or omit --wizard for the legacy init."
+            )
+            raise typer.Exit(code=2)
+        presets = WizardAnswers(
+            provider=provider or "anthropic",
+            api_key=api_key,
+            mode_slug=mode_slug or "coder",
+            workspace_trust=not no_trust,
+            overwrite_env=overwrite,
+            overwrite_modes=overwrite,
+            overwrite_agents_md=overwrite,
+        )
+        # Force non-interactive mode only when all required answers are present.
+        try:
+            result = run_wizard(workspace, presets=presets)
+        except WizardError as err:
+            console.print(f"[red]Wizard error:[/red] {err}")
+            raise typer.Exit(code=1) from err
+
+        # Render the outcome.  Secrets are never printed.
+        for written in result.files_written:
+            console.print(f"[green]wrote[/green]    {written}")
+        for skipped, why in result.files_skipped:
+            console.print(f"[yellow]skipped[/yellow]  {skipped}  ({why})")
+        if result.trust_recorded:
+            console.print("[green]trusted[/green]  workspace recorded in ~/.gitpilot/trusted.json")
+        if result.aborted:
+            console.print(f"[red]aborted[/red]  {result.reason}")
+            raise typer.Exit(code=1)
+        console.print(f"[dim]done in {result.duration_ms} ms[/dim]")
+        return
+
     mgr = MemoryManager(workspace)
     md_path = mgr.init_project()
     console.print(f"[green]Initialized:[/green] {md_path}")

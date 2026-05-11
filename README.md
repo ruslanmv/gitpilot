@@ -368,14 +368,19 @@ The frontend deploys to Vercel. Set `VITE_BACKEND_URL` to your backend.
 ## Contributing
 
 ```bash
-# Backend
-cd gitpilot
-pip install -e ".[dev]"
-pytest
+# Standard install: runtime backend + frontend + MCP stack
+make install
+# WSL note: the Makefile defaults uv to UV_LINK_MODE=copy to avoid
+# hardlink fallback warnings on /mnt/c checkouts. For best install speed,
+# clone the repo inside the native WSL filesystem (for example ~/workspace).
 
-# Frontend
+# Developer/test tooling
+make install-dev
+make test
+
+# Frontend only
 cd frontend
-npm install
+npm ci
 npm run dev
 
 # VS Code Extension
@@ -402,4 +407,12 @@ Apache License 2.0. See [LICENSE](LICENSE).
 </div>
 
 ---
-**MCP Context Forge integration** — GitPilot now ships an opt-in MCP stack (Forge + PostgreSQL / Milvus / Inspector servers) wired into the agents like Claude Code's built-ins; `make run-all` brings everything up. See [INSTALL_MCP.md](./INSTALL_MCP.md) and [PRODUCTION_MCP.md](./PRODUCTION_MCP.md).
+**MCP Context Forge integration** — GitPilot ships a default MCP stack (Forge + PostgreSQL / Milvus / Inspector servers) wired into the agents like Claude Code's built-ins; `make run` brings everything up. No Docker?  Use `make run-bare` to start GitPilot core without MCP. See [docs/deploy/install-mcp.md](./docs/deploy/install-mcp.md) and [docs/deploy/production-mcp.md](./docs/deploy/production-mcp.md).
+
+---
+
+## What's New
+
+> **Enterprise-ready foundation:** GitPilot now ships with safer defaults and production-grade controls, including thread-safe feature flags, strict typing, CI coverage enforcement, structured error handling, and a fast `gitpilot doctor` health check. All upgrades are additive, flag-gated, and disabled by default, so existing installations remain stable while teams can adopt new capabilities gradually.
+
+> **Performance, onboarding, and release confidence:** GitPilot now improves runtime efficiency with prompt caching, lazy tool loading, context memoisation, SSE streaming, and safe model warmup. First-time setup is easier with `gitpilot init --wizard`, which creates configuration files atomically with rollback protection and no secret exposure. The platform also adds a stable public API, deprecation handling, MkDocs documentation, broken-link checks, SBOM generation, npm auditing, and Sigstore-based release signing.
