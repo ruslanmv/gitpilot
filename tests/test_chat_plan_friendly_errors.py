@@ -40,10 +40,10 @@ def _mount_failing_planners(
     """Replace both planner entry points so we can drive the error path
     deterministically — no LLM calls, no GitHub network."""
 
-    async def _bad_main(goal, repo_full_name, token=None, branch_name=None):
+    async def _bad_main(goal, repo_full_name, token=None, branch_name=None, **_kw):
         raise RuntimeError(main_error)
 
-    async def _bad_lite(goal, repo_full_name, token=None, branch_name=None):
+    async def _bad_lite(goal, repo_full_name, token=None, branch_name=None, **_kw):
         if lite_error is None:
             return {"goal": goal, "summary": "lite ok", "steps": []}
         raise RuntimeError(lite_error)
@@ -140,7 +140,7 @@ def test_unknown_runtime_error_is_wrapped_as_500_with_detail(
 def test_planner_success_passes_through(
     client: TestClient, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _ok(goal, repo_full_name, token=None, branch_name=None):
+    async def _ok(goal, repo_full_name, token=None, branch_name=None, **_kw):
         return {"goal": goal, "summary": "real plan", "steps": []}
 
     monkeypatch.setattr(api_module, "generate_plan", _ok)

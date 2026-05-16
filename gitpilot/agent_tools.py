@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from crewai.tools import tool
 
-from .github_api import get_repo_tree, get_file
+from .github_api import get_file, get_repo_tree
 
 
 def _sanitize_tool_arg(value: Any, fallback_key: str = "description") -> str:
@@ -198,28 +198,228 @@ def get_directory_structure() -> str:
         return f"Error: {str(e)}"
 
 
-@tool("Read file content")
-def read_file(file_path: Any) -> str:
-    """Read the content of a file from the active repository.
+# ----------------------------------------------------------------------
+# Windowed-Read defaults — match Claude Code's contract
+# ----------------------------------------------------------------------
+READ_DEFAULT_LIMIT = 2000        # default line cap when limit is omitted
+READ_MAX_LIMIT = 10_000          # hard ceiling — beyond this the caller
+                                 # must paginate via offset
+GLOB_DEFAULT_MAX_RESULTS = 200   # cap for "Find files matching a pattern"
+GLOB_HARD_MAX_RESULTS = 1_000
 
-    file_path: the file's path relative to the repository root, e.g.
-    "README.md" or "src/main.py".  Pass a plain string — do **not** pass
-    a dict like ``{"description": "...", "type": "str"}`` (that is the
-    parameter's schema, not its value).
+
+def _coerce_int(value: Any, default: int) -> int:
+    """CrewAI sometimes passes ints as strings or dicts.  Coerce
+    safely; anything we can't parse falls back to the default.
     """
-    file_path = _sanitize_tool_arg(file_path)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except (TypeError, ValueError):
+            return default
+    if isinstance(value, dict):
+        # Common CrewAI schema-leak: {"description": "...", "type": "int"}
+        return default
+    return default
+
+
+@tool("Find files matching a pattern")
+def list_repository_files_glob(
+    pattern: Any,
+    max_results: Any = GLOB_DEFAULT_MAX_RESULTS,
+) -> str:
+    """Search the repository for files whose path matches a glob.
+
+    pattern: a pathlib-style glob.  Examples:
+        "**/*.py"            all Python files
+        "src/**/*.tsx"       every .tsx under src
+        "**/test_*.py"       all pytest files
+        "README*"            top-level README files
+    max_results: hard cap on the number of paths returned (default 200,
+        max 1000).  When the cap is hit the result is annotated so the
+        caller can refine.
+
+    Output: one path per line.  Path-only — no contents.  Use
+    "Read file content" afterwards if you need bytes.
+    """
+    pattern = _sanitize_tool_arg(pattern, fallback_key="pattern") or "**/*"
+    cap = max(1, min(GLOB_HARD_MAX_RESULTS, _coerce_int(max_results, GLOB_DEFAULT_MAX_RESULTS)))
     try:
         owner, repo, token, branch = get_repo_context()
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            # Pass token + ref explicitly
-            content = loop.run_until_complete(get_file(owner, repo, file_path, token=token, ref=branch))
+            tree = loop.run_until_complete(get_repo_tree(owner, repo, token=token, ref=branch))
         finally:
             loop.close()
 
+        if not tree:
+            return f"Repository is empty - no files. (Branch: {branch})"
+
+        # ``fnmatch`` understands `*`/`?`/`[…]` but treats `**` as a
+        # plain star.  Translate `**` → match-any-segments by walking
+        # the pattern manually for a tighter match on the common case.
+        paths = [item["path"] for item in tree]
+        matches = _glob_match(paths, pattern)
+        truncated = False
+        if len(matches) > cap:
+            matches = matches[:cap]
+            truncated = True
+
+        if not matches:
+            return f"No files matched pattern: {pattern}\n(Branch: {branch}, total files: {len(paths)})"
+
+        header = f"Repository: {owner}/{repo} (Branch: {branch})\nMatching: {pattern}\n"
+        body = "\n".join(f"  - {p}" for p in sorted(matches))
+        footer = f"\n…{cap}+ matches truncated. Refine the pattern.\n" if truncated else ""
+        return f"{header}{body}{footer}"
+    except Exception as e:
+        return f"Error globbing files: {str(e)}"
+
+
+import re as _re
+
+
+def _glob_to_regex(pattern: str) -> "_re.Pattern[str]":
+    """Translate a shell-style glob into a regex with proper `/`-aware
+    semantics — the same contract Claude Code, ripgrep and bash use:
+
+    * ``*``  matches anything **except** ``/``
+    * ``**`` matches anything **including** ``/`` (any number of segments)
+    * ``?``  matches exactly one non-``/`` character
+    * ``[abc]`` character class (passed through to regex)
+    * everything else is literal
+
+    The result is anchored with ``\\A`` and ``\\Z`` so it must match the
+    full path — ``*.py`` will not falsely match ``src/foo.py``.
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(pattern):
+        c = pattern[i]
+        if c == "*":
+            if i + 1 < len(pattern) and pattern[i + 1] == "*":
+                # `**` — match any number of full segments.  When the
+                # following character is `/` consume it as part of the
+                # match (so `**/foo.py` correctly matches `foo.py`
+                # at the repo root).
+                if i + 2 < len(pattern) and pattern[i + 2] == "/":
+                    out.append("(?:.*/)?")
+                    i += 3
+                    continue
+                out.append(".*")
+                i += 2
+                continue
+            out.append("[^/]*")
+            i += 1
+        elif c == "?":
+            out.append("[^/]")
+            i += 1
+        elif c == ".":
+            out.append(r"\.")
+            i += 1
+        elif c == "[":
+            # Character class — pass through up to the matching ']'.
+            j = pattern.find("]", i + 1)
+            if j == -1:
+                out.append(r"\[")
+                i += 1
+            else:
+                out.append(pattern[i : j + 1])
+                i = j + 1
+        else:
+            out.append(_re.escape(c))
+            i += 1
+    return _re.compile(r"\A" + "".join(out) + r"\Z")
+
+
+def _glob_match(paths: List[str], pattern: str) -> List[str]:
+    """Match paths against a glob with `/`-aware semantics."""
+    rx = _glob_to_regex(pattern)
+    return [p for p in paths if rx.match(p)]
+
+
+def _fetch_file_content(file_path: str) -> str | None:
+    """Fetch a file from the active repository using the current context."""
+    owner, repo, token, branch = get_repo_context()
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(
+            get_file(owner, repo, file_path, token=token, ref=branch)
+        )
+    finally:
+        loop.close()
+
+
+@tool("Read file content")
+def read_file(file_path: Any) -> str:
+    """Read the content of a file from the active repository.
+
+    file_path: the file's path relative to the repository root, e.g.
+    "README.md" or "src/main.py". Pass a plain string — do **not** pass
+    a dict like {"description": "...", "type": "str"}.
+    """
+    file_path = _sanitize_tool_arg(file_path)
+    try:
+        content = _fetch_file_content(file_path)
         return f"Content of {file_path}:\n---\n{content}\n---"
+    except Exception as e:
+        return f"Error reading file {file_path}: {str(e)}"
+
+
+@tool("Read file content window")
+def read_file_window(
+    file_path: Any,
+    offset: Any = 0,
+    limit: Any = READ_DEFAULT_LIMIT,
+) -> str:
+    """Read a line window from a file in the active repository.
+
+    This advanced pagination tool is intentionally not included in the
+    default repository tool list. Keep the primary "Read file content"
+    tool's schema simple for smaller ReAct models.
+
+    file_path: the file's path relative to the repository root.
+    offset: 0-indexed line number to start reading from.
+    limit: maximum number of lines to return (default 2000, max 10000).
+    """
+    file_path = _sanitize_tool_arg(file_path)
+    start = max(0, _coerce_int(offset, 0))
+    span = max(1, min(READ_MAX_LIMIT, _coerce_int(limit, READ_DEFAULT_LIMIT)))
+    try:
+        content = _fetch_file_content(file_path)
+        if content is None:
+            return f"Error reading file {file_path}: empty response"
+
+        lines = content.splitlines()
+        total = len(lines)
+        if total == 0:
+            return f"Content of {file_path}:\n---\n(empty file)\n---"
+
+        end = min(total, start + span)
+        slice_text = "\n".join(lines[start:end])
+
+        header = f"Content of {file_path}"
+        if start > 0 or end < total:
+            header += f" (lines {start + 1}-{end} of {total})"
+
+        footer = ""
+        if end < total:
+            remaining = total - end
+            footer = (
+                f"\n…{remaining} more lines. Continue with offset={end} "
+                f"to read further."
+            )
+        return f"{header}:\n---\n{slice_text}\n---{footer}"
     except Exception as e:
         return f"Error reading file {file_path}: {str(e)}"
 
@@ -246,6 +446,137 @@ def get_repository_summary() -> str:
 # ---------------------------------------------------------------------------
 # Write tools — allow agents to create, update, and delete files via GitHub API
 # ---------------------------------------------------------------------------
+
+@tool("Edit a section of a file (exact string replacement)")
+def edit_file(
+    file_path: Any,
+    old_string: Any,
+    new_string: Any,
+    commit_message: Any,
+    expected_occurrences: Any = 1,
+) -> str:
+    """Surgical edit — replace a small section of a file without
+    re-emitting the rest.  Use this whenever you want to fix a bug,
+    rename a symbol, or insert a few lines into a file that already
+    exists.  Never use ``Write or update a file`` to apply a small
+    change — that requires re-emitting the whole file and corrupts
+    long files on small-context models.
+
+    file_path: path relative to the repo root.  Plain string.
+    old_string: the exact text to find — including surrounding
+        indentation and (where needed) preceding/trailing context
+        so the match is unique.  Plain string.
+    new_string: the replacement text.  Plain string.  Pass an empty
+        string to delete the matched block.
+    commit_message: short imperative commit summary.
+    expected_occurrences: how many times old_string is expected to
+        appear in the file.  Default 1.  Pass a higher number to
+        rename an identifier that appears N times; pass -1 to allow
+        any positive number.  When the actual count differs, the
+        edit is refused — widen old_string to disambiguate.
+
+    On success returns "File '<path>' edited (N occurrence(s) replaced).
+    Commit: <sha>".  On failure returns an actionable error message
+    starting with "Error:".
+    """
+    from .edit_backend import EditError, apply_edit
+    from .github_api import get_file, put_file
+
+    file_path = _sanitize_tool_arg(file_path)
+    old_string_s = old_string if isinstance(old_string, str) else _sanitize_tool_arg(old_string, fallback_key="value")
+    new_string_s = new_string if isinstance(new_string, str) else _sanitize_tool_arg(new_string, fallback_key="value")
+    commit_message_s = _sanitize_tool_arg(commit_message, fallback_key="value") or f"Edit {file_path}"
+    expected = _coerce_int(expected_occurrences, 1)
+
+    try:
+        owner, repo, token, branch = get_repo_context()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            current = loop.run_until_complete(
+                get_file(owner, repo, file_path, token=token, ref=branch)
+            )
+            new_content, report = apply_edit(
+                current or "",
+                old_string=old_string_s,
+                new_string=new_string_s,
+                expected_occurrences=expected,
+            )
+            result = loop.run_until_complete(
+                put_file(owner, repo, file_path, new_content, commit_message_s, token=token, branch=branch)
+            )
+        finally:
+            loop.close()
+
+        sha = result.get("commit_sha", "")
+        return (
+            f"File '{file_path}' edited "
+            f"({report.occurrences_replaced} occurrence(s) replaced, "
+            f"{report.bytes_before} → {report.bytes_after} bytes). "
+            f"Commit: {sha[:8]}"
+        )
+    except EditError as e:
+        # User-facing — keep the original message so the agent can
+        # widen the context and retry.
+        return f"Error: {e}"
+    except Exception as e:
+        return f"Error editing file {file_path}: {e}"
+
+
+@tool("Apply a unified diff to a file")
+def apply_patch_to_file(
+    file_path: Any,
+    diff: Any,
+    commit_message: Any,
+) -> str:
+    """Apply a unified-diff patch to a single file.  Use this when the
+    change involves several non-contiguous edits inside one file and
+    a single ``Edit a section of a file`` call wouldn't capture all
+    of them cleanly.
+
+    file_path: path relative to the repo root.
+    diff: a single-file unified diff with one or more @@-hunks.  The
+        helper matches each hunk by *context lines* (the leading-space
+        lines around the change), so line numbers can be stale.
+        Multi-file diffs are not accepted — split them first.
+    commit_message: short imperative commit summary.
+
+    Returns the same shape as ``Edit a section of a file``.
+    """
+    from .edit_backend import EditError, apply_unified_diff
+    from .github_api import get_file, put_file
+
+    file_path = _sanitize_tool_arg(file_path)
+    diff_s = diff if isinstance(diff, str) else _sanitize_tool_arg(diff, fallback_key="value")
+    commit_message_s = _sanitize_tool_arg(commit_message, fallback_key="value") or f"Patch {file_path}"
+
+    try:
+        owner, repo, token, branch = get_repo_context()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            current = loop.run_until_complete(
+                get_file(owner, repo, file_path, token=token, ref=branch)
+            )
+            new_content, report = apply_unified_diff(current or "", diff_s)
+            result = loop.run_until_complete(
+                put_file(owner, repo, file_path, new_content, commit_message_s, token=token, branch=branch)
+            )
+        finally:
+            loop.close()
+
+        sha = result.get("commit_sha", "")
+        return (
+            f"File '{file_path}' patched "
+            f"({report.occurrences_replaced} hunk(s) applied, "
+            f"{report.bytes_before} → {report.bytes_after} bytes). "
+            f"Commit: {sha[:8]}"
+        )
+    except EditError as e:
+        return f"Error: {e}"
+    except Exception as e:
+        return f"Error patching file {file_path}: {e}"
+
 
 @tool("Write or update a file in the repository")
 def write_file(file_path: Any, content: Any, commit_message: Any) -> str:
@@ -332,5 +663,162 @@ def create_repo_branch(branch_name: str) -> str:
 
 
 # Export tools
-REPOSITORY_TOOLS = [list_repository_files, get_directory_structure, read_file, get_repository_summary]
-WRITE_TOOLS = [write_file, delete_repo_file, create_repo_branch]
+@tool("Search file contents")
+def grep_repository(
+    pattern: Any,
+    path_pattern: Any = None,
+    case_insensitive: Any = False,
+    max_results: Any = 100,
+) -> str:
+    """Search the repository for a regex pattern across file contents.
+
+    pattern: a Python-style regular expression.  Use this when you need
+        to find a symbol, string, import, or any other content that
+        listing/globbing won't reveal.
+    path_pattern: optional glob to scope the search (e.g. "**/*.py",
+        "src/**/*.ts").  Same `/`-aware semantics as
+        "Find files matching a pattern".
+    case_insensitive: pass true to match regardless of case.
+    max_results: hard cap (default 100, max 500).  Beyond the cap the
+        result is annotated so you can narrow the search.
+
+    Output: one match per line, formatted ``path:line: matched_text``.
+    """
+    from .grep_backend import (
+        GREP_DEFAULT_MAX_RESULTS,
+        format_result,
+        grep,
+    )
+
+    pattern_str = _sanitize_tool_arg(pattern, fallback_key="pattern") or ""
+    if not pattern_str:
+        return "Error: empty search pattern"
+    path_filter_str = path_pattern if isinstance(path_pattern, str) else None
+    ci_flag = bool(case_insensitive) if not isinstance(case_insensitive, dict) else False
+    cap = _coerce_int(max_results, GREP_DEFAULT_MAX_RESULTS)
+
+    try:
+        owner, repo, token, branch = get_repo_context()
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            tree = loop.run_until_complete(get_repo_tree(owner, repo, token=token, ref=branch))
+        finally:
+            loop.close()
+
+        if not tree:
+            return f"Repository is empty - no files to search. (Branch: {branch})"
+
+        # Pre-filter file list by path glob BEFORE fetching contents —
+        # this is the single biggest cost saving on GitHub-backed repos.
+        paths = [item["path"] for item in tree]
+        if path_filter_str:
+            paths = _glob_match(paths, path_filter_str)
+        if not paths:
+            return (
+                f"No files matched path_pattern: {path_filter_str}\n"
+                f"(Branch: {branch}, total files: {len(tree)})"
+            )
+
+        # Cap the number of files we fetch — at 200 paths × ~50 KB each
+        # that's already 10 MB.  Anything beyond is the caller's job
+        # to narrow with a tighter path_pattern.
+        FILE_FETCH_CAP = 200
+        paths = paths[:FILE_FETCH_CAP]
+
+        # Fetch contents concurrently.  ``get_file`` is async so we batch.
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            async def _gather():
+                import asyncio as _aio
+                async def _fetch(p):
+                    try:
+                        return p, await get_file(owner, repo, p, token=token, ref=branch)
+                    except Exception:
+                        return p, None
+                return await _aio.gather(*(_fetch(p) for p in paths))
+            results = loop.run_until_complete(_gather())
+        finally:
+            loop.close()
+
+        files = {p: c for p, c in results if isinstance(c, str)}
+        if not files:
+            return f"Could not fetch any matching files. (Tried {len(paths)} paths.)"
+
+        rx_path_filter = _glob_to_regex(path_filter_str) if path_filter_str else None
+        result = grep(
+            files,
+            pattern_str,
+            case_insensitive=ci_flag,
+            max_results=cap,
+            path_filter=rx_path_filter,
+        )
+        return format_result(result, pattern=pattern_str)
+    except Exception as e:
+        return f"Error in grep_repository: {str(e)}"
+
+
+@tool("Find code by semantic search")
+def semantic_search(query: Any, k: Any = 8) -> str:
+    """Find the most semantically-similar code chunks for a natural-
+    language query.  Powered by a local on-prem RAG index (ChromaDB
+    + MiniLM-L6-v2 by default; pure-Python hashing fallback when the
+    model isn't available).
+
+    query: what you want to find, in natural language.  Example
+        queries: "authentication middleware", "where do we parse the
+        plan response", "the function that talks to OpenAI".
+    k: how many results to return (default 8, max 20).
+
+    Output: one chunk per result, formatted as ``path:start-end``
+    plus a short excerpt.  Returns "No matches" silently when the
+    index hasn't been built yet — fall back to grep / glob in that
+    case.
+
+    Gated behind the ``rag_retrieval`` flag — when off this tool
+    isn't registered with the agent at all.
+    """
+    from . import flags
+    from .rag import FLAG_RAG_RETRIEVAL, retrieve_top_k
+
+    if not flags.is_on(FLAG_RAG_RETRIEVAL, default=False):
+        return "Semantic search is disabled. Enable the rag_retrieval flag and build the index first."
+
+    q = _sanitize_tool_arg(query, fallback_key="query") or ""
+    if not q:
+        return "Error: empty search query"
+    kk = max(1, min(20, _coerce_int(k, 8)))
+    try:
+        owner, repo, token, branch = get_repo_context()
+        hits = retrieve_top_k(q, owner=owner, repo=repo, branch=branch or "HEAD", k=kk)
+        if not hits:
+            return (
+                f"No semantic matches for: {q}\n"
+                "Either the index hasn't been built yet, or no chunks "
+                "matched.  Try the 'Search file contents' tool instead."
+            )
+        lines = [f"Top {len(hits)} semantic match(es) for: {q}"]
+        for h in hits:
+            excerpt = h.text.replace("\n", " ").strip()[:200]
+            lines.append(f"  {h.path}:{h.start_line}-{h.end_line}  (score={h.score:.2f})")
+            lines.append(f"    {excerpt}")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error in semantic_search: {str(e)}"
+
+
+REPOSITORY_TOOLS = [
+    list_repository_files,
+    get_directory_structure,
+    read_file,
+    get_repository_summary,
+]
+WRITE_TOOLS = [
+    edit_file,              # B8: surgical exact-string replacement
+    apply_patch_to_file,    # B8: unified-diff patch
+    write_file,
+    delete_repo_file,
+    create_repo_branch,
+]
