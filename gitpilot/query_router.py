@@ -40,6 +40,7 @@ INTENT_LITERALS = (
     "create",
     "delete",
     "modify",
+    "execute",
     "unknown",
 )
 
@@ -47,6 +48,13 @@ INTENT_LITERALS = (
 # when several intents match (first hit wins, except "fix" beats
 # "modify" because every fix is a modify but not every modify is a fix).
 _INTENT_TRIGGERS: list[tuple[str, tuple[str, ...]]] = [
+    # "execute" sits above "fix" because "run the failing test" is an
+    # execute request, not a fix request — the user wants to see output,
+    # not change the file.  Triggers kept narrow so "modify the code"
+    # and similar still hit their own intents.
+    ("execute", ("execute ", "run the ", "run hello", "run main",
+                 "invoke ", "launch the script", "launch the program",
+                 "interpret the script", "evaluate the script")),
     ("fix",    ("fix ", "bug", " error", "broken", "doesn't work",
                 "doesnt work", "crash", "traceback", "exception",
                 "fails", "failing", "regression")),
@@ -116,7 +124,7 @@ _SYMBOL_RE = re.compile(r"[A-Z][a-z]+(?:[A-Z][a-z]+)+|[a-z_]+_[a-z_]+|[A-Z]{2,}"
 # Public types
 # ----------------------------------------------------------------------
 
-Intent = Literal["fix", "find", "info", "create", "delete", "modify", "unknown"]
+Intent = Literal["fix", "find", "info", "create", "delete", "modify", "execute", "unknown"]
 EditStrategy = Literal["surgical", "regenerate", "reject"]
 
 
@@ -360,6 +368,12 @@ def classify(
     elif intent == "delete":
         tools = ["Find files matching a pattern",
                  "Delete a file from the repository"]
+    elif intent == "execute":
+        # The EXECUTE action in the planner needs the file's content so
+        # the executor can ship it to the sandbox. Reading is the only
+        # prerequisite — execution itself happens at apply-time, not
+        # plan-time.
+        tools = ["Read file content"]
     else:
         # unknown — default to the safe exploration set.
         tools = [
