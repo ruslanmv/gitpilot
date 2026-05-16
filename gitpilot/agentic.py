@@ -4,7 +4,7 @@ import asyncio
 import contextvars
 import logging
 from textwrap import dedent
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Sequence
 
 from pydantic import BaseModel, Field, ValidationError as _PydanticValidationError
 from .agent_router import AgentType, RequestCategory, WorkflowPlan, route as route_request
@@ -271,7 +271,7 @@ class PlanFile(BaseModel):
     """
     path: str
     action: Literal[
-        "CREATE", "MODIFY", "DELETE", "READ", "INDEX",
+        "CREATE", "MODIFY", "DELETE", "READ", "INDEX", "EXECUTE",
     ] = "MODIFY"
 
 
@@ -290,6 +290,101 @@ class PlanResult(BaseModel):
     goal: str
     summary: str
     steps: List[PlanStep]
+
+
+# ---------------------------------------------------------------------------
+# EXECUTE short-circuit
+#
+# When the user's request is unambiguously "run this file" and the file
+# exists in the repo with a runnable extension, we skip the LLM planner
+# entirely.  Two wins:
+#
+# 1. Correctness — the planner running through a small / ReAct-trained
+#    LLM has been observed to interpret "EXECUTE" as a CrewAI tool name
+#    rather than a JSON action value, fail repeatedly, then downgrade
+#    the action to "READ".  A deterministic plan eliminates that
+#    failure class entirely.
+#
+# 2. Latency — no LLM round-trip; the next request reaches the
+#    executor in milliseconds and the user sees an execution card
+#    almost immediately.
+
+_RUNNABLE_EXTENSIONS = frozenset({"py", "js", "mjs", "cjs", "sh", "bash"})
+
+
+def _is_runnable_path(path: str) -> bool:
+    """True when ``path`` ends in a sandbox-runnable extension."""
+    if "." not in path:
+        return False
+    ext = path.rsplit(".", 1)[-1].lower()
+    return ext in _RUNNABLE_EXTENSIONS
+
+
+_MATPLOTLIB_HINTS = (
+    "import matplotlib", "from matplotlib", "plt.show", "pyplot",
+)
+
+
+def _looks_like_matplotlib(code: str) -> bool:
+    """Quick check for matplotlib usage so we can inject the Agg backend
+    only when needed.  False positives are harmless (Agg works for any
+    Python script); false negatives cause the sandbox to hang on
+    ``plt.show()``, which is what this guard prevents."""
+    lowered = code.lower()
+    return any(hint in lowered for hint in _MATPLOTLIB_HINTS)
+
+
+def try_execute_short_circuit(
+    *,
+    goal: str,
+    intent: Optional[str],
+    target_files: Sequence[str],
+    repo_files: Sequence[str],
+) -> Optional["PlanResult"]:
+    """Return a deterministic EXECUTE plan when one is unambiguous.
+
+    Triggers when:
+      * routing intent is ``execute``
+      * exactly one runnable file is implied — either named explicitly
+        in ``target_files`` (router-verified to exist) or the only
+        runnable file in the repo when the user said "run the script"
+        without naming one.
+
+    Returns ``None`` to fall through to the LLM planner otherwise.
+    """
+    if (intent or "").lower() != "execute":
+        return None
+
+    candidates: List[str] = [p for p in target_files if _is_runnable_path(p)]
+    if not candidates:
+        # User said "run the script" without naming a file.  Resolve
+        # by uniqueness: a single runnable in the repo wins; anything
+        # else falls through to the LLM so it can ask.
+        repo_runnable = [p for p in repo_files if _is_runnable_path(p)]
+        if len(repo_runnable) == 1:
+            candidates = repo_runnable
+    if len(candidates) != 1:
+        return None
+
+    path = candidates[0]
+    return PlanResult(
+        goal=goal,
+        summary=(
+            f"Run {path} in the configured sandbox and report stdout, "
+            f"stderr, exit code, and duration."
+        ),
+        steps=[PlanStep(
+            step_number=1,
+            title=f"Run {path}",
+            description=(
+                f"Execute {path} through the active sandbox backend "
+                f"(Local subprocess or MatrixLab Runner). The executor "
+                f"reads the file at apply time and POSTs to /api/sandbox/run."
+            ),
+            files=[PlanFile(path=path, action="EXECUTE")],
+            risks=None,
+        )],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -664,7 +759,8 @@ async def generate_plan(
                     {{"path": "file/path.py", "action": "CREATE"}},
                     {{"path": "another/file.py", "action": "MODIFY"}},
                     {{"path": "old/file.py", "action": "DELETE"}},
-                    {{"path": "README.md", "action": "READ"}}
+                    {{"path": "README.md", "action": "READ"}},
+                    {{"path": "hello.py", "action": "EXECUTE"}}
                   ],
                   "risks": "Optional risk description or null"
                 }}
@@ -676,7 +772,13 @@ async def generate_plan(
             - STRICTLY NO COMMENTS allowed (no // or #).
             - Double quotes around all keys and string values.
             - No trailing commas.
-            - "action" MUST be exactly one of: "CREATE", "MODIFY", "DELETE", "READ"
+            - "action" MUST be exactly one of: "CREATE", "MODIFY", "DELETE", "READ", "EXECUTE"
+              (use EXECUTE to run an existing runnable file — .py, .js, .sh — through the configured sandbox)
+            - "EXECUTE" is a JSON STRING VALUE only.  It is NOT a tool name.
+              Never write "Action: EXECUTE" or attempt to invoke EXECUTE as a tool —
+              your tools are exactly the ones listed above (repository inspection +
+              file reading).  Execution happens AFTER you return this JSON plan;
+              the GitPilot executor reads it and runs the file through the sandbox.
             - "step_number" MUST be an integer starting from 1
             - "risks" can be either a string or null (the JSON null value, without quotes)
             - Do NOT wrap the JSON in markdown code fences
@@ -693,7 +795,7 @@ async def generate_plan(
               - step_number: integer
               - title: string
               - description: string
-              - files: array of { "path": string, "action": "CREATE" | "MODIFY" | "DELETE" | "READ" }
+              - files: array of { "path": string, "action": "CREATE" | "MODIFY" | "DELETE" | "READ" | "EXECUTE" }
               - risks: string or null
             The response must contain ONLY pure JSON (no markdown, no prose, no code fences, NO COMMENTS).
         """),
@@ -1196,6 +1298,11 @@ async def execute_plan_lite(
 
     for step in plan.steps:
         step_summary = f"Step {step.step_number}: {step.title}"
+        # Structured execution results for this step — emitted by the
+        # EXECUTE branch so the frontend can render an execution card
+        # (command, sandbox, exit_code, stdout, stderr, duration) rather
+        # than the plain ``summary`` string.
+        step_executions: List[Dict[str, Any]] = []
 
         for file in step.files:
             try:
@@ -1299,7 +1406,10 @@ async def execute_plan_lite(
                 logger.exception("Lite: Error processing %s: %s", file.path, e)
                 step_summary += f"\n  ! Error: {file.path}: {e}"
 
-        execution_steps.append({"step_number": step.step_number, "summary": step_summary})
+        step_record: Dict[str, Any] = {"step_number": step.step_number, "summary": step_summary}
+        if step_executions:
+            step_record["executions"] = step_executions
+        execution_steps.append(step_record)
 
     return {
         "status": "completed",
@@ -1374,6 +1484,11 @@ async def execute_plan(
 
     for step in plan.steps:
         step_summary = f"Step {step.step_number}: {step.title}"
+        # Structured execution results for this step — emitted by the
+        # EXECUTE branch so the frontend can render an execution card
+        # (command, sandbox, exit_code, stdout, stderr, duration) rather
+        # than the plain ``summary`` string.
+        step_executions: List[Dict[str, Any]] = []
 
         for file in step.files:
             try:
@@ -1533,6 +1648,116 @@ async def execute_plan(
                 elif file.action == "READ":
                     step_summary += f"\n  ℹ️ READ-only: inspected {file.path}"
 
+                elif file.action == "EXECUTE":
+                    # Pull the file's content from the active branch and
+                    # ship it to whichever sandbox the user selected in
+                    # Settings → Sandbox (Local subprocess or MatrixLab
+                    # Runner). Both reach the runner through the same
+                    # /api/sandbox/run handler so behaviour matches the
+                    # Run button on chat code blocks.
+                    #
+                    # The structured ``execution`` dict appended to the
+                    # step record is what the frontend renders as an
+                    # execution card (command, sandbox, exit code,
+                    # stdout, stderr, duration) instead of a plain
+                    # answer string.
+                    execution_card: Dict[str, Any] = {
+                        "path": file.path,
+                        "status": "pending",
+                    }
+                    try:
+                        content = await get_file(
+                            owner, repo, file.path, token=token, ref=branch_name,
+                        )
+                        ext = file.path.rsplit(".", 1)[-1].lower() if "." in file.path else ""
+                        lang_map = {
+                            "py": "python", "js": "javascript", "mjs": "javascript",
+                            "cjs": "javascript", "sh": "bash", "bash": "bash",
+                        }
+                        language = lang_map.get(ext)
+                        command_str = {
+                            "python": f"python {file.path}",
+                            "javascript": f"node {file.path}",
+                            "bash": f"bash {file.path}",
+                        }.get(language or "")
+                        execution_card.update(
+                            language=language,
+                            command=command_str,
+                        )
+                        if language is None:
+                            execution_card.update(status="skipped", reason=(
+                                f"extension {ext!r} is not runnable in the sandbox"
+                            ))
+                            step_summary += (
+                                f"\n  ⚠️ EXECUTE skipped: {file.path} extension "
+                                f"{ext!r} is not runnable in the sandbox"
+                            )
+                        else:
+                            # Matplotlib's default backend opens a window — that
+                            # hangs forever in a headless sandbox.  Prepend an
+                            # ``import os`` shim that forces the Agg backend so
+                            # plots are renderable to file but plt.show() is a
+                            # no-op.  Only injected when we can see matplotlib
+                            # imports so non-plotting scripts run untouched.
+                            shipped_code = content
+                            if language == "python" and _looks_like_matplotlib(content):
+                                shipped_code = (
+                                    'import os as _gp_os\n'
+                                    '_gp_os.environ.setdefault("MPLBACKEND", "Agg")\n'
+                                ) + content
+                                execution_card["matplotlib_shim"] = True
+
+                            from .sandbox_api import (
+                                SandboxRunRequest,
+                                api_sandbox_run,
+                            )
+                            result = await api_sandbox_run(
+                                SandboxRunRequest(language=language, code=shipped_code),
+                            )
+                            execution_card.update(
+                                status="completed" if result.exit_code == 0 else "failed",
+                                sandbox=result.backend,
+                                exit_code=result.exit_code,
+                                stdout=result.stdout or "",
+                                stderr=result.stderr or "",
+                                duration_ms=result.duration_ms,
+                                truncated=bool(result.truncated),
+                                timed_out=bool(result.timed_out),
+                            )
+                            ok_glyph = "✓" if result.exit_code == 0 else "✗"
+                            step_summary += (
+                                f"\n  {ok_glyph} EXECUTE {file.path} on "
+                                f"{result.backend} (exit {result.exit_code}, "
+                                f"{result.duration_ms} ms)"
+                            )
+                            if result.stdout:
+                                stdout_preview = result.stdout.strip()
+                                if len(stdout_preview) > 1000:
+                                    stdout_preview = stdout_preview[:1000] + "…"
+                                step_summary += f"\n     stdout: {stdout_preview}"
+                            if result.stderr:
+                                stderr_preview = result.stderr.strip()
+                                if len(stderr_preview) > 500:
+                                    stderr_preview = stderr_preview[:500] + "…"
+                                step_summary += f"\n     stderr: {stderr_preview}"
+                    except HTTPException as exc:
+                        execution_card.update(
+                            status="failed",
+                            error=f"{exc.detail} (HTTP {exc.status_code})",
+                        )
+                        step_summary += (
+                            f"\n  ✗ EXECUTE {file.path} failed: "
+                            f"{exc.detail} (HTTP {exc.status_code})"
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.exception(
+                            "Failed to execute file %s in step %s: %s",
+                            file.path, step.step_number, exc,
+                        )
+                        execution_card.update(status="failed", error=str(exc))
+                        step_summary += f"\n  ✗ EXECUTE {file.path} failed: {exc}"
+                    step_executions.append(execution_card)
+
                 elif file.action == "INDEX":
                     # Batch B9 — triggers the per-repo RAG index build.
                     summary_line = await _execute_index_action(
@@ -1549,7 +1774,10 @@ async def execute_plan(
                 )
                 step_summary += f"\n  ✗ Error processing {file.path}: {str(e)}"
 
-        execution_steps.append({"step_number": step.step_number, "summary": step_summary})
+        step_record: Dict[str, Any] = {"step_number": step.step_number, "summary": step_summary}
+        if step_executions:
+            step_record["executions"] = step_executions
+        execution_steps.append(step_record)
 
     return {
         "status": "completed",
