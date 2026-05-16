@@ -352,7 +352,7 @@ jobs:
           EOF
 
           # Start services
-          docker-compose -f docker-compose.test.yml up -d
+          docker compose -f docker-compose.test.yml up -d
 
           # Wait for frontend
           echo "⏳ Waiting for services to be ready..."
@@ -363,8 +363,8 @@ jobs:
             echo "✅ Backend health check passed"
           else
             echo "❌ Backend health check failed"
-            docker-compose -f docker-compose.test.yml logs
-            docker-compose -f docker-compose.test.yml down
+            docker compose -f docker-compose.test.yml logs
+            docker compose -f docker-compose.test.yml down
             exit 1
           fi
 
@@ -373,13 +373,13 @@ jobs:
             echo "✅ Frontend serves correctly"
           else
             echo "❌ Frontend check failed"
-            docker-compose -f docker-compose.test.yml logs
-            docker-compose -f docker-compose.test.yml down
+            docker compose -f docker-compose.test.yml logs
+            docker compose -f docker-compose.test.yml down
             exit 1
           fi
 
           echo "✅ Integration test passed!"
-          docker-compose -f docker-compose.test.yml down
+          docker compose -f docker-compose.test.yml down
 
   summary:
     name: 📊 Deployment Summary

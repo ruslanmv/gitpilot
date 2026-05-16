@@ -542,7 +542,7 @@ export default function SettingsModal({ onClose }) {
                     value={sandbox.matrixlab_url || ""}
                     onChange={(e) => setSandbox({ ...sandbox, matrixlab_url: e.target.value })}
                     onBlur={() => updateSandbox({ matrixlab_url: sandbox.matrixlab_url })}
-                    placeholder="http://localhost:8000"
+                    placeholder="http://localhost:8765"
                     style={{
                       fontSize: 12, padding: "4px 6px",
                       background: "#14152a", color: "#e6e8ff",

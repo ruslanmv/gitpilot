@@ -166,11 +166,111 @@ export default function AssistantMessage({ answer, plan, executionLog, planStatu
                 <li key={s.step_number} style={styles.executionStep}>
                   <span style={styles.stepNumber}>Step {s.step_number}</span>
                   <span style={styles.stepSummary}>{s.summary}</span>
+                  {Array.isArray(s.executions) && s.executions.map((ex, i) => (
+                    <ExecutionCard key={i} ex={ex} />
+                  ))}
                 </li>
               ))}
             </ul>
           </div>
         </section>
+      )}
+    </div>
+  );
+}
+
+function ExecutionCard({ ex }) {
+  // Renders a structured execution result emitted by the EXECUTE
+  // branch of agentic.execute_plan.  Distinguishes pending / completed /
+  // failed / skipped at a glance, exposes the command + sandbox metadata
+  // operators care about, and folds long stdout/stderr into <details>
+  // disclosures so a single Print(...) line doesn't push the whole
+  // conversation off-screen.
+  const status = ex.status || "pending";
+  const tone =
+    status === "completed" ? { color: "#86efac", bg: "#0d3320", border: "#166534" } :
+    status === "failed"    ? { color: "#fca5a5", bg: "#3d1111", border: "#7f1d1d" } :
+    status === "skipped"   ? { color: "#fde68a", bg: "#3d2d11", border: "#854d0e" } :
+                             { color: "#93c5fd", bg: "#1e3a5f", border: "#3B82F6" };
+  return (
+    <div style={{
+      marginTop: 10, padding: 12, borderRadius: 8,
+      background: "#0d0e17", border: `1px solid ${tone.border}`,
+      fontFamily: "system-ui, sans-serif", fontSize: 13,
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+        <div>
+          <strong style={{ fontFamily: "ui-monospace, monospace" }}>{ex.path}</strong>
+          {ex.sandbox && (
+            <span style={{ marginLeft: 8, fontSize: 11, color: "#9092b5" }}>
+              · {ex.sandbox}
+            </span>
+          )}
+        </div>
+        <span style={{
+          padding: "2px 8px", borderRadius: 10,
+          fontSize: 11, fontWeight: 600,
+          background: tone.bg, color: tone.color,
+          border: `1px solid ${tone.border}`,
+        }}>
+          {status === "completed" && `Exit ${ex.exit_code} · ${ex.duration_ms} ms`}
+          {status === "failed" && (typeof ex.exit_code === "number"
+            ? `Failed · exit ${ex.exit_code}` : "Failed")}
+          {status === "skipped" && "Skipped"}
+          {status === "pending" && "Running…"}
+        </span>
+      </div>
+      {ex.command && (
+        <div style={{
+          fontSize: 12, padding: "6px 10px", borderRadius: 4,
+          background: "#000", color: "#93c5fd",
+          fontFamily: "ui-monospace, SFMono-Regular, monospace",
+          marginBottom: 8,
+        }}>
+          $ {ex.command}
+        </div>
+      )}
+      {ex.matplotlib_shim && (
+        <div style={{ fontSize: 11, color: "#9092b5", marginBottom: 6 }}>
+          ⓘ Matplotlib detected — Agg backend forced so the headless sandbox doesn't hang on <code>plt.show()</code>.
+        </div>
+      )}
+      {ex.timed_out && (
+        <div style={{ fontSize: 11, color: "#fca5a5", marginBottom: 6 }}>
+          ⏱ Timed out before completion.
+        </div>
+      )}
+      {ex.stdout && (
+        <details open style={{ marginTop: 4 }}>
+          <summary style={{ cursor: "pointer", fontSize: 11, color: "#86efac" }}>stdout</summary>
+          <pre style={{
+            margin: "6px 0 0", padding: "8px 10px", borderRadius: 4,
+            background: "#000", color: "#d4d4d8", fontSize: 12,
+            fontFamily: "ui-monospace, monospace",
+            maxHeight: 240, overflow: "auto", whiteSpace: "pre-wrap",
+          }}>{ex.stdout}</pre>
+        </details>
+      )}
+      {ex.stderr && (
+        <details open={status === "failed"} style={{ marginTop: 4 }}>
+          <summary style={{ cursor: "pointer", fontSize: 11, color: "#fca5a5" }}>stderr</summary>
+          <pre style={{
+            margin: "6px 0 0", padding: "8px 10px", borderRadius: 4,
+            background: "#000", color: "#fca5a5", fontSize: 12,
+            fontFamily: "ui-monospace, monospace",
+            maxHeight: 240, overflow: "auto", whiteSpace: "pre-wrap",
+          }}>{ex.stderr}</pre>
+        </details>
+      )}
+      {ex.error && !ex.stderr && (
+        <div style={{ fontSize: 12, color: "#fca5a5", marginTop: 4 }}>
+          {ex.error}
+        </div>
+      )}
+      {ex.reason && (
+        <div style={{ fontSize: 12, color: "#9092b5", marginTop: 4 }}>
+          {ex.reason}
+        </div>
       )}
     </div>
   );

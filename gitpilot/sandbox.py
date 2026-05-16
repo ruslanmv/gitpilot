@@ -17,7 +17,7 @@ Sandbox backends
 * :class:`SubprocessSandbox` — host subprocess with cwd jail, env
   scrub, output cap, blocked-pattern checks.  Always available.
 * :class:`MatrixLabSandbox` — delegates execution to a MatrixLab
-  Runner over HTTP (default ``http://localhost:8000``).  Containerised
+  Runner over HTTP (default ``http://localhost:8765``).  Containerised
   isolation: ephemeral filesystem, resource limits, no host access.
 
 Selection precedence::
@@ -61,7 +61,11 @@ ENV_MATRIXLAB_IMAGE = "GITPILOT_MATRIXLAB_IMAGE"
 
 DEFAULT_TIMEOUT_SEC = 120
 MAX_OUTPUT_BYTES = 512_000
-DEFAULT_MATRIXLAB_URL = "http://localhost:8000"
+# MatrixLab's docker-compose binds to host :8765 (not :8000) so the
+# Runner doesn't collide with GitPilot's own FastAPI backend on :8000.
+# Operators with an older MatrixLab install on :8000 can override with
+# GITPILOT_MATRIXLAB_URL or via Settings → Sandbox.
+DEFAULT_MATRIXLAB_URL = "http://localhost:8765"
 
 # Conservative deny patterns reused across backends.
 BLOCKED_PATTERNS: Tuple[str, ...] = (
@@ -331,7 +335,7 @@ class MatrixLabSandbox(Sandbox):
     container, the workspace is mounted read-write into the container's
     scratch directory, and resource limits are enforced by the runner.
 
-    The runner endpoint defaults to ``http://localhost:8000``; override
+    The runner endpoint defaults to ``http://localhost:8765``; override
     via the ``GITPILOT_MATRIXLAB_URL`` environment variable or by
     passing ``base_url`` to the constructor.
 

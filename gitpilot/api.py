@@ -322,6 +322,18 @@ try:
 except Exception:  # noqa: BLE001
     logger.exception("Sandbox API failed to mount; Run button will be disabled")
 
+# MatrixLab addon admin API (Settings → Sandbox → Install MatrixLab modal).
+# Sits on top of /api/sandbox/* and normalises every response so the UI
+# never has to interpret raw Docker / HTTP errors.  Same non-fatal mount
+# pattern as the sandbox router.
+try:
+    from .matrixlab_admin_api import router as matrixlab_admin_router
+
+    app.include_router(matrixlab_admin_router)
+    logger.info("MatrixLab admin API enabled (mounting /api/matrixlab/* endpoints)")
+except Exception:  # noqa: BLE001
+    logger.exception("MatrixLab admin API failed to mount; install modal will be disabled")
+
 # GitPilot-as-MCP-server (turns GitPilot into an MCP server other agents
 # can drive). Off by default; mount only when GITPILOT_EXPOSE_MCP_SERVER=true.
 try:
@@ -1435,6 +1447,26 @@ async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Hea
                 routing_hint = render_planner_hint(decision)
                 routing_intent = decision.intent
                 logger.info("[router] %s", decision.rationale)
+
+                # EXECUTE short-circuit — skip the LLM when "run this
+                # file" is unambiguous.  Cheap, deterministic, and
+                # avoids the small-LLM failure mode where the planner
+                # tries to call EXECUTE as a CrewAI tool, fails, then
+                # downgrades to READ — the bug pattern we documented
+                # in agentic.try_execute_short_circuit's docstring.
+                from .agentic import try_execute_short_circuit
+                short = try_execute_short_circuit(
+                    goal=req.goal,
+                    intent=routing_intent,
+                    target_files=decision.target_files or [],
+                    repo_files=repo_paths,
+                )
+                if short is not None:
+                    logger.info(
+                        "[router] EXECUTE short-circuit: skipping LLM planner; "
+                        "target=%s", short.steps[0].files[0].path,
+                    )
+                    return short
         except Exception as _route_err:  # pragma: no cover - defensive
             logger.debug("[router] skipped: %s", _route_err)
             routing_hint = None
