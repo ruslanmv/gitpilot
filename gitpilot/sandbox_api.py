@@ -347,7 +347,7 @@ async def _run_via_matrixlab_code_endpoint(
             status_code=400,
             detail=f"language {lang!r} is not supported by MatrixLab /code/run",
         )
-    base_url = (cfg.matrixlab_url or "http://localhost:8000").rstrip("/")
+    base_url = (cfg.matrixlab_url or "http://localhost:8765").rstrip("/")
     headers = {"Content-Type": "application/json"}
     if cfg.matrixlab_token:
         headers["Authorization"] = f"Bearer {cfg.matrixlab_token}"
@@ -413,11 +413,17 @@ DEFAULT_RUNNER_IMAGE = os.environ.get(
 )
 # Sandbox images the Runner spawns per language.  Pulling these at
 # install time means the first /code/run from the chat UI doesn't
-# stall on a multi-hundred-MB image fetch.
+# stall on a multi-hundred-MB image fetch.  Names match the
+# ``$(REGISTRY)/$(DOCKERHUB_NAMESPACE)/matrix-lab-sandbox-*`` tags
+# the matrixlab repo's Makefile builds and pushes via the
+# ``docker-publish`` GitHub workflow.
+_MATRIXLAB_NAMESPACE = os.environ.get(
+    "GITPILOT_MATRIXLAB_NAMESPACE", "ruslanmv",
+)
 DEFAULT_SANDBOX_IMAGES = [
-    "matrix-lab-sandbox-python:latest",
-    "matrix-lab-sandbox-node:latest",
-    "matrix-lab-sandbox-utils:latest",
+    f"{_MATRIXLAB_NAMESPACE}/matrix-lab-sandbox-python:latest",
+    f"{_MATRIXLAB_NAMESPACE}/matrix-lab-sandbox-node:latest",
+    f"{_MATRIXLAB_NAMESPACE}/matrix-lab-sandbox-utils:latest",
 ]
 DEFAULT_CONTAINER_NAME = os.environ.get(
     "GITPILOT_MATRIXLAB_CONTAINER",
@@ -506,7 +512,7 @@ async def _docker_image_present(name: str) -> bool:
 async def _matrixlab_running() -> bool:
     """Probe the configured Runner URL for a healthy /health response."""
     cfg = get_settings().sandbox
-    base = (cfg.matrixlab_url or "http://localhost:8000").rstrip("/")
+    base = (cfg.matrixlab_url or "http://localhost:8765").rstrip("/")
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.get(f"{base}/health")
@@ -612,9 +618,11 @@ async def api_matrixlab_start() -> MatrixLabLifecycleResponse:
 
     steps: List[_StepResult] = []
     # Determine which port to expose locally — derive it from the
-    # configured matrixlab_url so 'Start' agrees with /status.
+    # configured matrixlab_url so 'Start' agrees with /status.  The
+    # 8765 fallback matches MatrixLab's own docker-compose default,
+    # which moved off :8000 to avoid clashing with GitPilot's backend.
     cfg = get_settings().sandbox
-    port = 8000
+    port = 8765
     try:
         from urllib.parse import urlparse
 
@@ -622,7 +630,7 @@ async def api_matrixlab_start() -> MatrixLabLifecycleResponse:
         if parsed.port:
             port = int(parsed.port)
     except Exception:  # noqa: BLE001
-        port = 8000
+        port = 8765
 
     # Does a container with the canonical name already exist?
     inspect = await _run_shell(
@@ -634,11 +642,32 @@ async def api_matrixlab_start() -> MatrixLabLifecycleResponse:
         # Container exists — start it if stopped, otherwise leave it be.
         steps.append(await _run_shell(["docker", "start", DEFAULT_CONTAINER_NAME], timeout=60))
     else:
+        # Docker-in-Docker bind-mount fix.  The runner writes the per-
+        # request workspace under MATRIXLAB_LOCAL_JOBS_DIR (inside its
+        # own container), then asks the HOST docker daemon to mount
+        # that path into the sandbox at /workspace.  If the path isn't
+        # also visible on the host filesystem the bind ends up empty
+        # and ``python: can't open file '/workspace/main.py'`` results.
+        # Share a single host directory at the same path on both sides
+        # so docker's path-translation is a no-op.
+        jobs_dir = os.environ.get(
+            "GITPILOT_MATRIXLAB_JOBS_DIR",
+            "/tmp/gitpilot-matrixlab-jobs",
+        )
+        os.makedirs(jobs_dir, exist_ok=True)
+        try:
+            os.chmod(jobs_dir, 0o777)
+        except OSError:
+            pass
+
         run_cmd = [
             "docker", "run", "-d",
             "--name", DEFAULT_CONTAINER_NAME,
             "-p", f"{port}:8000",
             "-v", "/var/run/docker.sock:/var/run/docker.sock",
+            "-v", f"{jobs_dir}:{jobs_dir}",
+            "-e", f"MATRIXLAB_LOCAL_JOBS_DIR={jobs_dir}",
+            "-e", f"MATRIXLAB_HOST_JOBS_DIR={jobs_dir}",
             "--restart", "unless-stopped",
             DEFAULT_RUNNER_IMAGE,
         ]
