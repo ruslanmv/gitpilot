@@ -185,6 +185,15 @@ Rules:
 - Match the action to what the user goal asks for.
 """
 
+PLAN_TASK_RULES_EXECUTE = """\
+Rules:
+- The user asked to run / execute a script that already exists.
+- Use EXECUTE for runnable files (.py, .js, .sh) in the existing-files list.
+- Do not CREATE, MODIFY, or DELETE unless the goal asks for it.
+- The executor will run the file through the configured sandbox (Local
+  subprocess or MatrixLab Runner) and report stdout / stderr / exit code.
+"""
+
 # Schema block kept tight — one example object, no prose explanations.
 PLAN_TASK_SCHEMA = """\
 Return one JSON object only (no markdown fences, no prose):
@@ -206,7 +215,7 @@ Return one JSON object only (no markdown fences, no prose):
 }
 
 JSON rules:
-- "action" is one of: CREATE, MODIFY, DELETE, READ, INDEX
+- "action" is one of: CREATE, MODIFY, DELETE, READ, INDEX, EXECUTE
 - "step_number" is a positive integer
 - "risks" is either a string or null (the JSON null literal)
 - The entire response is the JSON object — nothing before or after
@@ -231,6 +240,7 @@ _INTENT_TO_RULES = {
     "delete":  PLAN_TASK_RULES_DELETE,
     "find":    PLAN_TASK_RULES_FIND,
     "info":    PLAN_TASK_RULES_INFO,
+    "execute": PLAN_TASK_RULES_EXECUTE,
     "unknown": PLAN_TASK_RULES_UNKNOWN,
 }
 

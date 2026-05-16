@@ -322,6 +322,18 @@ try:
 except Exception:  # noqa: BLE001
     logger.exception("Sandbox API failed to mount; Run button will be disabled")
 
+# MatrixLab addon admin API (Settings → Sandbox → Install MatrixLab modal).
+# Sits on top of /api/sandbox/* and normalises every response so the UI
+# never has to interpret raw Docker / HTTP errors.  Same non-fatal mount
+# pattern as the sandbox router.
+try:
+    from .matrixlab_admin_api import router as matrixlab_admin_router
+
+    app.include_router(matrixlab_admin_router)
+    logger.info("MatrixLab admin API enabled (mounting /api/matrixlab/* endpoints)")
+except Exception:  # noqa: BLE001
+    logger.exception("MatrixLab admin API failed to mount; install modal will be disabled")
+
 # GitPilot-as-MCP-server (turns GitPilot into an MCP server other agents
 # can drive). Off by default; mount only when GITPILOT_EXPOSE_MCP_SERVER=true.
 try:

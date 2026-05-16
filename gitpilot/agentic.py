@@ -271,7 +271,7 @@ class PlanFile(BaseModel):
     """
     path: str
     action: Literal[
-        "CREATE", "MODIFY", "DELETE", "READ", "INDEX",
+        "CREATE", "MODIFY", "DELETE", "READ", "INDEX", "EXECUTE",
     ] = "MODIFY"
 
 
@@ -664,7 +664,8 @@ async def generate_plan(
                     {{"path": "file/path.py", "action": "CREATE"}},
                     {{"path": "another/file.py", "action": "MODIFY"}},
                     {{"path": "old/file.py", "action": "DELETE"}},
-                    {{"path": "README.md", "action": "READ"}}
+                    {{"path": "README.md", "action": "READ"}},
+                    {{"path": "hello.py", "action": "EXECUTE"}}
                   ],
                   "risks": "Optional risk description or null"
                 }}
@@ -676,7 +677,8 @@ async def generate_plan(
             - STRICTLY NO COMMENTS allowed (no // or #).
             - Double quotes around all keys and string values.
             - No trailing commas.
-            - "action" MUST be exactly one of: "CREATE", "MODIFY", "DELETE", "READ"
+            - "action" MUST be exactly one of: "CREATE", "MODIFY", "DELETE", "READ", "EXECUTE"
+              (use EXECUTE to run an existing runnable file — .py, .js, .sh — through the configured sandbox)
             - "step_number" MUST be an integer starting from 1
             - "risks" can be either a string or null (the JSON null value, without quotes)
             - Do NOT wrap the JSON in markdown code fences
@@ -693,7 +695,7 @@ async def generate_plan(
               - step_number: integer
               - title: string
               - description: string
-              - files: array of { "path": string, "action": "CREATE" | "MODIFY" | "DELETE" | "READ" }
+              - files: array of { "path": string, "action": "CREATE" | "MODIFY" | "DELETE" | "READ" | "EXECUTE" }
               - risks: string or null
             The response must contain ONLY pure JSON (no markdown, no prose, no code fences, NO COMMENTS).
         """),
@@ -1532,6 +1534,64 @@ async def execute_plan(
 
                 elif file.action == "READ":
                     step_summary += f"\n  ℹ️ READ-only: inspected {file.path}"
+
+                elif file.action == "EXECUTE":
+                    # Pull the file's content from the active branch and
+                    # ship it to whichever sandbox the user selected in
+                    # Settings → Sandbox (Local subprocess or MatrixLab
+                    # Runner). Both are reached through the same
+                    # /api/sandbox/run handler so behaviour matches the
+                    # Run button on chat code blocks.
+                    try:
+                        content = await get_file(
+                            owner, repo, file.path, token=token, ref=branch_name,
+                        )
+                        ext = file.path.rsplit(".", 1)[-1].lower() if "." in file.path else ""
+                        lang_map = {
+                            "py": "python", "js": "javascript", "mjs": "javascript",
+                            "cjs": "javascript", "sh": "bash", "bash": "bash",
+                        }
+                        language = lang_map.get(ext)
+                        if language is None:
+                            step_summary += (
+                                f"\n  ⚠️ EXECUTE skipped: {file.path} extension "
+                                f"{ext!r} is not runnable in the sandbox"
+                            )
+                        else:
+                            from .sandbox_api import (
+                                SandboxRunRequest,
+                                api_sandbox_run,
+                            )
+                            result = await api_sandbox_run(
+                                SandboxRunRequest(language=language, code=content),
+                            )
+                            ok_glyph = "✓" if result.exit_code == 0 else "✗"
+                            step_summary += (
+                                f"\n  {ok_glyph} EXECUTE {file.path} on "
+                                f"{result.backend} (exit {result.exit_code}, "
+                                f"{result.duration_ms} ms)"
+                            )
+                            if result.stdout:
+                                stdout_preview = result.stdout.strip()
+                                if len(stdout_preview) > 1000:
+                                    stdout_preview = stdout_preview[:1000] + "…"
+                                step_summary += f"\n     stdout: {stdout_preview}"
+                            if result.stderr:
+                                stderr_preview = result.stderr.strip()
+                                if len(stderr_preview) > 500:
+                                    stderr_preview = stderr_preview[:500] + "…"
+                                step_summary += f"\n     stderr: {stderr_preview}"
+                    except HTTPException as exc:
+                        step_summary += (
+                            f"\n  ✗ EXECUTE {file.path} failed: "
+                            f"{exc.detail} (HTTP {exc.status_code})"
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.exception(
+                            "Failed to execute file %s in step %s: %s",
+                            file.path, step.step_number, exc,
+                        )
+                        step_summary += f"\n  ✗ EXECUTE {file.path} failed: {exc}"
 
                 elif file.action == "INDEX":
                     # Batch B9 — triggers the per-repo RAG index build.
