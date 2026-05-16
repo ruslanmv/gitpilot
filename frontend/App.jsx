@@ -402,6 +402,47 @@ export default function App() {
    * first, ChatPanel would see an empty messages array, then our async
    * hydration would complete but ChatPanel wouldn't re-sync.
    */
+  // Resolve the branch we should jump to when reopening a session.
+  // Preference order:
+  //   1. session.repos[i].branch for the active_repo (multi-repo)
+  //   2. session.branch (legacy single-repo field)
+  // Returns ``null`` when nothing is recorded.
+  const resolveSessionBranch = (session) => {
+    if (!session) return null;
+    if (Array.isArray(session.repos) && session.repos.length > 0) {
+      const target =
+        session.repos.find(
+          (r) => session.active_repo && r?.full_name === session.active_repo,
+        ) || session.repos[0];
+      if (target?.branch) return target.branch;
+    }
+    return session.branch || null;
+  };
+
+  // Probe whether a branch still exists on GitHub.  We deliberately
+  // reuse the existing tree endpoint instead of adding a new one — a
+  // 200 means the ref resolves, anything else (most importantly 404)
+  // means the branch is gone or otherwise unreachable.  Failure
+  // degrades to "branch unknown" so a transient network blip falls
+  // back gracefully rather than misleading the user.
+  const probeBranchExists = async (repoFullName, branch) => {
+    if (!repoFullName || !branch) return false;
+    try {
+      const token = localStorage.getItem("github_token");
+      const headers = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const res = await fetch(
+        apiUrl(
+          `/api/repos/${repoFullName}/tree?ref=${encodeURIComponent(branch)}`,
+        ),
+        { headers },
+      );
+      return res.ok;
+    } catch {
+      return false;
+    }
+  };
+
   const handleSelectSession = useCallback(async (session) => {
     // 1. Fetch persisted messages first
     const messages = await fetchSessionMessages(session.id);
@@ -418,11 +459,31 @@ export default function App() {
     // 3. NOW activate the session — ChatPanel's sync effect will read
     //    the hydrated messages from chatBySession[session.id]
     setActiveSessionId(session.id);
-    if (session.branch && session.branch !== currentBranch) {
-      handleBranchChange(session.branch);
+
+    // 4. Jump to the branch this session last published to, but verify
+    //    it still exists on GitHub first.  When the branch was deleted
+    //    (rebased away, merged-and-pruned, …) fall back to the
+    //    repository's default branch and tell the user what happened —
+    //    silently landing on the default would mask data loss.
+    const target = resolveSessionBranch(session);
+    if (target && target !== currentBranch) {
+      const repoFullName =
+        session.repo ||
+        (Array.isArray(session.repos) && session.repos[0]?.full_name);
+      const exists = await probeBranchExists(repoFullName, target);
+      if (exists) {
+        handleBranchChange(target);
+      } else {
+        const fallback = defaultBranch || "main";
+        showToast(
+          "Branch not found",
+          `'${target}' was not found on GitHub. Switched to ${fallback}.`,
+        );
+        if (fallback !== currentBranch) handleBranchChange(fallback);
+      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchSessionMessages, currentBranch]);
+  }, [fetchSessionMessages, currentBranch, defaultBranch]);
 
   const handleDeleteSession = useCallback(
     (deletedId) => {

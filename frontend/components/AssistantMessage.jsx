@@ -1,5 +1,6 @@
 import React from "react";
 import PlanView from "./PlanView.jsx";
+import RunnableCodeBlock, { splitFences } from "./RunnableCodeBlock.jsx";
 
 export default function AssistantMessage({ answer, plan, executionLog, planStatus }) {
   // ``planStatus`` is optional metadata about the lifecycle of the plan
@@ -82,13 +83,22 @@ export default function AssistantMessage({ answer, plan, executionLog, planStatu
 
   return (
     <div className="chat-message-ai" style={styles.container}>
-      {/* Answer section */}
+      {/* Answer section.  ``splitFences`` cuts the answer at fenced code
+          blocks so each runnable snippet gets its own RunnableCodeBlock
+          (with a per-block Run button); the surrounding prose still
+          renders as the existing pre-wrapped paragraph. */}
       <section style={styles.section}>
         <header style={styles.header}>
           <h3 style={styles.title}>Answer</h3>
         </header>
         <div style={styles.content}>
-          <p style={{ margin: 0 }}>{answer}</p>
+          {splitFences(answer).map((seg, i) =>
+            seg.type === "code" ? (
+              <RunnableCodeBlock key={i} language={seg.language} code={seg.code} />
+            ) : (
+              <p key={i} style={{ margin: "0 0 8px" }}>{seg.value}</p>
+            )
+          )}
         </div>
       </section>
 

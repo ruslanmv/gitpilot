@@ -154,6 +154,82 @@ def _crewai():
 _tools_cache: dict = {}
 
 
+async def _execute_index_action(
+    owner: str, repo: str, *, token: str | None, branch_name: str | None,
+) -> str:
+    """Handle the ``INDEX`` plan-step pseudo-action (Batch B9).
+
+    Triggers a one-time RAG index build for the active repo:
+    fetches every file via the GitHub tree, runs them through the
+    chunker / embedder, persists the ChromaDB collection, and grants
+    per-repo consent so future fuzzy queries auto-build incrementally.
+
+    Returns a one-line summary suitable for the execution-log step
+    output.  Failures are surfaced as their own line; we never raise
+    because that would abort sibling steps in the same plan.
+    """
+    from .github_api import get_file, get_repo_tree
+    from .rag.indexer import build_index_from_files
+    from .rag_consent import grant_consent
+
+    try:
+        tree = await get_repo_tree(owner, repo, token=token, ref=branch_name)
+    except Exception as exc:
+        logger.warning("[index] could not list repo tree: %s", exc)
+        return f"! Failed to list repo for indexing: {exc}"
+
+    paths = [item["path"] for item in (tree or []) if item.get("path")]
+    if not paths:
+        return "i Repo is empty — nothing to index."
+
+    # Cap how many files we'll embed in one user-approved build to
+    # bound time + disk.  Anything over the cap still produces a
+    # usable index covering the most-important files; the rest can
+    # be added incrementally on subsequent builds.
+    INDEX_FETCH_CAP = 500
+    paths = paths[:INDEX_FETCH_CAP]
+
+    async def _fetch(p: str) -> tuple[str, str | None]:
+        try:
+            return p, await get_file(owner, repo, p, token=token, ref=branch_name)
+        except Exception:
+            return p, None
+
+    import asyncio as _aio
+    results = await _aio.gather(*(_fetch(p) for p in paths))
+    files: list[tuple[str, str]] = [
+        (p, c) for p, c in results if isinstance(c, str) and c
+    ]
+    if not files:
+        return "! Could not fetch any repo files for indexing."
+
+    # Build synchronously inside the await — embedding is CPU-bound
+    # and we want the user to see "indexing complete" before the
+    # next plan step runs.
+    try:
+        report = build_index_from_files(
+            files,
+            owner=owner,
+            repo=repo,
+            branch=branch_name or "HEAD",
+        )
+    except Exception as exc:
+        logger.warning("[index] build failed: %s", exc)
+        return f"! Index build failed: {exc}"
+
+    try:
+        grant_consent(owner, repo)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("[index] could not grant consent: %s", exc)
+
+    return (
+        f"+ Indexed {report.files_indexed} file(s) "
+        f"({report.chunks_added} chunks, embedder={report.embedder_name}, "
+        f"skipped={report.files_skipped}).  "
+        f"Semantic search is now available for {owner}/{repo}."
+    )
+
+
 def _tools():
     """Return cached tool collections (lazy-loaded on first use)."""
     if not _tools_cache:
@@ -185,9 +261,18 @@ def _build_llm():
 
 
 class PlanFile(BaseModel):
-    """Represents a file operation in a plan step."""
+    """Represents a file operation in a plan step.
+
+    ``INDEX`` (Batch B9) is a special pseudo-action: the ``path`` is
+    treated as a marker ("__repo__") rather than a real file, and the
+    executor branch triggers a one-time RAG index build for the active
+    repo.  Surfaced as its own plan step so the user approves the
+    indexing cost (time + disk) just like any other action.
+    """
     path: str
-    action: Literal["CREATE", "MODIFY", "DELETE", "READ"] = "MODIFY"
+    action: Literal[
+        "CREATE", "MODIFY", "DELETE", "READ", "INDEX",
+    ] = "MODIFY"
 
 
 class PlanStep(BaseModel):
@@ -262,8 +347,22 @@ async def generate_plan(
     repo_full_name: str,
     token: str | None = None,
     branch_name: str | None = None,
+    *,
+    routing_hint: str | None = None,
+    intent: str | None = None,
 ) -> PlanResult:
     """Agentic planning: create a structured plan but DO NOT modify the repo.
+
+    ``intent`` is the literal from :class:`gitpilot.query_router.RouterDecision`
+    (fix / find / info / create / delete / modify).  When supplied AND
+    the ``lean_prompts`` flag is on, the planner's task description
+    uses only the rule block matching the intent — small models stop
+    drowning in irrelevant create-vs-delete-vs-modify rules.
+
+    ``routing_hint`` is an optional pre-classified directive from
+    :mod:`gitpilot.query_router` that gets concatenated into the
+    planner's context_pack.  Advisory — the planner can override
+    when context demands more exploration.
 
     Two-phase approach:
     1) Explore and understand the repository (on the correct branch)
@@ -285,6 +384,12 @@ async def generate_plan(
     if context_pack:
         logger.info("[GitPilot] Context pack loaded (%d chars)", len(context_pack))
 
+    # Batch B9 — append the API-layer router's strategy hint so the
+    # planner sees the recommended intent / target files / tool order.
+    if routing_hint:
+        context_pack = (context_pack or "") + ("\n\n" if context_pack else "") + routing_hint
+        logger.info("[GitPilot] Router hint injected (%d chars)", len(routing_hint))
+
     # PHASE 1: Explore repository (correct branch)
     logger.info("[GitPilot] Phase 1: Exploring repository %s (ref=%s)...", repo_full_name, active_ref)
 
@@ -295,10 +400,49 @@ async def generate_plan(
         active_ref,
     )
 
+    # Batch B6: pin a compact "repo map" into the planner's context.
+    # Same idea Aider, Cursor and Claude Code use — give the planner a
+    # high-level site map (key files + modules + language histogram)
+    # in <= 500 tokens, persisted to disk so we don't rebuild it on
+    # every turn.  Best-effort: a failure here must never block the
+    # planner.
+    try:
+        from . import flags as _flags
+        from .repo_map import FLAG_REPO_MAP, build_repo_map
+
+        if _flags.is_on(FLAG_REPO_MAP, default=True):
+            _all_files = list(repo_context_data.get("all_files") or [])
+            if _all_files:
+                _map = build_repo_map(
+                    owner=owner, repo=repo, branch=active_ref or "HEAD",
+                    paths=_all_files,
+                )
+                if _map.agents_md:
+                    context_pack = (context_pack or "") + (
+                        "\n\n" if context_pack else ""
+                    ) + _map.agents_md
+                    logger.info(
+                        "[GitPilot] Repo map pinned (%d tokens, %d modules, %d key files)",
+                        len(_map.agents_md.split()),  # rough proxy
+                        len(_map.modules),
+                        len(_map.key_files),
+                    )
+    except Exception as _map_err:  # pragma: no cover - defensive
+        logger.debug("[GitPilot] repo map injection skipped: %s", _map_err)
+
+    # Batch B12 — when ``lean_prompts`` is on, every persona / task
+    # description is sourced from ``gitpilot.agent_prompts`` so prompt
+    # budgets are pinned by tests and never accidentally bloated.
+    from . import agent_prompts as _ap
+
+    _lean = _ap.lean_prompts_enabled()
+
     explorer = _crewai()["Agent"](
         role="Repository Explorer",
-        goal="Thoroughly explore and document the current state of the repository",
-        backstory=(
+        goal=_ap.EXPLORER_GOAL if _lean else (
+            "Thoroughly explore and document the current state of the repository"
+        ),
+        backstory=_ap.EXPLORER_BACKSTORY if _lean else (
             "You are a meticulous code archaeologist who explores repositories "
             "to understand their complete structure before any changes are made. "
             "You use all available tools to build a comprehensive picture."
@@ -309,8 +453,13 @@ async def generate_plan(
         allow_delegation=False,
     )
 
-    explore_task = _crewai()["Task"](
-        description=dedent(f"""
+    if _lean:
+        _explore_description = _ap.render_explorer_task(
+            repo_full_name=repo_full_name, active_ref=active_ref,
+        )
+        _explore_expected = "A repository exploration report in the documented format"
+    else:
+        _explore_description = dedent(f"""
             Repository: {repo_full_name}
             Active Ref (branch/tag/SHA): {active_ref}
 
@@ -338,8 +487,14 @@ async def generate_plan(
             File Types: [count files by extension]
 
             Your report MUST be based on ACTUAL tool calls, not assumptions.
-        """),
-        expected_output="A detailed exploration report listing ALL files found in the repository",
+        """)
+        _explore_expected = (
+            "A detailed exploration report listing ALL files found in the repository"
+        )
+
+    explore_task = _crewai()["Task"](
+        description=_explore_description,
+        expected_output=_explore_expected,
         agent=explorer,
     )
 
@@ -375,34 +530,64 @@ async def generate_plan(
             "request, or switch to a stronger LLM via Settings → Provider."
         ) from exc
 
-    exploration_report = exploration_result.raw if hasattr(exploration_result, "raw") else str(exploration_result)
-    logger.info("[GitPilot] Exploration complete. Report length: %s chars", len(exploration_report))
+    exploration_report_raw = exploration_result.raw if hasattr(exploration_result, "raw") else str(exploration_result)
+    logger.info("[GitPilot] Exploration complete. Report length: %s chars", len(exploration_report_raw))
+
+    # Batch B5: protect the planner's context by compressing the
+    # explorer's free-form report into a fixed-budget summary.  When
+    # the report already fits (small repos, small models) this is a
+    # no-op; on big repos it can shave 3–6 KB off the planner prompt
+    # without losing any concrete file paths.
+    try:
+        from .explorer_summary import compress_exploration_report
+
+        exploration_report, _exp_metrics = compress_exploration_report(exploration_report_raw)
+        if _exp_metrics.compressed_tokens < _exp_metrics.original_tokens:
+            logger.info(
+                "[GitPilot] Compressed exploration report: %d → %d tokens "
+                "(%d/%d files kept)",
+                _exp_metrics.original_tokens,
+                _exp_metrics.compressed_tokens,
+                _exp_metrics.files_kept,
+                _exp_metrics.files_in_original,
+            )
+    except Exception as _exp_err:  # pragma: no cover - defensive
+        logger.debug("[GitPilot] explorer compression failed: %s", _exp_err)
+        exploration_report = exploration_report_raw
 
     # PHASE 2: Plan creation based on exploration
     logger.info("[GitPilot] Phase 2: Creating plan based on repository exploration (ref=%s)...", active_ref)
 
     # Build planner backstory with optional context pack injection
-    _planner_backstory = (
-        "You are an experienced staff engineer who creates plans based on FACTS, not assumptions. "
-        "You have received a complete exploration report of the repository. "
-        "You ONLY create plans for files that actually exist in the exploration report. "
-        "You are extremely careful with DELETE actions - you verify the file exists "
-        "and that it's not on the 'keep' list before marking it for deletion. "
-        "When users ask to delete files, you delete individual FILES, not directory names. "
-        "When users ask to ANALYZE files and GENERATE new content (code, docs, examples), "
-        "you create plans that READ existing files and CREATE new files with generated content. "
-        "You understand that 'analyze X and create Y' means: use tools to read X, then plan to CREATE Y. "
-        "You never make changes yourself, only create detailed plans."
-    )
-    if context_pack:
+    if _lean:
+        _planner_backstory = _ap.PLANNER_BACKSTORY
+        _planner_goal = _ap.PLANNER_GOAL
+    else:
+        _planner_backstory = (
+            "You are an experienced staff engineer who creates plans based on FACTS, not assumptions. "
+            "You have received a complete exploration report of the repository. "
+            "You ONLY create plans for files that actually exist in the exploration report. "
+            "You are extremely careful with DELETE actions - you verify the file exists "
+            "and that it's not on the 'keep' list before marking it for deletion. "
+            "When users ask to delete files, you delete individual FILES, not directory names. "
+            "When users ask to ANALYZE files and GENERATE new content (code, docs, examples), "
+            "you create plans that READ existing files and CREATE new files with generated content. "
+            "You understand that 'analyze X and create Y' means: use tools to read X, then plan to CREATE Y. "
+            "You never make changes yourself, only create detailed plans."
+        )
+        _planner_goal = (
+            "Design safe, step-by-step refactor plans based on ACTUAL repository state "
+            "discovered during exploration"
+        )
+    # context_pack additions (B6 repo map + B9 routing hint) are only
+    # appended in non-lean mode; on small models they bloat the prompt
+    # and push the JSON-schema rules out of the attention window.
+    if context_pack and not _lean:
         _planner_backstory += "\n\n" + context_pack
 
     planner = _crewai()["Agent"](
         role="Repository Refactor Planner",
-        goal=(
-            "Design safe, step-by-step refactor plans based on ACTUAL repository state "
-            "discovered during exploration"
-        ),
+        goal=_planner_goal,
         backstory=_planner_backstory,
         llm=llm,
         tools=_tools()["REPOSITORY_TOOLS"],
@@ -410,8 +595,20 @@ async def generate_plan(
         allow_delegation=False,
     )
 
-    plan_task = _crewai()["Task"](
-        description=dedent(f"""
+    if _lean:
+        # Use the per-intent compact template from agent_prompts.
+        # Pass the verified file list directly so the planner sees the
+        # facts block at the bottom of the prompt — highest attention
+        # weight on small models.
+        _plan_description = _ap.render_plan_task(
+            goal="{goal}",     # CrewAI inputs substitution happens later
+            repo_full_name=repo_full_name,
+            active_ref=active_ref or "HEAD",
+            file_list=list(repo_context_data.get("all_files") or []),
+            intent=intent,
+        )
+    else:
+        _plan_description = dedent(f"""
             User goal: {{goal}}
             Repository: {repo_full_name}
             Active Ref (branch/tag/SHA): {active_ref}
@@ -485,7 +682,9 @@ async def generate_plan(
             - Do NOT wrap the JSON in markdown code fences
             - Do NOT add any explanation before or after the JSON
             - The ENTIRE response MUST be ONLY the JSON object, starting with '{{' and ending with '}}'
-        """),
+        """)
+    plan_task = _crewai()["Task"](
+        description=_plan_description,
         expected_output=dedent("""
             A single valid JSON object matching the PlanResult schema:
             - goal: string
@@ -736,8 +935,18 @@ async def generate_plan_lite(
     repo_full_name: str,
     token: str | None = None,
     branch_name: str | None = None,
+    *,
+    routing_hint: str | None = None,
+    intent: str | None = None,
 ) -> PlanResult:
     """Lite Mode planning: smart intent detection + single agent + pre-fetched context.
+
+    ``routing_hint`` is accepted for signature parity with
+    :func:`generate_plan`.  Lite Mode has its own simpler routing
+    via regex intent classification, so the hint is currently
+    treated as advisory metadata only — it does not change the
+    Lite planner's behaviour.  Kept here so call sites can use a
+    single signature for both planners.
 
     The topology is:
       1. Classify intent (regex — instant, no LLM)
@@ -1078,6 +1287,14 @@ async def execute_plan_lite(
                 elif file.action == "READ":
                     step_summary += f"\n  i Inspected {file.path}"
 
+                elif file.action == "INDEX":
+                    # Batch B9 — INDEX is a special plan step that
+                    # triggers the local RAG index build for this repo.
+                    summary_line = await _execute_index_action(
+                        owner, repo, token=token, branch_name=branch_name,
+                    )
+                    step_summary += f"\n  {summary_line}"
+
             except Exception as e:
                 logger.exception("Lite: Error processing %s: %s", file.path, e)
                 step_summary += f"\n  ! Error: {file.path}: {e}"
@@ -1129,10 +1346,16 @@ async def execute_plan(
     # CRITICAL: ensure tools read from the ACTIVE execution branch
     _tools()["set_repo_context"](owner, repo, token=token, branch=branch_name)
 
+    # Batch B12 — lean persona from agent_prompts when the flag is on.
+    from . import agent_prompts as _ap
+    _lean_writer = _ap.lean_prompts_enabled()
+
     code_writer = _crewai()["Agent"](
         role="Expert Code Writer",
-        goal="Generate high-quality, production-ready code and documentation based on requirements.",
-        backstory=(
+        goal=_ap.CODE_WRITER_GOAL if _lean_writer else (
+            "Generate high-quality, production-ready code and documentation based on requirements."
+        ),
+        backstory=_ap.CODE_WRITER_BACKSTORY if _lean_writer else (
             "You are a senior software engineer with expertise in multiple programming languages. "
             "You write clean, well-documented, and functional code. "
             "You understand context and generate appropriate content for each file type. "
@@ -1155,8 +1378,14 @@ async def execute_plan(
         for file in step.files:
             try:
                 if file.action == "CREATE":
-                    create_task = _crewai()["Task"](
-                        description=(
+                    if _lean_writer:
+                        _create_description = _ap.render_create_file_task(
+                            file_path=file.path,
+                            goal=plan.goal,
+                            step_description=step.description,
+                        )
+                    else:
+                        _create_description = (
                             f"Generate complete content for a new file: {file.path}\n\n"
                             f"Overall Goal: {plan.goal}\n"
                             f"Step Context: {step.description}\n\n"
@@ -1177,8 +1406,10 @@ async def execute_plan(
                             "- Do NOT include placeholder comments like 'TODO' or 'IMPLEMENT THIS'\n"
                             "- The content should be fully functional and informative\n\n"
                             "Return ONLY the file content, no explanations or markdown code blocks."
-                        ),
-                        expected_output=f"Complete, production-ready content for {file.path}",
+                        )
+                    create_task = _crewai()["Task"](
+                        description=_create_description,
+                        expected_output=f"Complete content for {file.path}",
                         agent=code_writer,
                     )
 
@@ -1301,6 +1532,13 @@ async def execute_plan(
 
                 elif file.action == "READ":
                     step_summary += f"\n  ℹ️ READ-only: inspected {file.path}"
+
+                elif file.action == "INDEX":
+                    # Batch B9 — triggers the per-repo RAG index build.
+                    summary_line = await _execute_index_action(
+                        owner, repo, token=token, branch_name=branch_name,
+                    )
+                    step_summary += f"\n  {summary_line}"
 
             except Exception as e:  # noqa: BLE001
                 logger.exception(
@@ -1440,11 +1678,18 @@ def _build_terminal_agent(llm) -> Agent:
         role="Terminal & Shell Executor",
         goal="Execute shell commands safely in the workspace and report results",
         backstory=(
-            "You are a terminal expert that runs shell commands in a sandboxed "
-            "environment. You can run tests, linters, build tools, and other "
-            "development commands. You always report exit codes and output. "
-            "You refuse to run destructive commands like rm -rf / or format disks. "
-            "You explain command output clearly to the user."
+            "You are a terminal expert that runs shell commands in the "
+            "sandbox the user picked in Settings (local subprocess by "
+            "default, MatrixLab for containerised enterprise isolation). "
+            "Both run_command and run_in_sandbox route through the same "
+            "backend, so the user's runtime choice applies to your "
+            "autonomous loop too — not just to the Run button in chat. "
+            "Use run_command for workspace commands (tests, linters, "
+            "builds) and run_in_sandbox(language, code) when you want "
+            "to validate a self-contained snippet before returning it. "
+            "Always report the exit code and surface stderr verbatim "
+            "when a run fails: the trace is your debugging signal. "
+            "You refuse destructive commands like 'rm -rf /' or 'mkfs'. "
         ),
         llm=llm,
         tools=_tools()["LOCAL_SHELL_TOOLS"] + _tools()["LOCAL_GIT_TOOLS"],

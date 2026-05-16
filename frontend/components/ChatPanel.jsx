@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useState } from "react";
 import AssistantMessage from "./AssistantMessage.jsx";
 import ThinkingIndicator from "./ThinkingIndicator.jsx";
 import ContextMeter from "./ContextMeter.jsx";
+import TasksPanel from "./TasksPanel.jsx";
 import DiffStats from "./DiffStats.jsx";
 import DiffViewer from "./DiffViewer.jsx";
 import CreatePRButton from "./CreatePRButton.jsx";
@@ -35,6 +36,10 @@ export default function ChatPanel({
   const [loadingPlan, setLoadingPlan] = useState(false);
   const [executing, setExecuting] = useState(false);
   const [status, setStatus] = useState("");
+  // Batch B9 — populated when a plan whose first step was INDEX is
+  // rejected.  Lets us render a small "Run with grep instead?" prompt
+  // so the user doesn't have to retype the goal.
+  const [retryAfterIndexReject, setRetryAfterIndexReject] = useState(null);
 
   // Claude-Code-on-Web: WebSocket streaming + diff + PR
   const [wsConnected, setWsConnected] = useState(false);
@@ -255,16 +260,27 @@ export default function ChatPanel({
     if (m.executionLog) meta.executionLog = m.executionLog;
     if (m.diff)         meta.diff         = m.diff;
     if (m.actions)      meta.actions      = m.actions;
+    // Informational plans (READ-only answers to "what does X do?" style
+    // questions) carry no Approve/Reject controls — pin the flag so the
+    // session reload re-renders the same shape.
+    if (m.informational) meta.informational = true;
     return Object.keys(meta).length > 0 ? meta : null;
   };
 
-  const send = async () => {
-    if (!repo || !goal.trim()) return;
+  const send = async (overrides = {}) => {
+    if (!repo) return;
+    // Allow callers (e.g. the "Retry with grep" button on a rejected
+    // INDEX plan) to drive send() with a fixed goal and a router flag.
+    const overrideGoal = overrides.goal;
+    const force_no_rag = Boolean(overrides.force_no_rag);
+    const sourceText = overrideGoal != null ? overrideGoal : goal;
+    if (!sourceText || !sourceText.trim()) return;
 
-    const text = goal.trim();
+    const text = sourceText.trim();
 
-    // Clear input immediately (Claude Code behavior)
-    setGoal("");
+    // Clear input immediately (Claude Code behavior) — but only when
+    // the user typed; programmatic retries leave the input alone.
+    if (overrideGoal == null) setGoal("");
     // Reset textarea height
     const ta = document.querySelector(".chat-input");
     if (ta) ta.style.height = "40px";
@@ -319,6 +335,13 @@ export default function ChatPanel({
             repo_name: repo.name,
             goal: text,
             branch_name: effectiveBranch,
+            // Lets the backend record this plan as a Task on the
+            // session so the right-sidebar Tasks panel can trace it.
+            session_id: sid,
+            // Batch B9 — set on the "Retry with grep" path after the
+            // user rejects an INDEX-plan.  Tells the router to
+            // suppress RAG / INDEX recommendations.
+            force_no_rag,
           }),
           signal: planController.signal,
         });
@@ -349,29 +372,56 @@ export default function ChatPanel({
         throw new Error(detail || "Failed to generate plan");
       }
 
-      // Guard: a plan with no executable file actions is not a plan we
-      // can approve.  This happens when the planner/explorer agents
-      // refused (tool-loop hallucination or a real safety refusal) and
-      // CrewAI returned a schema-valid but empty payload.  Without
-      // this guard the Approve & execute / Reject plan buttons would
-      // render against a payload that can't actually be executed.
+      // Classify the plan into one of three kinds so we can render the
+      // right shape — not just "valid or banner":
+      //
+      // * executable    — at least one CREATE/MODIFY/DELETE → plan card
+      //                   with Approve & execute / Reject controls.
+      // * informational — every file is READ (or no files at all on a
+      //                   step that still has a meaningful description)
+      //                   AND the summary is a real answer, not the
+      //                   placeholder.  This is what happens when the
+      //                   user asks "what do you think about this
+      //                   project?" — the planner correctly READs the
+      //                   relevant files and the summary IS the answer.
+      //                   Render the summary as a normal assistant
+      //                   message; do not show plan controls.
+      // * empty         — no steps OR no actionable signal at all →
+      //                   honest failure banner.
+      //
+      // Before this classifier the second case was treated as the
+      // third, surfacing "I couldn't produce a plan" on perfectly
+      // valid READ-only plans.
       const planSteps = Array.isArray(data?.steps)
         ? data.steps
         : Array.isArray(data?.plan?.steps)
         ? data.plan.steps
         : [];
-      const hasExecutableFiles = planSteps.some(
+      const PLACEHOLDER_SUMMARY = "Here is the proposed plan for your request.";
+      const summary =
+        data.plan?.summary || data.summary || data.message || PLACEHOLDER_SUMMARY;
+      const hasExecutable = planSteps.some(
         (s) =>
           Array.isArray(s?.files) &&
           s.files.some((f) => ["CREATE", "MODIFY", "DELETE"].includes(f?.action)),
       );
+      const isReadOnly =
+        planSteps.length > 0 &&
+        !hasExecutable &&
+        planSteps.every(
+          (s) =>
+            !Array.isArray(s?.files) ||
+            s.files.length === 0 ||
+            s.files.every((f) => f?.action === "READ"),
+        );
+      const hasRealSummary = Boolean(summary) && summary !== PLACEHOLDER_SUMMARY;
+      const planKind = hasExecutable
+        ? "executable"
+        : isReadOnly && hasRealSummary
+        ? "informational"
+        : "empty";
 
-      // Extract summary from nested plan structure or top-level
-      const summary =
-        data.plan?.summary || data.summary || data.message ||
-        "Here is the proposed plan for your request.";
-
-      if (hasExecutableFiles) {
+      if (planKind === "executable") {
         setPlan(data);
         const assistantMsg = {
           from: "ai",
@@ -382,18 +432,30 @@ export default function ChatPanel({
         };
         setMessages((prev) => [...prev, assistantMsg]);
         persistMessage(sid, "assistant", summary, pickAssistantMetadata(assistantMsg));
+      } else if (planKind === "informational") {
+        // The summary is the answer.  No plan card, no Approve/Reject —
+        // there is nothing to execute.  We deliberately do NOT attach
+        // ``plan: data`` here so AssistantMessage renders this turn
+        // exactly like a chat reply.
+        setPlan(null);
+        const assistantMsg = {
+          from: "ai",
+          role: "assistant",
+          answer: summary,
+          content: summary,
+          informational: true,
+        };
+        setMessages((prev) => [...prev, assistantMsg]);
+        persistMessage(sid, "assistant", summary, pickAssistantMetadata(assistantMsg));
       } else {
-        // No executable steps — surface a clear failure to the user
-        // instead of half-rendering a plan card and dangling buttons.
-        // The most common cause is the explorer/planner agent loop
-        // (CrewAI same-input limiter blocks repeat tool calls, the
-        // agent panics and "refuses").  Encourage a retry rather than
-        // letting the user click Approve on nothing.
+        // empty — be honest about what we know.  The earlier wording
+        // ("got stuck reading the same file twice") was a guess from
+        // an older bug; for the cases that actually still hit this
+        // branch the real signal is just "no actionable steps".
         setPlan(null);
         const failureText =
-          "I couldn't produce a plan for that request. The agent may have " +
-          "got stuck reading the same file twice. Try rephrasing, or " +
-          "switch to a stronger model in Settings → Provider.";
+          "The model returned an empty plan. Try rephrasing more concretely, " +
+          "or pick a stronger model in Settings → Provider.";
         const failureMsg = {
           from: "ai",
           role: "system",
@@ -401,7 +463,7 @@ export default function ChatPanel({
         };
         setMessages((prev) => [...prev, failureMsg]);
         persistMessage(sid, "system", failureText);
-        setStatus("No executable plan produced.");
+        setStatus("No actionable plan produced.");
         return;
       }
     } catch (err) {
@@ -432,6 +494,17 @@ export default function ChatPanel({
   // ---------------------------------------------------------------------------
   const rejectPlan = () => {
     if (!plan || executing) return;
+
+    // Batch B9 — if the rejected plan contained an INDEX step, the
+    // user is implicitly saying "I don't want to build the semantic
+    // index right now".  Stash the original goal so we can offer a
+    // one-click "retry with grep" path on the next render.
+    const hadIndexStep = Array.isArray(plan?.steps) &&
+      plan.steps.some((s) =>
+        Array.isArray(s?.files) && s.files.some((f) => f?.action === "INDEX"),
+      );
+    const rejectedGoal = plan?.goal || "";
+
     setPlan(null);
     setStatus("Plan rejected. No files were changed.");
 
@@ -444,6 +517,12 @@ export default function ChatPanel({
 
     if (sessionId) {
       persistMessage(sessionId, "system", rejectionMsg.content);
+    }
+
+    if (hadIndexStep && rejectedGoal) {
+      setRetryAfterIndexReject({ goal: rejectedGoal });
+    } else {
+      setRetryAfterIndexReject(null);
     }
   };
 
@@ -471,6 +550,10 @@ export default function ChatPanel({
           repo_name: repo.name,
           plan,
           branch_name,
+          // Lets the backend persist the new branch on the session
+          // record so reopening this session lands on the published
+          // branch, not the one it was created on.
+          session_id: sessionId,
         }),
       });
 
@@ -778,6 +861,54 @@ export default function ChatPanel({
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Batch B9 — post-Reject "retry with grep" prompt.  Renders
+          only when the user rejected a plan whose first step was an
+          INDEX action.  One click re-issues the same goal with
+          force_no_rag so the router falls back to grep. */}
+      {retryAfterIndexReject && !loadingPlan && (
+        <div
+          style={{
+            padding: "10px 16px",
+            borderTop: "1px solid #27272A",
+            background: "rgba(217, 92, 61, 0.06)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            flexWrap: "wrap",
+          }}
+        >
+          <span style={{ fontSize: 13, color: "#D4D4D8" }}>
+            Index skipped.  Run the same goal with grep instead?
+          </span>
+          <span style={{ display: "inline-flex", gap: 8 }}>
+            <button
+              type="button"
+              className="chat-btn primary"
+              onClick={() => {
+                const g = retryAfterIndexReject.goal;
+                setRetryAfterIndexReject(null);
+                send({ goal: g, force_no_rag: true });
+              }}
+            >
+              Yes, use grep
+            </button>
+            <button
+              type="button"
+              className="chat-btn ghost"
+              onClick={() => setRetryAfterIndexReject(null)}
+              style={{
+                color: "#9CA3AF",
+                borderColor: "rgba(156, 163, 175, 0.35)",
+                background: "transparent",
+              }}
+            >
+              No, dismiss
+            </button>
+          </span>
+        </div>
+      )}
+
       {/* Diff stats bar (when agent has made changes) */}
       {diffData && (
         <div style={{
@@ -924,7 +1055,10 @@ export default function ChatPanel({
               </span>
             )}
           </span>
-          <ContextMeter sessionId={sessionId} />
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <TasksPanel sessionId={sessionId} />
+            <ContextMeter sessionId={sessionId} />
+          </span>
         </div>
       </div>
 

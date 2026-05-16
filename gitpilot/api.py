@@ -311,6 +311,17 @@ try:
 except Exception:  # noqa: BLE001
     logger.exception("MCP admin API failed to mount; tab will show as unavailable")
 
+# Sandbox runtime API (Settings → Sandbox runtime, Run button on chat
+# code blocks).  Mounting is non-fatal so a partial deployment can still
+# serve chat / planner endpoints if this module fails to import.
+try:
+    from .sandbox_api import router as sandbox_router
+
+    app.include_router(sandbox_router)
+    logger.info("Sandbox API enabled (mounting /api/sandbox/* endpoints)")
+except Exception:  # noqa: BLE001
+    logger.exception("Sandbox API failed to mount; Run button will be disabled")
+
 # GitPilot-as-MCP-server (turns GitPilot into an MCP server other agents
 # can drive). Off by default; mount only when GITPILOT_EXPOSE_MCP_SERVER=true.
 try:
@@ -591,7 +602,32 @@ def _build_local_repo_aware_prompt(req, session) -> str:
         "- Output the COMPLETE file content, not just a snippet.\n"
         "- For edits to existing files, output the full updated file.\n"
         "- Be explicit about which files to create or modify and why.\n"
-        "- Prefer incremental, production-safe changes over large rewrites."
+        "- Prefer incremental, production-safe changes over large rewrites.\n"
+        "\n"
+        "RUNNABLE EXAMPLES (separate from file-output fences):\n"
+        "When the user asks for a small example they could try out — "
+        "\"write a hello-world\", \"give me a snippet that ...\", "
+        "\"show me how to call X\" — emit the example as a fenced block "
+        "with ONLY the language on the opening line (no filepath):\n"
+        "\n"
+        "  ```python\n"
+        "  print('Hello, world!')\n"
+        "  ```\n"
+        "\n"
+        "  ```javascript\n"
+        "  console.log('Hello, world!');\n"
+        "  ```\n"
+        "\n"
+        "  ```bash\n"
+        "  echo 'Hello, world!'\n"
+        "  ```\n"
+        "\n"
+        "The chat UI shows a per-block ▶ Run button next to these "
+        "snippets and executes them in the user's selected sandbox "
+        "(local subprocess or MatrixLab). Supported languages: python, "
+        "javascript (or js/node), bash (or sh/shell). Keep snippets "
+        "self-contained — they run in a fresh tempdir with no project "
+        "files mounted — and short enough to read at a glance."
     )
 
     sections = [system_block]
@@ -701,6 +737,10 @@ class SettingsResponse(BaseModel):
     ollabridge: dict
     langflow_url: str
     has_langflow_plan_flow: bool
+    # Sandbox runtime selection — populated by settings_response_from.  The
+    # field is Optional so older serialised payloads continue to validate
+    # even though the runtime always writes a value today.
+    sandbox: Optional[dict] = None
 
 
 class ProviderModelsResponse(BaseModel):
@@ -718,6 +758,16 @@ class ChatPlanRequest(BaseModel):
     repo_name: str
     goal: str
     branch_name: Optional[str] = None
+    # Optional: when present, the planner invocation is recorded as a
+    # Task on the active session so the right-sidebar Tasks panel can
+    # trace it.  Older frontends that omit this field continue to work
+    # — no task is recorded, no error raised.
+    session_id: Optional[str] = None
+    # Batch B9: set by the post-Reject "retry with grep" path so the
+    # router suppresses RAG / INDEX recommendations on the next
+    # attempt of the same goal.  Default False — older frontends are
+    # unaffected.
+    force_no_rag: bool = False
 
 
 class ExecutePlanRequest(BaseModel):
@@ -725,6 +775,12 @@ class ExecutePlanRequest(BaseModel):
     repo_name: str
     plan: PlanResult
     branch_name: Optional[str] = None
+    # Optional: when present, the active session's `branch` (and the
+    # matching `repos[i].branch`) is updated to the branch the executor
+    # actually wrote to, so reopening the session jumps to that branch
+    # instead of the one it was created on.  Older frontends that omit
+    # this field continue to work — no session update is attempted.
+    session_id: Optional[str] = None
 
 
 class AuthUrlResponse(BaseModel):
@@ -1017,6 +1073,13 @@ async def api_put_file(
 # ============================================================================
 
 def settings_response_from(s: AppSettings) -> SettingsResponse:
+    sandbox_dump = s.sandbox.model_dump()
+    # Strip the secret value before it leaves the process — the frontend
+    # only needs to know whether a token is configured, not the token
+    # itself.  Keeps GET /api/settings safe to log and to surface in the
+    # browser devtools.
+    token = sandbox_dump.pop("matrixlab_token", "")
+    sandbox_payload = {**sandbox_dump, "has_token": bool(token)}
     return SettingsResponse(
         provider=s.provider,
         providers=[
@@ -1033,6 +1096,7 @@ def settings_response_from(s: AppSettings) -> SettingsResponse:
         ollabridge=s.ollabridge.model_dump(),
         langflow_url=s.langflow_url,
         has_langflow_plan_flow=bool(s.langflow_plan_flow_id),
+        sandbox=sandbox_payload,
     )
 
 
@@ -1213,8 +1277,110 @@ async def api_context_usage(session_id: Optional[str] = Query(None)):
 # Chat Endpoints
 # ============================================================================
 
+
+def _track_task(*, kind: str, title_fn=None):
+    """Decorator: wrap a chat endpoint so its run is recorded as a Task
+    on the active session (right-sidebar trace).
+
+    Reads ``session_id`` directly off the request model.  ``title_fn``
+    is a small callable that derives the human title from the request
+    object — keeps the decorator decoupled from any specific schema.
+    Endpoints whose requests don't carry a session_id behave exactly
+    as before — no Task is recorded, no error is raised.
+    """
+    import functools
+
+    from .task_recorder import begin_task as _begin_task
+    from .task_recorder import finish_task as _finish_task
+
+    def _default_title(_req):
+        return kind.title()
+
+    extract_title = title_fn or _default_title
+
+    def deco(handler):
+        @functools.wraps(handler)
+        async def wrapper(req, *args, **kwargs):
+            session_id = getattr(req, "session_id", None)
+            try:
+                raw_title = extract_title(req)
+            except Exception:
+                raw_title = None
+            title = (raw_title or kind.title())[:160]
+            task = _begin_task(_session_mgr, session_id, kind=kind, title=title)
+            status = "failed"
+            err: Optional[str] = None
+            try:
+                result = await handler(req, *args, **kwargs)
+                status = "completed"
+                return result
+            except HTTPException as exc:
+                # HTTPException paths are still "failed" from the
+                # tasks-panel point of view (the user did not get a
+                # plan / commit).  Preserve the detail as the error.
+                err = str(exc.detail) if exc.detail else None
+                raise
+            except Exception as exc:
+                err = str(exc)
+                raise
+            finally:
+                _finish_task(
+                    _session_mgr,
+                    session_id,
+                    task,
+                    status=status,
+                    error=err,
+                )
+        return wrapper
+    return deco
+
+
+def _maybe_compact_session_for_request(session_id: Optional[str]) -> None:
+    """Best-effort auto-compaction hook (Batch B3).
+
+    Called at the start of /api/chat/plan + /api/chat/execute.  If the
+    persisted session is over 70 % of the active model's context
+    window, fold the older messages into a single summary entry and
+    record a Task row so the user sees what happened.  A failure here
+    must never block the agent run.
+    """
+    if not session_id:
+        return
+    try:
+        from .auto_compact import maybe_compact_session
+        from .context_meter import resolve_context_window
+        from .task_recorder import begin_task, finish_task
+
+        s = get_settings()
+        window = resolve_context_window(s)
+        report = maybe_compact_session(
+            _session_mgr, session_id, context_window=window
+        )
+        if report.compacted:
+            # Surface the compaction in the right-sidebar trace so the
+            # operator can see "Conversation summarised 24 → 1" rather
+            # than wonder where their messages went.
+            task = begin_task(
+                _session_mgr, session_id,
+                kind="compact",
+                title=(
+                    f"Compacted: {report.messages_folded} older messages "
+                    f"({report.before_tokens} → {report.after_tokens} tokens)"
+                ),
+            )
+            finish_task(
+                _session_mgr, session_id, task,
+                status="completed",
+                prompt_tokens=report.after_tokens,
+            )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("[compact] hook failed: %s", exc)
+
+
 @app.post("/api/chat/plan")
+@_track_task(kind="plan", title_fn=lambda req: req.goal)
 async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Header(None)):
+    _maybe_compact_session_for_request(req.session_id)
     token = get_github_token(authorization)
 
     logger.info(
@@ -1230,8 +1396,57 @@ async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Hea
         # Use lite planner when Lite Mode is active (setting OR topology)
         planner = generate_plan_lite if _is_lite_mode_active() else generate_plan
 
+        # Batch B9 — deterministic query router.  Runs BEFORE the LLM
+        # so even small models that pick poorly without guidance see
+        # a strategy hint up front.  Best-effort: any failure falls
+        # back to today's no-hint behaviour rather than 500-ing.
+        routing_hint = None
+        routing_intent: Optional[str] = None
         try:
-            plan = await planner(req.goal, full_name, token=token, branch_name=req.branch_name)
+            from . import flags as _flags
+            if _flags.is_on("query_router", default=True):
+                from .query_router import classify, render_planner_hint
+                from .rag_consent import has_consent
+
+                # Cheap path: a flat list of repo files for the
+                # classifier's path-verification step.  Failure is
+                # tolerated — router falls back to "no targets".
+                repo_paths: list[str] = []
+                try:
+                    from .github_api import get_repo_tree
+                    _tree = await get_repo_tree(
+                        req.repo_owner, req.repo_name,
+                        token=token, ref=req.branch_name,
+                    )
+                    repo_paths = [t["path"] for t in (_tree or []) if t.get("path")]
+                except Exception:
+                    pass
+
+                rag_index_present = (
+                    has_consent(req.repo_owner, req.repo_name)
+                )
+
+                decision = classify(
+                    req.goal,
+                    repo_files=repo_paths,
+                    rag_index_exists=rag_index_present,
+                    force_no_rag=bool(req.force_no_rag),
+                )
+                routing_hint = render_planner_hint(decision)
+                routing_intent = decision.intent
+                logger.info("[router] %s", decision.rationale)
+        except Exception as _route_err:  # pragma: no cover - defensive
+            logger.debug("[router] skipped: %s", _route_err)
+            routing_hint = None
+            routing_intent = None
+
+        try:
+            plan = await planner(
+                req.goal, full_name,
+                token=token, branch_name=req.branch_name,
+                routing_hint=routing_hint,
+                intent=routing_intent,
+            )
             return plan
         except Exception as exc:
             error_msg = str(exc)
@@ -1308,6 +1523,8 @@ async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Hea
                         full_name,
                         token=token,
                         branch_name=req.branch_name,
+                        routing_hint=routing_hint,
+                        intent=routing_intent,
                     )
                 except Exception as lite_exc:
                     logger.exception(
@@ -1343,10 +1560,15 @@ async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Hea
 
 
 @app.post("/api/chat/execute")
+@_track_task(
+    kind="execute",
+    title_fn=lambda req: getattr(getattr(req, "plan", None), "goal", None) or "Execute plan",
+)
 async def api_chat_execute(
     req: ExecutePlanRequest,
     authorization: Optional[str] = Header(None)
 ):
+    _maybe_compact_session_for_request(req.session_id)
     token = get_github_token(authorization)
 
     with execution_context(token, ref=req.branch_name):
@@ -1408,6 +1630,39 @@ async def api_chat_execute(
                 "mode",
                 "sticky" if req.branch_name else "hard-switch",
             )
+
+        # Persist the branch the executor actually wrote to onto the
+        # session record so reopening this session jumps back to that
+        # branch (instead of the master/default it was created on).
+        # Best-effort: a failure to update the session must never block
+        # the user-facing execute result.
+        new_branch = (
+            result.get("branch") if isinstance(result, dict) else None
+        ) or req.branch_name
+        if req.session_id and new_branch:
+            try:
+                session = _session_mgr.load(req.session_id)
+                session.branch = new_branch
+                # Multi-repo support: update the matching repos[] entry
+                # too if it exists, so callers that read from there see
+                # a consistent value.
+                if session.repos:
+                    for entry in session.repos:
+                        if entry.get("full_name") == full_name:
+                            entry["branch"] = new_branch
+                _session_mgr.save(session)
+            except FileNotFoundError:
+                logger.debug(
+                    "[exec] session %s not found — skipping branch persist",
+                    req.session_id,
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(
+                    "[exec] could not persist branch on session %s: %s",
+                    req.session_id,
+                    exc,
+                )
+
         return result
 
 
@@ -3013,6 +3268,45 @@ async def api_get_session_messages(session_id: str):
                 "metadata": m.metadata,
             }
             for m in session.messages
+        ],
+    }
+
+
+@app.get("/api/sessions/{session_id}/tasks")
+async def api_get_session_tasks(session_id: str):
+    """Return the right-sidebar Tasks trace for one session.
+
+    Read-only.  Gated behind the ``tasks_sidebar`` flag — when off the
+    endpoint 404s so an old frontend can detect "feature absent" with
+    the same code path it uses for "session deleted".
+    """
+    from . import flags
+    from .task_recorder import FLAG_TASKS_SIDEBAR
+
+    if not flags.is_on(FLAG_TASKS_SIDEBAR, default=True):
+        raise HTTPException(status_code=404, detail="Tasks sidebar is disabled")
+
+    try:
+        session = _session_mgr.load(session_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    return {
+        "session_id": session.id,
+        "tasks": [
+            {
+                "id": t.id,
+                "kind": t.kind,
+                "title": t.title,
+                "status": t.status,
+                "started_at": t.started_at,
+                "completed_at": t.completed_at,
+                "duration_ms": t.duration_ms,
+                "prompt_tokens": t.prompt_tokens,
+                "completion_tokens": t.completion_tokens,
+                "error": t.error,
+            }
+            for t in session.tasks
         ],
     }
 

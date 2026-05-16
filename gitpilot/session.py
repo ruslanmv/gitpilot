@@ -43,6 +43,35 @@ class Checkpoint:
 
 
 @dataclass
+class Task:
+    """One AI invocation recorded for the right-sidebar Tasks panel.
+
+    Append-only.  Created with ``status="running"`` at the start of a
+    user-facing operation (Plan or Execute), mutated in place once on
+    completion, and never edited again.  The shape intentionally
+    mirrors what Claude Code surfaces in its tasks list: title + kind
+    + status + duration + token usage.
+
+    Cost / cache / payload size are deferred to a later cut — v1 ships
+    only what GitPilot can compute honestly across every supported
+    provider.
+    """
+    id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    kind: str = "plan"           # plan | execute | (future: explore, code_write…)
+    title: str = ""
+    status: str = "running"      # running | completed | failed
+    started_at: str = field(
+        default_factory=lambda: datetime.now(UTC).isoformat(),
+    )
+    completed_at: str | None = None
+    duration_ms: int | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    error: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class Session:
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:16])
     name: str | None = None
@@ -70,6 +99,11 @@ class Session:
     repos: list[dict[str, Any]] = field(default_factory=list)
     active_repo: str | None = None  # full_name of the write-target repo
 
+    # Right-sidebar Tasks panel (Claude-Code-style trace of every AI
+    # invocation in this session).  Append-only.  Backwards-compatible
+    # default for sessions that pre-date this field.
+    tasks: list[Task] = field(default_factory=list)
+
     def add_message(self, role: str, content: str, **meta):
         self.messages.append(Message(role=role, content=content, metadata=meta))
         self.updated_at = datetime.now(UTC).isoformat()
@@ -82,6 +116,9 @@ class Session:
         data = dict(data)  # shallow copy
         data["messages"] = [Message(**m) for m in data.get("messages", [])]
         data["checkpoints"] = [Checkpoint(**c) for c in data.get("checkpoints", [])]
+        # Backwards-compatible: sessions saved before the tasks field
+        # existed simply load with an empty list.
+        data["tasks"] = [Task(**t) for t in data.get("tasks", [])]
 
         # Backwards-compatible migration: populate repos from legacy single-repo
         if not data.get("repos") and data.get("repo_full_name"):

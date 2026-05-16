@@ -4,7 +4,7 @@ export default function PlanView({ plan }) {
   if (!plan) return null;
 
   // Calculate totals for each action type
-  const totals = { CREATE: 0, MODIFY: 0, DELETE: 0 };
+  const totals = { CREATE: 0, MODIFY: 0, DELETE: 0, INDEX: 0 };
   plan.steps.forEach((step) => {
     step.files.forEach((file) => {
       totals[file.action] = (totals[file.action] || 0) + 1;
@@ -74,6 +74,25 @@ export default function PlanView({ plan }) {
       backgroundColor: theme.dangerBg,
       color: theme.dangerText,
       borderColor: "rgba(239, 68, 68, 0.2)",
+    },
+    totalIndex: {
+      // GitPilot orange — the same brand colour the rest of the app
+      // uses for "infrastructure / one-time" actions.  Visually
+      // distinct from CREATE / MODIFY / DELETE so users know this
+      // step doesn't write code.
+      backgroundColor: "rgba(217, 92, 61, 0.10)",
+      color: "#D95C3D",
+      borderColor: "rgba(217, 92, 61, 0.25)",
+    },
+    indexNotice: {
+      marginTop: "8px",
+      fontSize: "12px",
+      color: "#D95C3D",
+      backgroundColor: "rgba(217, 92, 61, 0.05)",
+      padding: "8px 12px",
+      borderRadius: "6px",
+      border: "1px solid rgba(217, 92, 61, 0.15)",
+      lineHeight: "1.5",
     },
     stepsList: {
       listStyle: "none",
@@ -161,6 +180,7 @@ export default function PlanView({ plan }) {
       case "CREATE": return styles.totalCreate;
       case "MODIFY": return styles.totalModify;
       case "DELETE": return styles.totalDelete;
+      case "INDEX":  return styles.totalIndex;
       default: return {};
     }
   };
@@ -190,6 +210,11 @@ export default function PlanView({ plan }) {
             {totals.DELETE} to delete
           </span>
         )}
+        {totals.INDEX > 0 && (
+          <span style={{ ...styles.totalBadge, ...styles.totalIndex }}>
+            {totals.INDEX === 1 ? "1 setup step" : `${totals.INDEX} setup steps`}
+          </span>
+        )}
       </div>
 
       {/* Steps List */}
@@ -210,9 +235,27 @@ export default function PlanView({ plan }) {
                     <span style={{ ...styles.actionBadge, ...getActionStyle(file.action) }}>
                       {file.action}
                     </span>
-                    <span style={styles.path}>{file.path}</span>
+                    <span style={styles.path}>
+                      {file.action === "INDEX"
+                        ? "Build semantic index for this repo"
+                        : file.path}
+                    </span>
                   </div>
                 ))}
+              </div>
+            )}
+
+            {/* B9: explain the INDEX step's cost so users can decide
+                informedly before clicking Approve. */}
+            {s.files && s.files.some((f) => f.action === "INDEX") && (
+              <div style={styles.indexNotice}>
+                📦 One-time semantic index build.
+                Embeds every file locally with MiniLM-L6-v2 (~80 MB
+                model on first run, ~30 s wall time for a typical
+                repo, ~12 MB on disk).  No cloud calls.  Makes future
+                "find / where / how" queries instant.  Click{" "}
+                <strong>Reject plan</strong> to skip — you'll be
+                offered the grep fallback.
               </div>
             )}
 
