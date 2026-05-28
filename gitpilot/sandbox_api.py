@@ -119,6 +119,43 @@ class SandboxRunResponse(BaseModel):
 
 
 # ----------------------------------------------------------------------
+# Execution-plan models (approval-first sandbox)
+# ----------------------------------------------------------------------
+#
+# Every sandbox run starts as a deterministic ExecutionPlan the user
+# must approve.  These models are the over-the-wire shape — the
+# canonical builder lives in :mod:`gitpilot.sandbox_plan` and stays
+# free of FastAPI / Pydantic so it can be unit-tested in isolation.
+
+class SandboxPlanRequest(BaseModel):
+    # Exactly one of (file) or (code+language) must be set.
+    file: Optional[str] = None
+    code: Optional[str] = None
+    language: Optional[str] = None
+    # Source of the request — drives the badge in the approval card
+    # and lets us tell file-run vs code-block-run apart in analytics.
+    source: str = Field(default="chat")
+    # Optional Rerun lineage so the new ExecutionCard can reference
+    # the run it replays.
+    parent_run_id: Optional[str] = None
+    # Override timeout per-plan; falls back to sandbox.timeout_sec.
+    timeout_sec: Optional[int] = Field(default=None, ge=1, le=600)
+    # The list of files in the active repo, used to verify file-run
+    # plans.  Sent by the client so the planner is stateless and
+    # repo-aware without re-reading the tree on every plan call.
+    repo_files: Optional[List[str]] = None
+    # Inline plans only: override the synthetic "inline.<ext>" name
+    # in the displayed command.  Used by the file-aware Canvas so a
+    # repo file opened for editing produces a plan that reads
+    # ``python demo.py`` instead of ``python inline.py``.  Cosmetic.
+    display_filename: Optional[str] = None
+
+
+class SandboxPlanResponse(BaseModel):
+    plan: Dict[str, Any]
+
+
+# ----------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------
 
@@ -234,6 +271,91 @@ async def api_sandbox_config(update: SandboxConfigUpdate) -> SandboxStatusRespon
     return _status_from(cfg, health)
 
 
+@router.post("/plan", response_model=SandboxPlanResponse)
+async def api_sandbox_plan(req: SandboxPlanRequest) -> SandboxPlanResponse:
+    """Return a deterministic ExecutionPlan for the next sandbox run.
+
+    The plan is *not* executed here — the UI shows it to the user and
+    POSTs to :func:`api_sandbox_run` (Batch 2 will introduce
+    ``/execute`` with streaming) only after explicit approval. The
+    plan is built without any LLM round-trip so the user sees the
+    approval card in milliseconds and the "empty plan" failure mode
+    is eliminated for run requests entirely.
+
+    Exactly one of ``file`` or ``code + language`` must be set:
+      * ``file`` — file-run path (chat command, sidebar ▶, Rerun).
+      * ``code`` + ``language`` — inline path (code-block, Canvas).
+    """
+    from .sandbox_plan import (  # local import: keeps cold start lean
+        build_execution_plan_for_file,
+        build_execution_plan_for_inline,
+    )
+
+    s: AppSettings = get_settings()
+    cfg = s.sandbox
+    backend_name = (cfg.backend or BACKEND_SUBPROCESS).strip().lower()
+    # The plan card surfaces the *effective* backend.  We collapse
+    # "off" into "subprocess" for display because pass-through runs
+    # still execute through the subprocess pipeline; the safety
+    # advisory ("Network: disabled") is identical either way.
+    sandbox_label = "matrixlab" if backend_name == BACKEND_MATRIXLAB else "subprocess"
+    timeout = int(req.timeout_sec or cfg.timeout_sec or DEFAULT_TIMEOUT_SEC)
+
+    source = (req.source or "chat").strip().lower()
+    if source not in {"chat", "code_block", "file_run", "canvas", "rerun"}:
+        source = "chat"
+
+    if req.file:
+        plan = build_execution_plan_for_file(
+            file=req.file,
+            repo_files=req.repo_files or [req.file],
+            sandbox=sandbox_label,  # type: ignore[arg-type]
+            timeout_sec=timeout,
+            network=bool(cfg.allow_network),
+            source=source,  # type: ignore[arg-type]
+            parent_run_id=req.parent_run_id,
+        )
+        if plan is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"cannot plan run for {req.file!r}: file not in repo "
+                    f"or extension not in the runnable allowlist."
+                ),
+            )
+        return SandboxPlanResponse(plan=plan.to_dict())
+
+    if req.code is not None:
+        if not (req.language or "").strip():
+            raise HTTPException(
+                status_code=400, detail="inline plan requires a language tag",
+            )
+        plan = build_execution_plan_for_inline(
+            code=req.code,
+            language=req.language or "",
+            source=source,  # type: ignore[arg-type]
+            sandbox=sandbox_label,  # type: ignore[arg-type]
+            timeout_sec=timeout,
+            network=bool(cfg.allow_network),
+            parent_run_id=req.parent_run_id,
+            display_filename=req.display_filename,
+        )
+        if plan is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"cannot plan run for language {req.language!r}: "
+                    f"snippet is empty or language is not runnable."
+                ),
+            )
+        return SandboxPlanResponse(plan=plan.to_dict())
+
+    raise HTTPException(
+        status_code=400,
+        detail="provide either 'file' or 'code'+'language' to build a plan",
+    )
+
+
 @router.post("/run", response_model=SandboxRunResponse)
 async def api_sandbox_run(req: SandboxRunRequest) -> SandboxRunResponse:
     """Execute a fenced-code snippet through the configured sandbox.
@@ -347,7 +469,7 @@ async def _run_via_matrixlab_code_endpoint(
             status_code=400,
             detail=f"language {lang!r} is not supported by MatrixLab /code/run",
         )
-    base_url = (cfg.matrixlab_url or "http://localhost:8000").rstrip("/")
+    base_url = (cfg.matrixlab_url or "http://localhost:8765").rstrip("/")
     headers = {"Content-Type": "application/json"}
     if cfg.matrixlab_token:
         headers["Authorization"] = f"Bearer {cfg.matrixlab_token}"
@@ -413,11 +535,17 @@ DEFAULT_RUNNER_IMAGE = os.environ.get(
 )
 # Sandbox images the Runner spawns per language.  Pulling these at
 # install time means the first /code/run from the chat UI doesn't
-# stall on a multi-hundred-MB image fetch.
+# stall on a multi-hundred-MB image fetch.  Names match the
+# ``$(REGISTRY)/$(DOCKERHUB_NAMESPACE)/matrix-lab-sandbox-*`` tags
+# the matrixlab repo's Makefile builds and pushes via the
+# ``docker-publish`` GitHub workflow.
+_MATRIXLAB_NAMESPACE = os.environ.get(
+    "GITPILOT_MATRIXLAB_NAMESPACE", "ruslanmv",
+)
 DEFAULT_SANDBOX_IMAGES = [
-    "matrix-lab-sandbox-python:latest",
-    "matrix-lab-sandbox-node:latest",
-    "matrix-lab-sandbox-utils:latest",
+    f"{_MATRIXLAB_NAMESPACE}/matrix-lab-sandbox-python:latest",
+    f"{_MATRIXLAB_NAMESPACE}/matrix-lab-sandbox-node:latest",
+    f"{_MATRIXLAB_NAMESPACE}/matrix-lab-sandbox-utils:latest",
 ]
 DEFAULT_CONTAINER_NAME = os.environ.get(
     "GITPILOT_MATRIXLAB_CONTAINER",
@@ -448,7 +576,24 @@ class MatrixLabLifecycleResponse(BaseModel):
 
 
 def _lifecycle_enabled() -> bool:
-    return os.environ.get(ENV_LIFECYCLE, "").strip().lower() in {"1", "true", "yes", "on"}
+    """Decide whether ``/api/matrixlab/install`` / ``start`` / ``stop`` are allowed.
+
+    GitPilot ships as a single-tenant local tool; anyone who can reach
+    the backend can already execute arbitrary code via the existing
+    subprocess sandbox, so the addon-install endpoints don't materially
+    expand the attack surface.  Default is therefore **enabled** —
+    clicking ``Install MatrixLab Addon`` in the UI is the user's opt-in.
+
+    Hardened deployments (future multi-tenant, untrusted-reverse-proxy)
+    can flip this off by setting ``GITPILOT_ENABLE_MATRIXLAB_LIFECYCLE=0``
+    (or ``false`` / ``no`` / ``off``).  The env var name is preserved
+    for backward compatibility; only the polarity inverted.
+    """
+    raw = os.environ.get(ENV_LIFECYCLE, "").strip().lower()
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    # Anything else (empty, "1", "true", "yes", garbage) → enabled.
+    return True
 
 
 async def _run_shell(cmd: List[str], *, timeout: int = 600) -> _StepResult:
@@ -506,7 +651,7 @@ async def _docker_image_present(name: str) -> bool:
 async def _matrixlab_running() -> bool:
     """Probe the configured Runner URL for a healthy /health response."""
     cfg = get_settings().sandbox
-    base = (cfg.matrixlab_url or "http://localhost:8000").rstrip("/")
+    base = (cfg.matrixlab_url or "http://localhost:8765").rstrip("/")
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.get(f"{base}/health")
@@ -612,9 +757,11 @@ async def api_matrixlab_start() -> MatrixLabLifecycleResponse:
 
     steps: List[_StepResult] = []
     # Determine which port to expose locally — derive it from the
-    # configured matrixlab_url so 'Start' agrees with /status.
+    # configured matrixlab_url so 'Start' agrees with /status.  The
+    # 8765 fallback matches MatrixLab's own docker-compose default,
+    # which moved off :8000 to avoid clashing with GitPilot's backend.
     cfg = get_settings().sandbox
-    port = 8000
+    port = 8765
     try:
         from urllib.parse import urlparse
 
@@ -622,7 +769,7 @@ async def api_matrixlab_start() -> MatrixLabLifecycleResponse:
         if parsed.port:
             port = int(parsed.port)
     except Exception:  # noqa: BLE001
-        port = 8000
+        port = 8765
 
     # Does a container with the canonical name already exist?
     inspect = await _run_shell(
@@ -634,11 +781,32 @@ async def api_matrixlab_start() -> MatrixLabLifecycleResponse:
         # Container exists — start it if stopped, otherwise leave it be.
         steps.append(await _run_shell(["docker", "start", DEFAULT_CONTAINER_NAME], timeout=60))
     else:
+        # Docker-in-Docker bind-mount fix.  The runner writes the per-
+        # request workspace under MATRIXLAB_LOCAL_JOBS_DIR (inside its
+        # own container), then asks the HOST docker daemon to mount
+        # that path into the sandbox at /workspace.  If the path isn't
+        # also visible on the host filesystem the bind ends up empty
+        # and ``python: can't open file '/workspace/main.py'`` results.
+        # Share a single host directory at the same path on both sides
+        # so docker's path-translation is a no-op.
+        jobs_dir = os.environ.get(
+            "GITPILOT_MATRIXLAB_JOBS_DIR",
+            "/tmp/gitpilot-matrixlab-jobs",
+        )
+        os.makedirs(jobs_dir, exist_ok=True)
+        try:
+            os.chmod(jobs_dir, 0o777)
+        except OSError:
+            pass
+
         run_cmd = [
             "docker", "run", "-d",
             "--name", DEFAULT_CONTAINER_NAME,
             "-p", f"{port}:8000",
             "-v", "/var/run/docker.sock:/var/run/docker.sock",
+            "-v", f"{jobs_dir}:{jobs_dir}",
+            "-e", f"MATRIXLAB_LOCAL_JOBS_DIR={jobs_dir}",
+            "-e", f"MATRIXLAB_HOST_JOBS_DIR={jobs_dir}",
             "--restart", "unless-stopped",
             DEFAULT_RUNNER_IMAGE,
         ]

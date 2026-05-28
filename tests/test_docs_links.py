@@ -27,7 +27,12 @@ _LINK_RE = re.compile(r"!?\[[^\]]*?\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 # (.venv, node_modules, build artefacts) and the legacy mcp-stack
 # clone that the install workflow may drop into the repo.
 _SKIP_PARTS = {".venv", "node_modules", "build", "dist", "htmlcov",
-               ".git", "__pycache__", "mcp-stack"}
+               ".git", "__pycache__", "mcp-stack",
+               # uv's project cache (transient — pulled archives, sdists,
+               # extracted wheels — none of it is repo source).
+               ".uv-cache",
+               # MatrixLab addon's job workspace bind-mount.
+               ".matrixlab-jobs"}
 
 
 def _iter_markdown() -> Iterable[Path]:

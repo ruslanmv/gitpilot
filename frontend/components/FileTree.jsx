@@ -10,6 +10,28 @@ export default function FileTree({ repo, refreshTrigger, branch }) {
   const [isSwitchingBranch, setIsSwitchingBranch] = useState(false);
   const [error, setError] = useState(null);
   const [localRefresh, setLocalRefresh] = useState(0);
+  // Search query for the in-sidebar filter.  Empty string == no filter.
+  // Filter runs case-insensitively on path basenames *and* full paths
+  // so users can pinpoint a file even in deeply nested folders.
+  const [query, setQuery] = useState("");
+  // Which file is currently focused in the preview panel — populated
+  // by the ``gitpilot:file-opened`` event ChatPanel emits when the
+  // preview finishes loading.  Drives the ◄ marker + active row tint.
+  const [selectedPath, setSelectedPath] = useState(null);
+
+  useEffect(() => {
+    const onOpened = (e) => setSelectedPath(e?.detail?.path || null);
+    const onClosed = () => setSelectedPath(null);
+    const onRefresh = () => setLocalRefresh((n) => n + 1);
+    window.addEventListener("gitpilot:file-opened", onOpened);
+    window.addEventListener("gitpilot:file-closed", onClosed);
+    window.addEventListener("gitpilot:refresh-tree", onRefresh);
+    return () => {
+      window.removeEventListener("gitpilot:file-opened", onOpened);
+      window.removeEventListener("gitpilot:file-closed", onClosed);
+      window.removeEventListener("gitpilot:refresh-tree", onRefresh);
+    };
+  }, []);
 
   useEffect(() => {
     if (!repo) return;
@@ -205,50 +227,290 @@ export default function FileTree({ repo, refreshTrigger, branch }) {
       )}
 
       {tree.length > 0 && (
-        <div style={{
-          ...styles.treeContainer,
-          opacity: isSwitchingBranch ? 0.5 : 1,
-          transition: "opacity 0.15s ease",
-        }}>
-          {tree.map((node) => (
-            <TreeNode key={node.path} node={node} level={0} />
-          ))}
-        </div>
+        <>
+          {/* In-sidebar file search.  Enterprise repos run to hundreds
+              of files; the explorer needs a quick narrowing affordance
+              before any of the contextual menus matter. */}
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="🔍 Search files…"
+            spellCheck={false}
+            style={{
+              width: "100%", boxSizing: "border-box",
+              margin: "4px 0 8px",
+              padding: "6px 10px", fontSize: 12,
+              background: "#0d0e17", color: "#e4e4e7",
+              border: "1px solid #27272A", borderRadius: 6,
+              outline: "none",
+              fontFamily: "system-ui, sans-serif",
+            }}
+          />
+
+          <div style={{
+            ...styles.treeContainer,
+            opacity: isSwitchingBranch ? 0.5 : 1,
+            transition: "opacity 0.15s ease",
+          }}>
+            {tree.map((node) => (
+              <TreeNode
+                key={node.path}
+                node={node}
+                level={0}
+                filter={query.trim().toLowerCase()}
+                selectedPath={selectedPath}
+              />
+            ))}
+          </div>
+        </>
       )}
     </div>
   );
 }
 
-// Recursive Node Component
-function TreeNode({ node, level }) {
-  const [expanded, setExpanded] = useState(false);
-  const isFolder = node.children && node.children.length > 0;
-  
-  const icon = isFolder ? (expanded ? "📂" : "📁") : "📄";
+// Files with these extensions get a "Prepare Run" menu item.  Mirrors
+// the backend's _RUNNABLE_EXTENSIONS so the menu only offers a run
+// where the sandbox planner would actually accept the file.
+const RUNNABLE_FILE_EXTS = new Set(["py", "js", "mjs", "cjs", "sh", "bash"]);
+
+function isRunnableFile(name, type) {
+  if (type === "tree") return false;
+  if (!name || !name.includes(".")) return false;
+  const ext = name.split(".").pop().toLowerCase();
+  return RUNNABLE_FILE_EXTS.has(ext);
+}
+
+// Window-event dispatch helpers — keep FileTree decoupled from
+// ChatPanel.  Same pattern as the existing approval-flow events.
+function dispatchOpenFile(path) {
+  try {
+    window.dispatchEvent(new CustomEvent("gitpilot:open-file", { detail: { path } }));
+  } catch (_e) { /* old browser */ }
+}
+function dispatchOpenInCanvas(path) {
+  try {
+    window.dispatchEvent(new CustomEvent("gitpilot:open-in-canvas", { detail: { path } }));
+  } catch (_e) { /* old browser */ }
+}
+function dispatchRunFile(path) {
+  try {
+    window.dispatchEvent(new CustomEvent("gitpilot:run-file", { detail: { path } }));
+  } catch (_e) { /* old browser */ }
+}
+function dispatchAskAboutFile(path) {
+  try {
+    window.dispatchEvent(new CustomEvent("gitpilot:ask-about-file", { detail: { path } }));
+  } catch (_e) { /* old browser */ }
+}
+function copyToClipboard(text) {
+  if (navigator?.clipboard) navigator.clipboard.writeText(text).catch(() => {});
+}
+
+// Tiny dropdown — positioned absolutely below the row's ⋯ trigger.
+// Closes on outside click or Escape.  Built-in <select> would be
+// faster to write but the visual contract for an enterprise file
+// explorer demands a real menu (icons, separators, descriptions).
+function FileActionsMenu({ path, runnable, onClose }) {
+  React.useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose?.(); };
+    const onDown = () => onClose?.();
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", onDown);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onDown);
+    };
+  }, [onClose]);
+
+  // Menu vocabulary maps 1:1 to the design's recommended verbs.  "Open
+  // Preview" is the calm default; "Open Workspace" widens the panel
+  // for serious reading/editing; "Prepare Run…" surfaces the
+  // ExecutionPlanCard.  Canvas (the runnable split editor) is moved
+  // to the overflow because it's the heaviest mode and shouldn't
+  // compete with Preview / Workspace for attention.
+  const items = [
+    { label: "Open Preview",   onClick: () => dispatchOpenFile(path) },
+    {
+      label: "Open Workspace",
+      onClick: () => window.dispatchEvent(
+        new CustomEvent("gitpilot:open-workspace", { detail: { path } })
+      ),
+    },
+    {
+      label: "Prepare Run…",
+      onClick: () => dispatchRunFile(path),
+      runnable: true,
+      primary: true,
+    },
+    { divider: true },
+    { label: "Ask GitPilot",   onClick: () => dispatchAskAboutFile(path) },
+    { label: "Open in Canvas", onClick: () => dispatchOpenInCanvas(path), runnable: true },
+    { label: "Copy path",      onClick: () => copyToClipboard(path) },
+  ];
 
   return (
-    <div>
-      <div 
-        onClick={() => isFolder && setExpanded(!expanded)}
-        style={{ 
-          padding: "4px 0", 
+    <div
+      role="menu"
+      onMouseDown={(e) => e.stopPropagation()}
+      style={{
+        position: "absolute", right: 4, top: 22, zIndex: 50,
+        minWidth: 180,
+        background: "#18181B", border: "1px solid #3F3F46",
+        borderRadius: 6, padding: "4px 0",
+        boxShadow: "0 8px 20px rgba(0,0,0,0.45)",
+        fontFamily: "system-ui, sans-serif",
+      }}
+    >
+      {items.map((it, i) => {
+        if (it.divider) {
+          return <div key={i} style={{ height: 1, background: "#27272A", margin: "4px 0" }} />;
+        }
+        if (it.runnable && !runnable) return null;
+        return (
+          <button
+            key={i}
+            role="menuitem"
+            type="button"
+            onClick={(e) => { e.stopPropagation(); it.onClick(); onClose?.(); }}
+            style={{
+              width: "100%", textAlign: "left",
+              background: "transparent",
+              color: it.primary ? "#86efac" : "#E4E4E7",
+              border: "none",
+              padding: "6px 12px", fontSize: 12, cursor: "pointer",
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.background = "#27272A"}
+            onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+          >
+            {it.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// True when ``node`` or any descendant path/basename contains ``filter``.
+// Folders are rendered if any descendant matches so the filter looks
+// like a flat search even though the tree is recursive.
+function _matchesFilter(node, filter) {
+  if (!filter) return true;
+  const inThis =
+    (node.path && node.path.toLowerCase().includes(filter)) ||
+    (node.name && node.name.toLowerCase().includes(filter));
+  if (inThis) return true;
+  if (!node.children) return false;
+  return node.children.some((c) => _matchesFilter(c, filter));
+}
+
+// Recursive Node Component
+function TreeNode({ node, level, filter = "", selectedPath = null }) {
+  const [userExpanded, setUserExpanded] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const isFolder = node.children && node.children.length > 0;
+  const runnable = !isFolder && isRunnableFile(node.name, node.type);
+  const isSelected = !isFolder && selectedPath === node.path;
+
+  // Honor the filter: drop subtrees that don't match anywhere.  When
+  // the filter is active, folders auto-expand so users see the matches
+  // without having to chase carets.
+  if (filter && !_matchesFilter(node, filter)) return null;
+  const expanded = userExpanded || Boolean(filter);
+
+  const icon = isFolder ? (expanded ? "📂" : "📁") : "📄";
+
+  const onRowClick = () => {
+    if (isFolder) setUserExpanded(!userExpanded);
+    else dispatchOpenFile(node.path);
+  };
+
+  return (
+    <div style={{ position: "relative" }}>
+      <div
+        onClick={onRowClick}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => { setHovered(false); /* menu closes on outside-click */ }}
+        style={{
+          padding: "4px 0",
           paddingLeft: `${level * 12}px`,
-          cursor: isFolder ? "pointer" : "default",
+          paddingRight: 6,
+          cursor: "pointer",
           display: "flex",
           alignItems: "center",
           gap: "6px",
-          color: isFolder ? "#EDEDED" : "#A1A1AA",
-          whiteSpace: "nowrap"
+          color: isFolder
+            ? "#EDEDED"
+            : (isSelected ? "#86efac" : "#D4D4D8"),
+          whiteSpace: "nowrap",
+          borderRadius: 4,
+          background: isSelected
+            ? "rgba(16,185,129,0.10)"
+            : (hovered ? "#1f1f23" : "transparent"),
+          borderLeft: isSelected ? "2px solid #10B981" : "2px solid transparent",
         }}
+        title={isFolder ? "" : "Click to open · ⋯ for actions"}
       >
         <span style={{ fontSize: "14px", opacity: 0.7 }}>{icon}</span>
-        <span>{node.name}</span>
+        <span style={{
+          flex: 1, overflow: "hidden", textOverflow: "ellipsis",
+          fontWeight: isSelected ? 600 : 400,
+        }}>
+          {node.name}
+        </span>
+        {/* Selected marker — orient users when scanning a long list. */}
+        {isSelected && (
+          <span style={{ color: "#10B981", fontSize: 11 }}>◄</span>
+        )}
+
+        {/* Per-row ⋯ menu trigger — visible on hover only so the
+            list reads as a clean inventory at rest. */}
+        {!isFolder && hovered && (
+          <button
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              setMenuOpen((v) => !v);
+            }}
+            title="File actions"
+            style={{
+              background: "transparent",
+              border: "1px solid transparent",
+              color: "#A1A1AA",
+              cursor: "pointer",
+              fontSize: 14,
+              lineHeight: 1,
+              padding: "0 6px",
+              borderRadius: 4,
+            }}
+          >
+            ⋯
+          </button>
+        )}
       </div>
-      
+
+      {menuOpen && (
+        <FileActionsMenu
+          path={node.path}
+          runnable={runnable}
+          onClose={() => setMenuOpen(false)}
+        />
+      )}
+
       {isFolder && expanded && (
         <div>
           {node.children.map(child => (
-            <TreeNode key={child.path} node={child} level={level + 1} />
+            <TreeNode
+              key={child.path}
+              node={child}
+              level={level + 1}
+              filter={filter}
+              selectedPath={selectedPath}
+            />
           ))}
         </div>
       )}

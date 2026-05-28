@@ -21,6 +21,7 @@ import {
   SkillsTab,
   SessionsTab,
   AdvancedTab,
+  SandboxTab,
 } from "./components/AdminTabs";
 import { apiUrl, safeFetchJSON, fetchStatus } from "./utils/api.js";
 import { initApp } from "./utils/appInit.js";
@@ -798,7 +799,7 @@ export default function App() {
       setStartupPhase("checking-backend");
       setStartupStatusMessage("Connecting to backend...");
       setStartupDetailMessage(
-        "Waiting for the server to be ready. This may take a few seconds on first start."
+        "Preparing your workspace. First launch may take a few seconds."
       );
 
       // Single-source-of-truth init: combines /api/status + /api/auth/status
@@ -1034,7 +1035,7 @@ export default function App() {
           {activePage === "admin" && (
             <div style={{ padding: "24px", maxWidth: "960px", margin: "0 auto" }}>
               <div style={{ display: "flex", gap: "8px", marginBottom: "24px", flexWrap: "wrap" }}>
-                {["overview", "providers", "workspace-modes", "integrations", "mcp-servers", "sessions", "skills", "security", "advanced"].map((tab) => (
+                {["overview", "providers", "workspace-modes", "integrations", "mcp-servers", "sandbox", "sessions", "skills", "security", "advanced"].map((tab) => (
                   <button
                     key={tab}
                     onClick={() => setAdminTab(tab)}
@@ -1153,6 +1154,10 @@ export default function App() {
 
               {adminTab === "mcp-servers" && (
                 <MCPServersTab showToast={showToast} />
+              )}
+
+              {adminTab === "sandbox" && (
+                <SandboxTab showToast={showToast} />
               )}
 
               {adminTab === "security" && (

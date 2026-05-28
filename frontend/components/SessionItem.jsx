@@ -3,28 +3,37 @@ import React, { useState } from "react";
 /**
  * SessionItem — a single row in the sessions sidebar.
  *
- * Shows status dot (pulsing/static), title, timestamp, message count.
- * Claude-Code-on-Web parity: active=amber pulse, completed=green,
- * failed=red, waiting=blue.
+ * Status mapping:
+ *   running / executing  → orange animated pulse  (truly alive)
+ *   selected-idle        → static muted orange    (current, not running)
+ *   inactive / idle      → static dim gray        (old history)
+ *   failed / error       → static red             (warning)
+ *   completed / closed   → static gray            (archived)
  */
 export default function SessionItem({ session, isActive, onSelect, onDelete }) {
   const [hovering, setHovering] = useState(false);
 
-  const status = session.status || "active";
+  const rawStatus = (session.status || "").toLowerCase();
+  const isRunning = rawStatus === "running" || rawStatus === "executing";
+  const isFailed = rawStatus === "failed" || rawStatus === "error";
+  const isCompleted = rawStatus === "completed" || rawStatus === "closed";
 
-  const dotColor = {
-    active: "#F59E0B",
-    completed: "#10B981",
-    failed: "#EF4444",
-    waiting: "#3B82F6",
-    paused: "#6B7280",
-  }[status] || "#6B7280";
-
-  const isPulsing = status === "active";
+  let dotClass;
+  if (isRunning) {
+    dotClass = "session-dot session-dot--active";
+  } else if (isFailed) {
+    dotClass = "session-dot session-dot--failed";
+  } else if (isCompleted) {
+    dotClass = "session-dot session-dot--completed";
+  } else if (isActive) {
+    dotClass = "session-dot session-dot--idle";
+  } else {
+    dotClass = "session-dot session-dot--inactive";
+  }
 
   const timeAgo = formatTimeAgo(session.updated_at);
+  const metaPrimary = isRunning ? "Active now" : timeAgo;
 
-  // Prefer name (set from first user prompt) over generic fallback
   const title =
     session.name ||
     (session.branch ? `${session.branch}` : `Session ${session.id?.slice(0, 8)}`);
@@ -34,37 +43,29 @@ export default function SessionItem({ session, isActive, onSelect, onDelete }) {
       style={{
         ...styles.row,
         backgroundColor: isActive
-          ? "rgba(59, 130, 246, 0.08)"
+          ? "rgba(255, 122, 60, 0.07)"
           : hovering
           ? "rgba(255,255,255,0.03)"
           : "transparent",
-        borderLeft: isActive ? "2px solid #3B82F6" : "2px solid transparent",
+        borderLeft: isActive
+          ? "2px solid rgba(255, 122, 60, 0.7)"
+          : "2px solid transparent",
       }}
       onClick={onSelect}
       onMouseEnter={() => setHovering(true)}
       onMouseLeave={() => setHovering(false)}
     >
-      <style>{`
-        @keyframes session-pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.4; }
-        }
-      `}</style>
-
-      {/* Status dot */}
-      <div
-        style={{
-          ...styles.dot,
-          backgroundColor: dotColor,
-          animation: isPulsing ? "session-pulse 1.5s ease-in-out infinite" : "none",
-        }}
-      />
+      <span className={dotClass} aria-hidden="true" />
 
       {/* Content */}
       <div style={styles.content}>
         <div style={styles.title}>{title}</div>
         <div style={styles.meta}>
-          {timeAgo}
+          <span
+            style={isRunning ? styles.metaActive : undefined}
+          >
+            {metaPrimary}
+          </span>
           {session.mode && (
             <span style={{
               ...styles.badge,
@@ -120,7 +121,7 @@ const styles = {
   row: {
     display: "flex",
     alignItems: "center",
-    gap: 8,
+    gap: 10,
     padding: "8px 10px",
     borderRadius: 6,
     cursor: "pointer",
@@ -128,12 +129,6 @@ const styles = {
     position: "relative",
     marginBottom: 2,
     animation: "session-fade-in 0.25s ease-out",
-  },
-  dot: {
-    width: 8,
-    height: 8,
-    borderRadius: "50%",
-    flexShrink: 0,
   },
   content: {
     flex: 1,
@@ -155,6 +150,10 @@ const styles = {
     display: "flex",
     alignItems: "center",
     gap: 6,
+  },
+  metaActive: {
+    color: "#ffb089",
+    fontWeight: 600,
   },
   badge: {
     fontSize: 9,

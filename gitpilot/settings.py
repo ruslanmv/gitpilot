@@ -82,7 +82,10 @@ class SandboxSettings(BaseModel):
     """
 
     backend: str = Field(default="subprocess")
-    matrixlab_url: str = Field(default="http://localhost:8000")
+    # MatrixLab maps its container :8000 to host :8765 to avoid clobbering
+    # GitPilot's own backend on :8000. Older installs on 8000 continue to
+    # work — only the default is shifted.
+    matrixlab_url: str = Field(default="http://localhost:8765")
     matrixlab_token: str = Field(default="")
     matrixlab_image: str = Field(default="")
     allow_network: bool = Field(default=False)

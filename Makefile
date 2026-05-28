@@ -97,14 +97,32 @@ help:
 	@echo "  make gateway-register Register GitPilot agent in ContextForge"
 	@echo ""
 
-## High-level install: runtime backend + frontend + MCP stack.
-## GitPilot uses the MCP stack by default, so keep MCP in the happy path while
-## leaving heavyweight developer/docs tooling opt-in.
-install: uv-install frontend-install install-mcp
-	@echo "✅ Backend runtime (uv), frontend (npm) and MCP env ready."
+## High-level install: runtime backend + frontend + MCP stack + MatrixLab addon.
+## GitPilot now ships MatrixLab as a first-class part of the backend, so it's
+## installed by default alongside the MCP stack.  When docker isn't available
+## (or the runner port is held), install-matrixlab-soft warns and continues —
+## the rest of the install completes regardless.
+## Skip the addon entirely with:  make install SKIP_MATRIXLAB=1
+install: uv-install frontend-install install-mcp install-matrixlab-soft
+	@echo "✅ Backend runtime (uv), frontend (npm), MCP env and MatrixLab addon ready."
 	@echo "   Run 'make run' to start MCP Context Forge + GitPilot."
+	@echo "   Run 'make startup' for the full GitPilot + MatrixLab + URL-fixup flow."
 	@echo "   No Docker?  Use 'make run-bare' to start GitPilot without MCP."
 	@echo "   Optional:   'make install-dev' for test/lint/build tooling."
+
+## Soft variant of install-matrixlab — warns and skips on docker-missing /
+## daemon-down / port-held instead of aborting the parent installer.  Wired
+## into `make install` so the MatrixLab addon shows up by default but a
+## Docker-less host still gets a clean install.  Skip entirely with
+## SKIP_MATRIXLAB=1 (useful in CI when you really don't want any docker
+## reach-out during install).
+.PHONY: install-matrixlab-soft
+install-matrixlab-soft:
+ifeq ($(SKIP_MATRIXLAB),1)
+	@echo "➖ Skipping MatrixLab addon install (SKIP_MATRIXLAB=1)."
+else
+	@MATRIXLAB_OPTIONAL=1 bash scripts/install-matrixlab.sh
+endif
 
 ## Custom developer install: add dev/test/build tooling when you need it.
 install-dev: uv-install-dev frontend-install
@@ -806,6 +824,14 @@ stop-mcp:
 	@docker compose --env-file .mcp.env -f docker-compose.mcp.yml --profile mcp down 2>/dev/null || true
 	@echo "🛑 MCP stack stopped (volumes kept). 'make uninstall-mcp' to remove data."
 
+## Rotate the MCP_AUTH_TOKEN end-to-end and re-init Forge with the new
+## token.  The escape hatch when `make run-mcp`'s auto-recovery isn't
+## enough — typically because Forge persisted an older token in
+## Postgres on its first boot.  Wipes Forge's volume (NOT Postgres
+## data) so the new token in .mcp.env is what Forge actually validates.
+rotate-mcp-token:
+	@bash scripts/rotate-mcp-token.sh
+
 ## Tail logs from the MCP stack
 logs-mcp:
 	@docker compose --env-file .mcp.env -f docker-compose.mcp.yml --profile mcp logs -f --tail=100
@@ -841,3 +867,95 @@ install-mcp-workflows:
 ## Add --milvus to also check the milvus profile.
 smoke-mcp:
 	@bash scripts/smoke-mcp.sh
+
+# =========================================================================
+# Phase 0 industrial-grade additions
+#
+# These targets land next to the legacy 69 — nothing removed, nothing
+# renamed.  They're the "five-verb" model's first three:
+#   make doctor       — preflight + diagnose
+#   make run-prod     — production frontend build, served by the backend
+#   make install-matrixlab
+#                     — opt-in MatrixLab addon (also fired by
+#                       `make install WITH_MATRIXLAB=1`)
+#
+# Once these prove themselves, the legacy targets can become thin
+# aliases.  For now they coexist.
+# =========================================================================
+
+## Preflight + diagnose: catches the failure modes the user can hit
+## BEFORE they cost a 20-minute support cycle.  Mirrors `gh doctor`
+## and `git doctor`.  Each red check links to a fix command.
+.PHONY: doctor
+doctor:
+	@bash scripts/doctor.sh
+
+## Build the production frontend (Vite dist) and start the GitPilot
+## backend serving it via FastAPI's StaticFiles mount.  Unlike `make
+## run`, this does NOT start the Vite dev server — one URL, minified
+## assets, no CORS, no `vite ready in 1926 ms` line.
+.PHONY: run-prod
+run-prod: frontend-build
+	@echo "🚀 Starting GitPilot in production mode on http://127.0.0.1:$(PORT)..."
+	@$(UV_ENV) $(UV) run --no-dev python -m gitpilot serve --host 127.0.0.1 --port $(PORT) --no-open
+
+## Strict MatrixLab addon install — fatal on docker-missing / port-held.
+## Use this when you explicitly want to (re)provision the addon.
+## `make install` (default) now uses install-matrixlab-soft (above) which
+## chains into install but tolerates a Docker-less host.  WITH_MATRIXLAB=1
+## is preserved as an alias for the strict path for backwards compatibility.
+.PHONY: install-matrixlab
+install-matrixlab:
+	@bash scripts/install-matrixlab.sh
+
+# Backwards-compat alias: WITH_MATRIXLAB=1 make install now is the same as
+# the default `make install` (MatrixLab is included by default).  We keep
+# the variable around so existing scripts/CI pipelines don't break, but
+# the soft-install path is already in the `install` deps above.
+
+# =========================================================================
+# Phase 0.5 — production startup with MatrixLab (additive)
+#
+# Everything below is a strict SUPERSET of `make install` / `make run`
+# / `make doctor`.  None of the existing recipes above are modified;
+# these new targets call them as black boxes.  Operators on existing
+# scripts/workflows pin to the old targets and see no behavior change.
+#
+#   make install-all      = make install + make install-matrixlab
+#   make startup          = install-matrixlab + make run + auto-fix URL
+#   make fix-matrixlab-url = re-point the persisted matrixlab_url at the
+#                            port that's actually listening
+#   make diagnose-matrixlab = read-only debug dump for bug reports
+# =========================================================================
+
+## Full installer: core GitPilot install + MatrixLab addon.
+## Same as `WITH_MATRIXLAB=1 make install` but easier to type.
+.PHONY: install-all
+install-all: install install-matrixlab
+	@echo "✅ install-all: core + MatrixLab ready"
+	@echo "   Next:  make startup"
+
+## Production start: ensures MatrixLab is running, starts GitPilot,
+## auto-fixes the persisted matrixlab_url to point at the live port.
+## This is the "I want everything up and connected" one-liner —
+## `make run` still exists unchanged for operators who don't want
+## the addon.
+.PHONY: startup
+startup:
+	@bash scripts/start-gitpilot-stack.sh
+
+## Detect which port MatrixLab is actually on and update GitPilot's
+## persisted settings to match.  Solves the "Runner URL:
+## http://localhost:8000 / Needs attention" symptom that happens
+## when settings.json was written before the port-shift to 8765.
+.PHONY: fix-matrixlab-url
+fix-matrixlab-url:
+	@bash scripts/fix-matrixlab-url.sh
+
+## Verbose, copy-paste-friendly diagnostic dump for the MatrixLab
+## install/connect path.  Probes both candidate ports, shows what
+## GitPilot's APIs return, lists project containers, tails the
+## runner log.  Read-only — does not modify state.
+.PHONY: diagnose-matrixlab
+diagnose-matrixlab:
+	@bash scripts/diagnose-matrixlab.sh

@@ -8,7 +8,21 @@ import DiffStats from "./DiffStats.jsx";
 import DiffViewer from "./DiffViewer.jsx";
 import CreatePRButton from "./CreatePRButton.jsx";
 import StreamingMessage from "./StreamingMessage.jsx";
+import SandboxCanvas from "./SandboxCanvas.jsx";
+import FilePreviewPanel from "./FilePreviewPanel.jsx";
 import { SessionWebSocket } from "../utils/ws.js";
+
+// Map a file extension to the canonical sandbox language tag.  Used
+// when "Open in Canvas" needs to seed SandboxCanvas with the right
+// language hint pulled straight from a repo file path.
+const _LANG_FROM_EXT = {
+  py: "python", js: "javascript", mjs: "javascript", cjs: "javascript",
+  sh: "bash", bash: "bash",
+};
+function languageFromPath(path) {
+  if (!path || !path.includes(".")) return "python";
+  return _LANG_FROM_EXT[path.split(".").pop().toLowerCase()] || "python";
+}
 
 // Helper to get headers (inline safety if utility is missing)
 const getHeaders = () => ({
@@ -46,11 +60,33 @@ export default function ChatPanel({
   const [streamingEvents, setStreamingEvents] = useState([]);
   const [diffData, setDiffData] = useState(null);
   const [showDiffViewer, setShowDiffViewer] = useState(false);
+  // SandboxCanvas state — opened by the "Open in Canvas" CTA on
+  // post-CREATE next_actions and ExecutionCard footers. ``canvasSpec``
+  // is { filename, language, code } or null when closed.
+  const [canvasSpec, setCanvasSpec] = useState(null);
+  const [canvasError, setCanvasError] = useState(null);
+  // FilePreviewPanel state — opened by clicking a file row in the
+  // sidebar (gitpilot:open-file).  Read-first surface; users can pick
+  // "Prepare Run" / "Open Workspace" / "Ask GitPilot" from there.
+  const [previewPath, setPreviewPath] = useState(null);
+  const [previewContent, setPreviewContent] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState(null);
+  const [previewErrorCode, setPreviewErrorCode] = useState(null);
+  // "preview" (narrow drawer) or "workspace" (wide editor).
+  const [previewMode, setPreviewMode] = useState("preview");
   const wsRef = useRef(null);
 
   // Ref mirrors streamingEvents so WS callbacks avoid stale closures
   const streamingEventsRef = useRef([]);
   useEffect(() => { streamingEventsRef.current = streamingEvents; }, [streamingEvents]);
+
+  // Tracks files that were just CREATE'd / MODIFY'd by a fresh execution.
+  // Used to (a) auto-retry once on 404 (GitHub contents API has brief
+  // eventual-consistency lag) and (b) classify the file viewer's empty
+  // state as "still syncing" instead of a generic 404.
+  const fileWasJustCreatedRef = useRef(new Set());
+  const fileWasJustDeletedRef = useRef(new Set());
 
   // Skip the session-sync useEffect reset when we just created a session
   // (the parent already seeded the messages into chatBySession)
@@ -190,6 +226,138 @@ export default function ChatPanel({
   }, [currentBranch, repo?.full_name, sessionId]);
 
   // ---------------------------------------------------------------------------
+  // 1b) FILE ▶ RUN: listen for run-file events from the sidebar.
+  // ---------------------------------------------------------------------------
+  //
+  // FileTree dispatches ``gitpilot:run-file`` with the clicked file's
+  // path.  We turn that into a normal chat message ("run <path>")
+  // which goes through /api/chat/plan, hits the deterministic
+  // short-circuit, and renders an ExecutionPlanCard — exactly the
+  // same flow as typing the command. One handler, one approval surface,
+  // zero duplicated logic.
+  useEffect(() => {
+    const onRunFile = (e) => {
+      const path = e?.detail?.path;
+      if (!path || !repo) return;
+      send({ goal: `run ${path}` });
+    };
+    // "Open in Canvas" handler — fetches the file's content from the
+    // active branch and opens SandboxCanvas seeded with it.  Logs a
+    // friendly error banner when the fetch fails so a misconfigured
+    // token / wrong branch doesn't silently swallow the click.
+    const onOpenInCanvas = async (e) => {
+      const path = e?.detail?.path;
+      if (!path || !repo) return;
+      setCanvasError(null);
+      const branch = currentBranch || "HEAD";
+      try {
+        const url = `/api/repos/${repo.owner}/${repo.name}/file`
+                  + `?path=${encodeURIComponent(path)}`
+                  + `&ref=${encodeURIComponent(branch)}`;
+        const res = await fetch(url, { headers: getHeaders() });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setCanvasError(data.detail || `Could not load ${path} (HTTP ${res.status})`);
+          // Still open the canvas with empty content so the user can
+          // paste something — better than nothing happening on click.
+          setCanvasSpec({
+            filename: path, language: languageFromPath(path), code: "",
+          });
+          return;
+        }
+        setCanvasSpec({
+          filename: path,
+          language: languageFromPath(path),
+          code: data.content || "",
+        });
+      } catch (err) {
+        setCanvasError(err?.message || "Could not load file for Canvas");
+        setCanvasSpec({
+          filename: path, language: languageFromPath(path), code: "",
+        });
+      }
+    };
+    // "Open file" — clicking a file row in the sidebar mounts the
+    // read-first FilePreviewPanel.  Calmer than dropping straight
+    // into Canvas: the user sees the file, can pick "Prepare Run"
+    // when they're ready (or "Open Workspace" for a wider editing
+    // surface).  The ``mode`` detail toggles the panel's geometry:
+    //   "preview"   ── narrow right drawer for a quick look
+    //   "workspace" ── wide right-side editor for serious review
+    const openFile = async (path, mode = "preview") => {
+      if (!path || !repo) return;
+      setPreviewPath(path);
+      setPreviewMode(mode);
+      setPreviewContent(null);
+      setPreviewError(null);
+      setPreviewErrorCode(null);
+      setPreviewLoading(true);
+      // Tell the sidebar which file is currently focused so it can
+      // light up the row with the ◄ marker.
+      try {
+        window.dispatchEvent(new CustomEvent("gitpilot:file-opened", { detail: { path } }));
+      } catch (_e) { /* old browser */ }
+      const branch = currentBranch || "HEAD";
+      const fetchOnce = async () => {
+        const url = `/api/repos/${repo.owner}/${repo.name}/file`
+                  + `?path=${encodeURIComponent(path)}`
+                  + `&ref=${encodeURIComponent(branch)}`;
+        const res = await fetch(url, { headers: getHeaders() });
+        const data = await res.json().catch(() => ({}));
+        return { res, data };
+      };
+      try {
+        let { res, data } = await fetchOnce();
+        // Auto-retry once on 404 for recently created files — GitHub
+        // contents API has brief eventual-consistency lag after a
+        // freshly published commit.
+        if (res.status === 404 && fileWasJustCreatedRef.current?.has(path)) {
+          await new Promise((r) => setTimeout(r, 900));
+          ({ res, data } = await fetchOnce());
+        }
+        if (!res.ok) {
+          setPreviewError(data.detail || `HTTP ${res.status}`);
+          setPreviewErrorCode(res.status);
+        } else {
+          setPreviewContent(data.content || "");
+        }
+      } catch (err) {
+        setPreviewError(err?.message || "Could not load file");
+        setPreviewErrorCode(null);
+      } finally {
+        setPreviewLoading(false);
+      }
+    };
+    const onOpenFile      = (e) => openFile(e?.detail?.path, "preview");
+    const onOpenWorkspace = (e) => openFile(e?.detail?.path, "workspace");
+    // "Ask GitPilot" — seed the chat input with a contextual question
+    // about the clicked file.  Pure additive: focuses the input and
+    // pre-fills it; the user can edit or send as-is.
+    const onAskAboutFile = (e) => {
+      const path = e?.detail?.path;
+      if (!path) return;
+      setGoal(`Tell me about ${path}.`);
+      const ta = document.querySelector(".chat-input");
+      if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+    };
+    window.addEventListener("gitpilot:run-file", onRunFile);
+    window.addEventListener("gitpilot:open-in-canvas", onOpenInCanvas);
+    window.addEventListener("gitpilot:open-file", onOpenFile);
+    window.addEventListener("gitpilot:open-workspace", onOpenWorkspace);
+    window.addEventListener("gitpilot:ask-about-file", onAskAboutFile);
+    return () => {
+      window.removeEventListener("gitpilot:run-file", onRunFile);
+      window.removeEventListener("gitpilot:open-in-canvas", onOpenInCanvas);
+      window.removeEventListener("gitpilot:open-file", onOpenFile);
+      window.removeEventListener("gitpilot:open-workspace", onOpenWorkspace);
+      window.removeEventListener("gitpilot:ask-about-file", onAskAboutFile);
+    };
+    // ``send`` is stable enough across renders for this use case —
+    // we don't want to re-bind on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repo?.full_name, currentBranch, sessionId]);
+
+  // ---------------------------------------------------------------------------
   // 2) PERSISTENCE: Save chat to Parent (no loop now because sync only on branch)
   // ---------------------------------------------------------------------------
   useEffect(() => {
@@ -260,6 +428,8 @@ export default function ChatPanel({
     if (m.executionLog) meta.executionLog = m.executionLog;
     if (m.diff)         meta.diff         = m.diff;
     if (m.actions)      meta.actions      = m.actions;
+    if (m.nextActions)  meta.nextActions  = m.nextActions;
+    if (m.branch)       meta.branch       = m.branch;
     // Informational plans (READ-only answers to "what does X do?" style
     // questions) carry no Approve/Reject controls — pin the flag so the
     // session reload re-renders the same shape.
@@ -562,6 +732,36 @@ export default function ChatPanel({
 
       setStatus(data.message || "Execution completed.");
 
+      // Track files touched by this execution so the file viewer can
+      // give "still syncing" / "deleted" classifications and so the
+      // sidebar refreshes off the freshly-pushed branch tree.
+      if (plan?.steps) {
+        for (const step of plan.steps) {
+          for (const f of step.files || []) {
+            if (f.action === "CREATE" || f.action === "MODIFY") {
+              fileWasJustCreatedRef.current.add(f.path);
+            } else if (f.action === "DELETE") {
+              fileWasJustDeletedRef.current.add(f.path);
+            }
+          }
+        }
+      }
+      // Forget the marker after 30 s so older "syncing" badges don't
+      // stick around forever.
+      window.setTimeout(() => {
+        fileWasJustCreatedRef.current.clear();
+        fileWasJustDeletedRef.current.clear();
+      }, 30000);
+
+      // Ask the sidebar's file tree to refetch off the newly-published
+      // branch. Fires after a small delay so GitHub's contents API has
+      // a chance to catch up.
+      window.setTimeout(() => {
+        try {
+          window.dispatchEvent(new CustomEvent("gitpilot:refresh-tree"));
+        } catch (_e) { /* old browser */ }
+      }, 600);
+
       const completionMsg = {
         from: "ai",
         role: "assistant",
@@ -569,6 +769,11 @@ export default function ChatPanel({
         content: data.message || "Execution completed.",
         executionLog: data.executionLog,
         diff: data.diff,
+        // Backend-suggested follow-ups (e.g. "Run demo.py" after CREATE
+        // of a runnable file).  Rendered as a button row in the
+        // completion message — one click, no typing.
+        nextActions: data.next_actions,
+        branch: data.branch || data.branch_name,
       };
 
       // Show completion immediately (keeps old "Execution Log" section)
@@ -792,6 +997,19 @@ export default function ChatPanel({
             }
           }
 
+          // Find the plan that was approved for this completion, so the
+          // success receipt can label actions (READ/CREATE/...) instead of
+          // showing only an opaque execution dump.
+          let linkedPlan = null;
+          if (m.executionLog) {
+            for (let i = idx - 1; i >= 0; i--) {
+              if (messages[i].plan?.steps) {
+                linkedPlan = messages[i].plan;
+                break;
+              }
+            }
+          }
+
           return (
             <div key={idx}>
               <AssistantMessage
@@ -799,6 +1017,13 @@ export default function ChatPanel({
                 plan={m.plan}
                 executionLog={m.executionLog}
                 planStatus={planStatus}
+                owner={repo?.owner}
+                repo={repo?.name}
+                onApproveExecution={() => execute()}
+                nextActions={m.nextActions}
+                relatedPlan={linkedPlan}
+                diff={m.diff}
+                branch={m.branch || currentBranch}
               />
               {/* Diff stats indicator (Claude-Code-on-Web parity) */}
               {m.diff && (
@@ -1068,6 +1293,77 @@ export default function ChatPanel({
           diff={diffData}
           onClose={() => setShowDiffViewer(false)}
         />
+      )}
+
+      {/* FilePreviewPanel — read-first viewer.  Opens on a file row
+          click in the sidebar.  Header carries Prepare Run (runnable
+          only), Open Workspace, and an overflow menu. */}
+      {previewPath && (
+        <FilePreviewPanel
+          path={previewPath}
+          content={previewContent}
+          loading={previewLoading}
+          error={previewError}
+          errorCode={previewErrorCode}
+          notFoundKind={
+            fileWasJustDeletedRef.current.has(previewPath)
+              ? "deleted"
+              : fileWasJustCreatedRef.current.has(previewPath)
+                ? "syncing"
+                : "unavailable"
+          }
+          mode={previewMode}
+          branch={currentBranch}
+          onModeChange={setPreviewMode}
+          onRefreshTree={() => {
+            try {
+              window.dispatchEvent(new CustomEvent("gitpilot:refresh-tree"));
+            } catch (_e) { /* old browser */ }
+          }}
+          onRetry={() => {
+            const p = previewPath;
+            const m = previewMode;
+            setPreviewPath(null);
+            // Fire the same window event we listened to — keeps the
+            // retry path identical to the original load and lets any
+            // future side-effects (e.g. analytics) see one event class.
+            setTimeout(() => window.dispatchEvent(new CustomEvent(
+              m === "workspace" ? "gitpilot:open-workspace" : "gitpilot:open-file",
+              { detail: { path: p } },
+            )), 0);
+          }}
+          onClose={() => {
+            try {
+              window.dispatchEvent(new CustomEvent("gitpilot:file-closed"));
+            } catch (_e) {/* old browser */}
+            setPreviewPath(null);
+            setPreviewContent(null);
+            setPreviewError(null);
+            setPreviewErrorCode(null);
+          }}
+        />
+      )}
+
+      {/* SandboxCanvas overlay — opened by "Open in Canvas" next_action
+          buttons and ExecutionCard footers via the
+          gitpilot:open-in-canvas window event. */}
+      {canvasSpec && (
+        <SandboxCanvas
+          initialLanguage={canvasSpec.language}
+          initialCode={canvasSpec.code}
+          filename={canvasSpec.filename}
+          onClose={() => { setCanvasSpec(null); setCanvasError(null); }}
+        />
+      )}
+      {canvasError && canvasSpec && (
+        <div style={{
+          position: "fixed", bottom: 16, right: 16, zIndex: 110,
+          padding: "8px 12px", maxWidth: 380, fontSize: 12,
+          color: "#fca5a5", background: "#3d1111",
+          border: "1px solid #7f1d1d", borderRadius: 6,
+        }}>
+          {canvasError}
+        </div>
       )}
     </div>
   );

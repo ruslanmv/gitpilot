@@ -7,3 +7,4 @@ export { default as MCPServersTab } from "./MCPServersTab.jsx";
 export { default as SkillsTab } from "./SkillsTab.jsx";
 export { default as SessionsTab } from "./SessionsTab.jsx";
 export { default as AdvancedTab } from "./AdvancedTab.jsx";
+export { default as SandboxTab } from "./SandboxTab.jsx";
