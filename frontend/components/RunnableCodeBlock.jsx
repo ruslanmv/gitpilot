@@ -1,4 +1,6 @@
 import React, { useState } from "react";
+import SandboxCanvas from "./SandboxCanvas.jsx";
+import ExecutionPlanCard, { fetchExecutionPlan } from "./ExecutionPlanCard.jsx";
 
 // Languages the Run button supports.  Anything not in this set still
 // renders as a normal code block (no button) — keeps the visual contract
@@ -29,16 +31,76 @@ const LANG_DISPLAY = {
   shell: "bash",
 };
 
-/** A single fenced code block with a per-block Run button. */
-export default function RunnableCodeBlock({ language, code }) {
+// Default file extension per language — used when the user clicks
+// "Save to repo" and we need to seed a plausible filename.
+const LANG_EXT = {
+  python: "py", py: "py",
+  javascript: "js", js: "js", node: "js",
+  bash: "sh", sh: "sh", shell: "sh",
+};
+
+// Mirror executor's _looks_like_matplotlib heuristic so plt.show()
+// snippets don't hang the headless sandbox.  False positives are
+// harmless (Agg is a valid backend for any Python script).
+function looksLikeMatplotlib(code) {
+  if (!code) return false;
+  const lower = code.toLowerCase();
+  return /import\s+matplotlib|from\s+matplotlib|plt\.show|pyplot/.test(lower);
+}
+
+function applyMatplotlibShim(language, code) {
+  if (language !== "python" && language !== "py") return code;
+  if (!looksLikeMatplotlib(code)) return code;
+  return (
+    "import os as _gp_os\n" +
+    '_gp_os.environ.setdefault("MPLBACKEND", "Agg")\n' +
+    code
+  );
+}
+
+/** A single fenced code block with a per-block Run button.
+ *
+ * Optional ``owner``/``repo`` props enable the "Save to repo" button by
+ * giving the save call a real target.  When absent the button is
+ * hidden — keeps the contract honest: no button without somewhere to
+ * save. */
+export default function RunnableCodeBlock({ language, code, owner, repo }) {
   const lang = (language || "").trim().toLowerCase();
   const canRun = RUNNABLE.has(lang);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [canvasOpen, setCanvasOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState(null);
+  // Approval-first: clicking ▶ Run first fetches a deterministic
+  // ExecutionPlan and surfaces it inline.  The actual sandbox call
+  // is gated on the user clicking "Run in Sandbox" inside the plan.
+  const [pendingPlan, setPendingPlan] = useState(null);
+  const [planError, setPlanError] = useState(null);
   const display = LANG_DISPLAY[lang] || lang || "text";
 
-  const onRun = async () => {
+  const onRunClick = async () => {
+    setPlanError(null);
+    setResult(null);
+    setError(null);
+    setBusy(true);
+    try {
+      const shipped = applyMatplotlibShim(lang, code);
+      const plan = await fetchExecutionPlan({
+        code: shipped,
+        language: lang,
+        source: "code_block",
+      });
+      setPendingPlan(plan);
+    } catch (err) {
+      setPlanError(err.message || "Could not build execution plan");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onApprovePlan = async (plan) => {
     setBusy(true);
     setResult(null);
     setError(null);
@@ -46,7 +108,11 @@ export default function RunnableCodeBlock({ language, code }) {
       const res = await fetch("/api/sandbox/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ language: lang, code }),
+        body: JSON.stringify({
+          language: plan.language,
+          code: plan.inline_code,
+          timeout_sec: plan.timeout_sec,
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -54,6 +120,7 @@ export default function RunnableCodeBlock({ language, code }) {
         return;
       }
       setResult(data);
+      setPendingPlan(null);
     } catch (err) {
       setError(err.message || "Run failed");
     } finally {
@@ -61,8 +128,50 @@ export default function RunnableCodeBlock({ language, code }) {
     }
   };
 
+  const onCancelPlan = () => {
+    setPendingPlan(null);
+    setPlanError(null);
+  };
+
   const copy = () => {
     if (navigator?.clipboard) navigator.clipboard.writeText(code).catch(() => {});
+  };
+
+  // POST the snippet to /api/repos/{owner}/{repo}/file with a path
+  // chosen by the user.  Pure client-side prompt — no new backend
+  // wiring needed because the endpoint already exists.
+  const saveToRepo = async (snippet, snippetLang) => {
+    if (!owner || !repo) {
+      setSaveMsg("No repository context — open this chat inside a repo to save.");
+      return;
+    }
+    const ext = LANG_EXT[(snippetLang || lang).toLowerCase()] || "txt";
+    const suggested = `snippets/inline.${ext}`;
+    const path = window.prompt("Save snippet to path (inside repo):", suggested);
+    if (!path) return;
+    setSaving(true);
+    setSaveMsg(null);
+    try {
+      const res = await fetch(`/api/repos/${owner}/${repo}/file`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path,
+          content: snippet,
+          message: `Save snippet from chat (${path})`,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setSaveMsg(data.detail || `Save failed (HTTP ${res.status})`);
+        return;
+      }
+      setSaveMsg(`Saved to ${path}`);
+    } catch (err) {
+      setSaveMsg(err.message || "Save failed");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -76,17 +185,51 @@ export default function RunnableCodeBlock({ language, code }) {
           {canRun && (
             <button
               type="button"
-              style={{ ...styles.runBtn, opacity: busy ? 0.6 : 1 }}
-              onClick={onRun}
-              disabled={busy}
-              title="Execute this snippet in the configured sandbox"
+              style={styles.iconBtn}
+              onClick={() => setCanvasOpen(true)}
+              title="Open the snippet in the Canvas split-view editor"
             >
-              {busy ? "Running…" : "▶ Run"}
+              ⊞ Canvas
+            </button>
+          )}
+          {canRun && owner && repo && (
+            <button
+              type="button"
+              style={{ ...styles.iconBtn, opacity: saving ? 0.6 : 1 }}
+              onClick={() => saveToRepo(code, lang)}
+              disabled={saving}
+              title="Save this snippet as a file in the current repository"
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+          )}
+          {canRun && (
+            <button
+              type="button"
+              style={{ ...styles.runBtn, opacity: busy ? 0.6 : 1 }}
+              onClick={onRunClick}
+              disabled={busy || !!pendingPlan}
+              title="Review an execution plan before running this snippet"
+            >
+              {busy && !pendingPlan ? "Preparing…" : "▶ Run"}
             </button>
           )}
         </div>
       </div>
       <pre style={styles.code}>{code}</pre>
+
+      {pendingPlan && (
+        <ExecutionPlanCard
+          plan={pendingPlan}
+          variant="compact"
+          busy={busy}
+          onApprove={onApprovePlan}
+          onCancel={onCancelPlan}
+        />
+      )}
+      {planError && (
+        <div style={styles.errorBanner}>Plan error: {planError}</div>
+      )}
 
       {(result || error) && (
         <div style={styles.output}>
@@ -111,10 +254,35 @@ export default function RunnableCodeBlock({ language, code }) {
           {error && <pre style={styles.stderr}>{error}</pre>}
           {result?.stdout && <pre style={styles.stdout}>{result.stdout}</pre>}
           {result?.stderr && <pre style={styles.stderr}>{result.stderr}</pre>}
+          {Array.isArray(result?.artifacts) && result.artifacts.length > 0 && (
+            <div style={styles.artifactsBox}>
+              <div style={styles.outputLabel}>Artifacts ({result.artifacts.length})</div>
+              <ul style={styles.artifactList}>
+                {result.artifacts.map((a, i) => (
+                  <li key={i} style={styles.artifactItem}>
+                    <code>{a.name || a.id}</code>
+                    {a.size && <span style={styles.dim}> · {a.size} bytes</span>}
+                    {a.mime && <span style={styles.dim}> · {a.mime}</span>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {result && !result.stdout && !result.stderr && (
             <div style={styles.dim}>(no output)</div>
           )}
         </div>
+      )}
+
+      {saveMsg && <div style={styles.saveBanner}>{saveMsg}</div>}
+
+      {canvasOpen && (
+        <SandboxCanvas
+          initialLanguage={lang}
+          initialCode={code}
+          onClose={() => setCanvasOpen(false)}
+          onSaveAsFile={owner && repo ? saveToRepo : undefined}
+        />
       )}
     </div>
   );
@@ -279,5 +447,40 @@ const styles = {
     borderRadius: 4,
     whiteSpace: "pre-wrap",
     wordBreak: "break-word",
+  },
+  artifactsBox: {
+    marginTop: 8,
+    padding: "6px 8px",
+    background: "#0a0a0f",
+    border: "1px solid #27272A",
+    borderRadius: 4,
+  },
+  artifactList: {
+    listStyle: "none",
+    padding: 0,
+    margin: "4px 0 0",
+  },
+  artifactItem: {
+    padding: "2px 0",
+    fontSize: 12,
+    color: "#D4D4D8",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  },
+  saveBanner: {
+    margin: "0",
+    padding: "6px 12px",
+    fontSize: 11,
+    color: "#A1A1AA",
+    background: "#0c0c10",
+    borderTop: "1px solid #27272A",
+  },
+  errorBanner: {
+    margin: "6px 0",
+    padding: "8px 10px",
+    fontSize: 12,
+    color: "#fca5a5",
+    background: "#3d1111",
+    border: "1px solid #7f1d1d",
+    borderRadius: 6,
   },
 };

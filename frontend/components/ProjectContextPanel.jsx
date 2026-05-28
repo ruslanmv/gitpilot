@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import FileTree from "./FileTree.jsx";
 import BranchPicker from "./BranchPicker.jsx";
+import SandboxStatusWidget from "./SandboxStatusWidget.jsx";
 
 // --- INJECTED STYLES FOR ANIMATIONS ---
 const animationStyles = `
@@ -566,6 +567,14 @@ export default function ProjectContextPanel({
       {/* File tree (branch-aware) */}
       <div style={styles.treeWrapper}>
         <FileTree repo={repo} refreshTrigger={refreshTrigger} branch={branch} />
+      </div>
+
+      {/* Sandbox status — always visible.  Click "Change" / "Repair"
+          to open Settings (matches the existing settings affordance
+          at the top), or "Use Local" to one-click flip the backend
+          when MatrixLab is unreachable. */}
+      <div style={{ marginTop: 12 }}>
+        <SandboxStatusWidget onOpenSettings={onSettingsClick} />
       </div>
     </div>
   );

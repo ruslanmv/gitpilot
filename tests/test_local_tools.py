@@ -220,6 +220,12 @@ class TestRunCommand:
         assert "Permission denied" in result
 
     def test_successful_command(self, tmp_path):
+        """``run_command`` now prefers ``_run_via_sandbox`` (which talks
+        to the configured backend through ``/api/sandbox/run``); the
+        legacy ``_executor.execute`` path is only the import-error
+        fallback.  Force the sandbox path to raise ``_SandboxFallback``
+        so the test exercises the same TerminalExecutor mock contract
+        it always did, then mock the executor as before."""
         ws = _make_ws(tmp_path)
         lt._current_workspace = ws
 
@@ -230,7 +236,8 @@ class TestRunCommand:
         mock_result.timed_out = False
         mock_result.truncated = False
 
-        with patch.object(lt._executor, "execute", new_callable=AsyncMock) as mock_exec:
+        with patch.object(lt, "_run_via_sandbox", side_effect=lt._SandboxFallback("forced")), \
+             patch.object(lt._executor, "execute", new_callable=AsyncMock) as mock_exec:
             mock_exec.return_value = mock_result
             result = lt.run_command.func("echo hello")
 

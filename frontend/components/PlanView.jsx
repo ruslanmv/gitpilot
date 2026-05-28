@@ -1,271 +1,140 @@
 import React from "react";
 
-export default function PlanView({ plan }) {
+/**
+ * PlanView — enterprise "Proposed execution plan" card.
+ *
+ * One main card. Subtle internal spacing instead of bordered nested boxes.
+ * Steps are rendered as a vertical numbered timeline; file actions become
+ * compact pill badges (READ / CREATE / MODIFY / DELETE / INDEX).
+ *
+ * The card itself is borderless — the surrounding AssistantMessage
+ * already provides the outer container.
+ */
+export default function PlanView({ plan, planStatus }) {
   if (!plan) return null;
 
-  // Calculate totals for each action type
-  const totals = { CREATE: 0, MODIFY: 0, DELETE: 0, INDEX: 0 };
+  const totals = { CREATE: 0, MODIFY: 0, DELETE: 0, INDEX: 0, READ: 0 };
   plan.steps.forEach((step) => {
     step.files.forEach((file) => {
       totals[file.action] = (totals[file.action] || 0) + 1;
     });
   });
 
-  const theme = {
-    bg: "#18181B",
-    border: "#27272A",
-    textPrimary: "#EDEDED",
-    textSecondary: "#A1A1AA",
-    successBg: "rgba(16, 185, 129, 0.1)",
-    successText: "#10B981",
-    warningBg: "rgba(245, 158, 11, 0.1)",
-    warningText: "#F59E0B",
-    dangerBg: "rgba(239, 68, 68, 0.1)",
-    dangerText: "#EF4444",
-  };
-
-  const styles = {
-    container: {
-      display: "flex",
-      flexDirection: "column",
-      gap: "20px",
-      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-    },
-    header: {
-      display: "flex",
-      flexDirection: "column",
-      gap: "8px",
-      paddingBottom: "16px",
-      borderBottom: `1px solid ${theme.border}`,
-    },
-    goal: {
-      fontSize: "14px",
-      fontWeight: "600",
-      color: theme.textPrimary,
-    },
-    summary: {
-      fontSize: "13px",
-      color: theme.textSecondary,
-      lineHeight: "1.5",
-    },
-    totals: {
-      display: "flex",
-      gap: "12px",
-      flexWrap: "wrap",
-    },
-    totalBadge: {
-      fontSize: "11px",
-      fontWeight: "500",
-      padding: "4px 8px",
-      borderRadius: "4px",
-      border: "1px solid transparent",
-    },
-    totalCreate: {
-      backgroundColor: theme.successBg,
-      color: theme.successText,
-      borderColor: "rgba(16, 185, 129, 0.2)",
-    },
-    totalModify: {
-      backgroundColor: theme.warningBg,
-      color: theme.warningText,
-      borderColor: "rgba(245, 158, 11, 0.2)",
-    },
-    totalDelete: {
-      backgroundColor: theme.dangerBg,
-      color: theme.dangerText,
-      borderColor: "rgba(239, 68, 68, 0.2)",
-    },
-    totalIndex: {
-      // GitPilot orange — the same brand colour the rest of the app
-      // uses for "infrastructure / one-time" actions.  Visually
-      // distinct from CREATE / MODIFY / DELETE so users know this
-      // step doesn't write code.
-      backgroundColor: "rgba(217, 92, 61, 0.10)",
-      color: "#D95C3D",
-      borderColor: "rgba(217, 92, 61, 0.25)",
-    },
-    indexNotice: {
-      marginTop: "8px",
-      fontSize: "12px",
-      color: "#D95C3D",
-      backgroundColor: "rgba(217, 92, 61, 0.05)",
-      padding: "8px 12px",
-      borderRadius: "6px",
-      border: "1px solid rgba(217, 92, 61, 0.15)",
-      lineHeight: "1.5",
-    },
-    stepsList: {
-      listStyle: "none",
-      padding: 0,
-      margin: 0,
-      display: "flex",
-      flexDirection: "column",
-      gap: "24px",
-    },
-    step: {
-      display: "flex",
-      flexDirection: "column",
-      gap: "8px",
-      position: "relative",
-    },
-    stepHeader: {
-      display: "flex",
-      alignItems: "baseline",
-      gap: "8px",
-      fontSize: "13px",
-      fontWeight: "600",
-      color: theme.textPrimary,
-    },
-    stepNumber: {
-      color: theme.textSecondary,
-      fontSize: "11px",
-      textTransform: "uppercase",
-      letterSpacing: "0.05em",
-    },
-    stepDescription: {
-      fontSize: "13px",
-      color: theme.textSecondary,
-      lineHeight: "1.5",
-      margin: 0,
-    },
-    fileList: {
-      marginTop: "8px",
-      display: "flex",
-      flexDirection: "column",
-      gap: "4px",
-      backgroundColor: "#131316",
-      padding: "8px 12px",
-      borderRadius: "6px",
-      border: `1px solid ${theme.border}`,
-    },
-    fileItem: {
-      display: "flex",
-      alignItems: "center",
-      gap: "10px",
-      fontSize: "12px",
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-    },
-    actionBadge: {
-      padding: "2px 6px",
-      borderRadius: "4px",
-      fontSize: "10px",
-      fontWeight: "bold",
-      textTransform: "uppercase",
-      minWidth: "55px",
-      textAlign: "center",
-      letterSpacing: "0.02em",
-    },
-    path: {
-      color: "#D4D4D8",
-      whiteSpace: "nowrap",
-      overflow: "hidden",
-      textOverflow: "ellipsis",
-    },
-    risks: {
-      marginTop: "8px",
-      fontSize: "12px",
-      color: theme.warningText,
-      backgroundColor: "rgba(245, 158, 11, 0.05)",
-      padding: "8px 12px",
-      borderRadius: "6px",
-      border: "1px solid rgba(245, 158, 11, 0.1)",
-      display: "flex",
-      gap: "6px",
-      alignItems: "flex-start",
-    },
-  };
-
-  const getActionStyle = (action) => {
-    switch (action) {
-      case "CREATE": return styles.totalCreate;
-      case "MODIFY": return styles.totalModify;
-      case "DELETE": return styles.totalDelete;
-      case "INDEX":  return styles.totalIndex;
-      default: return {};
-    }
-  };
-
   return (
-    <div style={styles.container}>
-      {/* Header & Summary */}
-      <div style={styles.header}>
-        <div style={styles.goal}>Goal: {plan.goal}</div>
-        <div style={styles.summary}>{plan.summary}</div>
+    <div className="exec-card exec-card--plan">
+      <div className="exec-card__head">
+        <div className="exec-card__icon exec-card__icon--plan" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+               strokeLinejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <line x1="8" y1="13" x2="16" y2="13" />
+            <line x1="8" y1="17" x2="13" y2="17" />
+          </svg>
+        </div>
+        <div className="exec-card__head-text">
+          <div className="exec-card__eyebrow">Proposed execution plan</div>
+          <div className="exec-card__title">{plan.goal}</div>
+        </div>
+
+        <div className="exec-card__head-right">
+          {planStatus === "executed" && (
+            <span className="exec-status-badge exec-status-badge--ok">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+                   stroke="currentColor" strokeWidth="3" strokeLinecap="round"
+                   strokeLinejoin="round" aria-hidden="true">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+              Executed
+            </span>
+          )}
+          {planStatus === "rejected" && (
+            <span className="exec-status-badge exec-status-badge--muted">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
+                   stroke="currentColor" strokeWidth="2.6" strokeLinecap="round"
+                   strokeLinejoin="round" aria-hidden="true">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+              Rejected
+            </span>
+          )}
+
+          <div className="exec-card__totals">
+            {totals.CREATE > 0 && (
+              <span className="exec-total exec-total--create">
+                {totals.CREATE} create
+              </span>
+            )}
+            {totals.MODIFY > 0 && (
+              <span className="exec-total exec-total--modify">
+                {totals.MODIFY} modify
+              </span>
+            )}
+            {totals.DELETE > 0 && (
+              <span className="exec-total exec-total--delete">
+                {totals.DELETE} delete
+              </span>
+            )}
+            {totals.INDEX > 0 && (
+              <span className="exec-total exec-total--index">
+                {totals.INDEX === 1 ? "1 setup" : `${totals.INDEX} setup`}
+              </span>
+            )}
+          </div>
+        </div>
       </div>
 
-      {/* Totals Summary */}
-      <div style={styles.totals}>
-        {totals.CREATE > 0 && (
-          <span style={{ ...styles.totalBadge, ...styles.totalCreate }}>
-            {totals.CREATE} to create
-          </span>
-        )}
-        {totals.MODIFY > 0 && (
-          <span style={{ ...styles.totalBadge, ...styles.totalModify }}>
-            {totals.MODIFY} to modify
-          </span>
-        )}
-        {totals.DELETE > 0 && (
-          <span style={{ ...styles.totalBadge, ...styles.totalDelete }}>
-            {totals.DELETE} to delete
-          </span>
-        )}
-        {totals.INDEX > 0 && (
-          <span style={{ ...styles.totalBadge, ...styles.totalIndex }}>
-            {totals.INDEX === 1 ? "1 setup step" : `${totals.INDEX} setup steps`}
-          </span>
-        )}
-      </div>
-
-      {/* Steps List */}
-      <ol style={styles.stepsList}>
-        {plan.steps.map((s) => (
-          <li key={s.step_number} style={styles.step}>
-            <div style={styles.stepHeader}>
-              <span style={styles.stepNumber}>Step {s.step_number}</span>
-              <span>{s.title}</span>
+      <ol className="exec-timeline">
+        {plan.steps.map((s, idx) => (
+          <li key={s.step_number} className="exec-step">
+            <div className="exec-step__rail" aria-hidden="true">
+              <div className="exec-step__num">{s.step_number}</div>
+              {idx < plan.steps.length - 1 && (
+                <div className="exec-step__line" />
+              )}
             </div>
-            <p style={styles.stepDescription}>{s.description}</p>
+            <div className="exec-step__body">
+              <div className="exec-step__title">{s.title}</div>
+              {s.description && (
+                <p className="exec-step__desc">{s.description}</p>
+              )}
 
-            {/* Files List */}
-            {s.files && s.files.length > 0 && (
-              <div style={styles.fileList}>
-                {s.files.map((file, idx) => (
-                  <div key={idx} style={styles.fileItem}>
-                    <span style={{ ...styles.actionBadge, ...getActionStyle(file.action) }}>
-                      {file.action}
-                    </span>
-                    <span style={styles.path}>
-                      {file.action === "INDEX"
-                        ? "Build semantic index for this repo"
-                        : file.path}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
+              {s.files && s.files.length > 0 && (
+                <ul className="exec-actions">
+                  {s.files.map((file, fi) => (
+                    <li key={fi} className="exec-action-row">
+                      <span
+                        className={`exec-badge exec-badge--${file.action.toLowerCase()}`}
+                      >
+                        {file.action}
+                      </span>
+                      <code className="exec-action__path">
+                        {file.action === "INDEX"
+                          ? "Build semantic index for this repo"
+                          : file.path}
+                      </code>
+                    </li>
+                  ))}
+                </ul>
+              )}
 
-            {/* B9: explain the INDEX step's cost so users can decide
-                informedly before clicking Approve. */}
-            {s.files && s.files.some((f) => f.action === "INDEX") && (
-              <div style={styles.indexNotice}>
-                📦 One-time semantic index build.
-                Embeds every file locally with MiniLM-L6-v2 (~80 MB
-                model on first run, ~30 s wall time for a typical
-                repo, ~12 MB on disk).  No cloud calls.  Makes future
-                "find / where / how" queries instant.  Click{" "}
-                <strong>Reject plan</strong> to skip — you'll be
-                offered the grep fallback.
-              </div>
-            )}
+              {s.files && s.files.some((f) => f.action === "INDEX") && (
+                <div className="exec-notice">
+                  One-time semantic index build (~80 MB model, ~30 s, ~12 MB on
+                  disk). No cloud calls. Click <strong>Reject plan</strong> to
+                  skip — you'll be offered the grep fallback.
+                </div>
+              )}
 
-            {/* Risks */}
-            {s.risks && (
-              <div style={styles.risks}>
-                <span>⚠️</span>
-                <span>{s.risks}</span>
-              </div>
-            )}
+              {s.risks && (
+                <div className="exec-risk">
+                  <span aria-hidden="true">⚠</span>
+                  <span>{s.risks}</span>
+                </div>
+              )}
+            </div>
           </li>
         ))}
       </ol>

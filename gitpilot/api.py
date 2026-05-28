@@ -322,6 +322,18 @@ try:
 except Exception:  # noqa: BLE001
     logger.exception("Sandbox API failed to mount; Run button will be disabled")
 
+# MatrixLab addon admin API (Settings → Sandbox → Install MatrixLab modal).
+# Sits on top of /api/sandbox/* and normalises every response so the UI
+# never has to interpret raw Docker / HTTP errors.  Same non-fatal mount
+# pattern as the sandbox router.
+try:
+    from .matrixlab_admin_api import router as matrixlab_admin_router
+
+    app.include_router(matrixlab_admin_router)
+    logger.info("MatrixLab admin API enabled (mounting /api/matrixlab/* endpoints)")
+except Exception:  # noqa: BLE001
+    logger.exception("MatrixLab admin API failed to mount; install modal will be disabled")
+
 # GitPilot-as-MCP-server (turns GitPilot into an MCP server other agents
 # can drive). Off by default; mount only when GITPILOT_EXPOSE_MCP_SERVER=true.
 try:
@@ -1047,10 +1059,11 @@ async def api_get_file(
     owner: str = FPath(...),
     repo: str = FPath(...),
     path: str = Query(...),
+    ref: Optional[str] = Query(None),
     authorization: Optional[str] = Header(None),
 ):
     token = get_github_token(authorization)
-    content = await get_file(owner, repo, path, token=token)
+    content = await get_file(owner, repo, path, token=token, ref=ref)
     return FileContent(path=path, content=content)
 
 
@@ -1402,6 +1415,8 @@ async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Hea
         # back to today's no-hint behaviour rather than 500-ing.
         routing_hint = None
         routing_intent: Optional[str] = None
+        routing_targets: list[str] = []
+        repo_paths: list[str] = []
         try:
             from . import flags as _flags
             if _flags.is_on("query_router", default=True):
@@ -1411,7 +1426,6 @@ async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Hea
                 # Cheap path: a flat list of repo files for the
                 # classifier's path-verification step.  Failure is
                 # tolerated — router falls back to "no targets".
-                repo_paths: list[str] = []
                 try:
                     from .github_api import get_repo_tree
                     _tree = await get_repo_tree(
@@ -1434,7 +1448,28 @@ async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Hea
                 )
                 routing_hint = render_planner_hint(decision)
                 routing_intent = decision.intent
+                routing_targets = list(decision.target_files or [])
                 logger.info("[router] %s", decision.rationale)
+
+                # EXECUTE short-circuit — skip the LLM when "run this
+                # file" is unambiguous.  Cheap, deterministic, and
+                # avoids the small-LLM failure mode where the planner
+                # tries to call EXECUTE as a CrewAI tool, fails, then
+                # downgrades to READ — the bug pattern we documented
+                # in agentic.try_execute_short_circuit's docstring.
+                from .agentic import try_execute_short_circuit
+                short = try_execute_short_circuit(
+                    goal=req.goal,
+                    intent=routing_intent,
+                    target_files=decision.target_files or [],
+                    repo_files=repo_paths,
+                )
+                if short is not None:
+                    logger.info(
+                        "[router] EXECUTE short-circuit: skipping LLM planner; "
+                        "target=%s", short.steps[0].files[0].path,
+                    )
+                    return short
         except Exception as _route_err:  # pragma: no cover - defensive
             logger.debug("[router] skipped: %s", _route_err)
             routing_hint = None
@@ -1447,6 +1482,68 @@ async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Hea
                 routing_hint=routing_hint,
                 intent=routing_intent,
             )
+
+            # Belt-and-suspenders for the "execute" path: if the
+            # short-circuit didn't fire pre-LLM (router didn't classify,
+            # or no path candidates surfaced) and the planner came back
+            # with an empty / answer-only plan, retry the short-circuit
+            # post-LLM so the user gets a real EXECUTE action instead
+            # of "execute the existing file" plain text.
+            try:
+                from .agentic import try_execute_short_circuit
+                no_actionable = (
+                    not getattr(plan, "steps", None)
+                    or all(
+                        not getattr(step, "files", None)
+                        or all(
+                            getattr(f, "action", None) in {None, "READ"}
+                            for f in step.files
+                        )
+                        for step in plan.steps
+                    )
+                )
+                if no_actionable:
+                    goal_lower = req.goal.lower()
+                    looks_like_execute = any(
+                        kw in goal_lower
+                        for kw in ("execute", "run the", "run hello",
+                                   "run main", "run demo", "run my",
+                                   "in the sandbox", "in sandbox",
+                                   "please run", "can you run")
+                    )
+                    if looks_like_execute:
+                        # ``repo_paths`` was computed during routing; if
+                        # routing was skipped, fall back to a quick tree
+                        # fetch so the short-circuit has a chance.
+                        if not repo_paths:
+                            try:
+                                from .github_api import get_repo_tree
+                                _tree = await get_repo_tree(
+                                    req.repo_owner, req.repo_name,
+                                    token=token, ref=req.branch_name,
+                                )
+                                repo_paths = [t["path"] for t in (_tree or []) if t.get("path")]
+                            except Exception:
+                                pass
+
+                        # Try the explicitly-mentioned target first, then
+                        # fall back to "single runnable in repo".
+                        fallback = try_execute_short_circuit(
+                            goal=req.goal, intent="execute",
+                            target_files=routing_targets,
+                            repo_files=repo_paths,
+                        )
+                        if fallback is not None:
+                            logger.info(
+                                "[router] post-LLM EXECUTE rescue: planner returned no "
+                                "actionable steps for an execute-looking goal — "
+                                "substituting deterministic plan for %s",
+                                fallback.steps[0].files[0].path,
+                            )
+                            return fallback
+            except Exception as _rescue_err:  # pragma: no cover - defensive
+                logger.debug("[router] post-LLM execute rescue skipped: %s", _rescue_err)
+
             return plan
         except Exception as exc:
             error_msg = str(exc)

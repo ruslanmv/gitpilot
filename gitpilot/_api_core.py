@@ -507,10 +507,11 @@ async def api_get_file(
     owner: str = FPath(...),
     repo: str = FPath(...),
     path: str = Query(...),
+    ref: Optional[str] = Query(None),
     authorization: Optional[str] = Header(None),
 ):
     token = get_github_token(authorization)
-    content = await get_file(owner, repo, path, token=token)
+    content = await get_file(owner, repo, path, token=token, ref=ref)
     return FileContent(path=path, content=content)
 
 

@@ -205,24 +205,38 @@ def test_matrixlab_backend_calls_code_run(client: TestClient, monkeypatch) -> No
     assert captured["body"]["code"] == "print('hi')"
 
 
-def test_lifecycle_mutating_endpoints_gated(client: TestClient) -> None:
-    """Without GITPILOT_ENABLE_MATRIXLAB_LIFECYCLE, install/start/stop
-    must 403 — never silently execute docker on behalf of a browser
-    POST."""
+def test_lifecycle_mutating_endpoints_gated_when_explicitly_disabled(
+    client: TestClient, monkeypatch,
+) -> None:
+    """When GITPILOT_ENABLE_MATRIXLAB_LIFECYCLE=0 is set, install/start/
+    stop must 403 — never silently execute docker on behalf of a browser
+    POST.  (Default is enabled; the env var is now an opt-OUT.)"""
+    monkeypatch.setenv("GITPILOT_ENABLE_MATRIXLAB_LIFECYCLE", "0")
     for path in ("/api/sandbox/matrixlab/install",
                  "/api/sandbox/matrixlab/start",
                  "/api/sandbox/matrixlab/stop"):
         r = client.post(path)
-        assert r.status_code == 403, f"{path} must require the env flag"
+        assert r.status_code == 403, f"{path} must reject when explicitly disabled"
         assert "GITPILOT_ENABLE_MATRIXLAB_LIFECYCLE" in r.json()["detail"]
 
 
 def test_lifecycle_status_always_safe(client: TestClient) -> None:
-    """GET /lifecycle is read-only; safe to call even when the env
-    flag is off.  Reports lifecycle_enabled=False so the UI can render
-    the right hint."""
+    """GET /lifecycle is read-only; safe to call regardless of the env
+    flag.  After the polarity flip the default is enabled, so a fresh
+    install should report lifecycle_enabled=True."""
     r = client.get("/api/sandbox/matrixlab/lifecycle")
     assert r.status_code == 200
     data = r.json()
-    assert data["lifecycle_enabled"] is False
-    assert "instructions" in data
+    assert data["lifecycle_enabled"] is True
+    assert "matrixlab_url" in data
+
+
+def test_lifecycle_status_reports_disabled_when_env_overrides(
+    client: TestClient, monkeypatch,
+) -> None:
+    """Operators who explicitly opt OUT via env still see the disabled
+    state in /lifecycle so the UI can render the right hint."""
+    monkeypatch.setenv("GITPILOT_ENABLE_MATRIXLAB_LIFECYCLE", "0")
+    r = client.get("/api/sandbox/matrixlab/lifecycle")
+    assert r.status_code == 200
+    assert r.json()["lifecycle_enabled"] is False
