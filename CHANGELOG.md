@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Coder API** (`POST /repair` + `GET /repair/health`), bearer-token gated (`GITPILOT_API_TOKEN`), mounted into the main app — turns a repair-plan into a dry-run patch preview for SelfRepair / matrix-maintainer over HTTPS.
+
 ### Changed — `make run` now starts the MCP Context Forge stack by default
 
 **Heads-up for upgraders.**  Until this release, `make run` started only the

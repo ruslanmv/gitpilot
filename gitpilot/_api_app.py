@@ -334,6 +334,18 @@ try:
 except Exception:  # noqa: BLE001
     logger.exception("MatrixLab admin API failed to mount; install modal will be disabled")
 
+# Coder API (the generic GitPilot repair pipeline over HTTP): POST /repair +
+# GET /repair/health, gated by a bearer token (GITPILOT_API_TOKEN). This is
+# what SelfRepair / matrix-maintainer call to turn a repair-plan into a
+# dry-run patch preview. Non-fatal mount so the UI/chat still work if it fails.
+try:
+    from .repair_router import build_repair_router
+
+    app.include_router(build_repair_router())
+    logger.info("Coder API enabled (mounting /repair + /repair/health)")
+except Exception:  # noqa: BLE001
+    logger.exception("Coder API failed to mount; /repair will be unavailable")
+
 # GitPilot-as-MCP-server (turns GitPilot into an MCP server other agents
 # can drive). Off by default; mount only when GITPILOT_EXPOSE_MCP_SERVER=true.
 try:
