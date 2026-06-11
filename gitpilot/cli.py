@@ -845,3 +845,39 @@ def generate_cmd(
     else:
         console.print(f"[green]Generated {len(files_written)} file(s) in {os.path.abspath(output_dir)}[/green]")
 
+
+
+@cli.command("repair")
+def repair_cmd(
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository URL (overrides plan)"),
+    plan: str = typer.Option(..., "--plan", "-p", help="Path to repair-plan.json (RepairRequest)"),
+    sandbox: str = typer.Option(None, "--sandbox", help="Sandbox provider, e.g. matrixlab"),
+    dry_run: bool = typer.Option(True, "--dry-run/--no-dry-run", help="Dry-run (default): no PR, no push"),
+    out: str = typer.Option("repair-response.json", "--out", "-o", help="Output repair-response JSON path"),
+    demo: bool = typer.Option(False, "--demo", help="Force offline demo/stub mode"),
+):
+    """Run the GENERIC GitPilot repair flow from a repair-plan.json.
+
+    Reads a SelfRepair repair-plan (== RepairRequest), generates a patch via
+    OllaBridge / any OpenAI-compatible endpoint, optionally validates it in a
+    MatrixLab sandbox, prints the patch PREVIEW + summary, and writes
+    repair-response.json. In the first wave this NEVER opens a real PR.
+
+    Example::
+
+        gitpilot repair --repo https://github.com/acme/app \
+            --plan repair-plan.json --sandbox matrixlab --dry-run
+    """
+    from .repair.cli import run_cli as _repair_run_cli
+
+    argv: list[str] = ["--plan", plan, "--out", out]
+    if repo:
+        argv += ["--repo", repo]
+    if sandbox:
+        argv += ["--sandbox", sandbox]
+    if dry_run:
+        argv += ["--dry-run"]
+    if demo:
+        argv += ["--demo"]
+    code = _repair_run_cli(argv)
+    raise typer.Exit(code=code)
