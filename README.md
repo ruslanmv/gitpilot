@@ -31,6 +31,8 @@ Multiple specialized agents — including Explorer, Planner, Coder, and Reviewer
 
 Most AI coding tools are a **single model behind a chat box**. GitPilot is fundamentally different: it deploys a **team of four specialized AI agents** that collaborate on every task — just like a real engineering team.
 
+> **Matrix‑native:** GitPilot is the worker for [Matrix Builder](https://github.com/agent-matrix/matrix-builder) — it runs a signed Matrix Bundle under contract via `POST /api/v1/gitpilot/runs` (A2A‑secured), returns a controlled diff, and never approves or commits its own work.
+
 | Agent | Role | What it does |
 |---|---|---|
 | **Explorer** | Context | Reads your full repo, git log, test suite, and dependencies so the plan starts with real knowledge — not guesses |
