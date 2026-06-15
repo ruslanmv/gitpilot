@@ -14,6 +14,7 @@ from .version import __version__
 # Re-exported here so endpoint authors can `@wrap_errors_envelope` without
 # reaching into the implementation module.  Importing the symbol is a no-op
 # when the flag is off, so this is fully backwards compatible.
+from .commit_attribution import with_attribution
 from .errors import GitPilotError, wrap_errors_envelope  # noqa: F401
 from .github_api import (
     list_user_repos,
@@ -345,6 +346,20 @@ try:
     logger.info("Coder API enabled (mounting /repair + /repair/health)")
 except Exception:  # noqa: BLE001
     logger.exception("Coder API failed to mount; /repair will be unavailable")
+
+# Matrix runs facade (the Matrix-native AI coder path): POST /api/v1/gitpilot/runs.
+# Maps a signed Matrix Bundle + contract onto the repair pipeline, always denying
+# the Matrix control files, gated by the A2A shared secret. Non-fatal mount.
+try:
+    from .matrix_runs_router import build_matrix_runs_alias_router, build_matrix_runs_router
+
+    app.include_router(build_matrix_runs_router())
+    # Local-bridge alias (/api/matrix/*) used by Matrix Builder's "Send to local
+    # GitPilot": same handlers, second namespace.
+    app.include_router(build_matrix_runs_alias_router())
+    logger.info("Matrix runs API enabled (mounting /api/v1/gitpilot/* + /api/matrix/*)")
+except Exception:  # noqa: BLE001
+    logger.exception("Matrix runs API failed to mount; /api/v1/gitpilot/runs will be unavailable")
 
 # GitPilot-as-MCP-server (turns GitPilot into an MCP server other agents
 # can drive). Off by default; mount only when GITPILOT_EXPOSE_MCP_SERVER=true.
@@ -1087,8 +1102,10 @@ async def api_put_file(
     authorization: Optional[str] = Header(None),
 ):
     token = get_github_token(authorization)
+    # Attribute the commit to GitPilot (Co-authored-by trailer) so it shows up as
+    # a GitPilot contribution — like Claude Code. See gitpilot.commit_attribution.
     result = await put_file(
-        owner, repo, payload.path, payload.content, payload.message, token=token
+        owner, repo, payload.path, payload.content, with_attribution(payload.message), token=token
     )
     return CommitResponse(**result)
 

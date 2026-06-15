@@ -84,9 +84,13 @@ EXPOSE 7860
 # Docker HEALTHCHECK directive.
 
 # Direct CMD — no shell script, fewer failure points.
+# Single worker: the Matrix run registry (gitpilot.matrix_runs_router._RUNS) is
+# in-memory per worker, so multiple workers would scatter a run's status/diff/
+# logs across processes and 404 intermittently. One worker keeps run state
+# consistent; back the registry with a shared store to scale workers later.
 CMD ["python", "-m", "uvicorn", "gitpilot.api:app", \
      "--host", "0.0.0.0", \
      "--port", "7860", \
-     "--workers", "2", \
+     "--workers", "1", \
      "--limit-concurrency", "10", \
      "--timeout-keep-alive", "120"]
