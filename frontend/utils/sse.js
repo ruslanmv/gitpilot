@@ -1,3 +1,4 @@
+import { resolveBackendUrl } from "./backend.js";
 /**
  * SSE (Server-Sent Events) client for GitPilot V2 streaming API.
  *
@@ -20,7 +21,7 @@
  *   cancelStream(sessionId);
  */
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
+const BACKEND_URL = resolveBackendUrl();
 
 function apiUrl(path) {
   return BACKEND_URL ? `${BACKEND_URL}${path}` : path;

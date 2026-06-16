@@ -1,3 +1,4 @@
+import { resolveBackendUrl } from "../utils/backend.js";
 // frontend/components/ChatPanel.jsx
 import React, { useEffect, useRef, useState } from "react";
 import AssistantMessage from "./AssistantMessage.jsx";
@@ -113,7 +114,7 @@ export default function ChatPanel({
     // and fails repeatedly with "closed before established" when the
     // backend is still starting up (common on WSL cold start).
     let cancelled = false;
-    const backendUrl = import.meta.env.VITE_BACKEND_URL || '';
+    const backendUrl = resolveBackendUrl();
     const pingUrl = backendUrl ? `${backendUrl}/api/ping` : '/api/ping';
     const waitForBackend = async () => {
       for (let i = 0; i < 10 && !cancelled; i++) {

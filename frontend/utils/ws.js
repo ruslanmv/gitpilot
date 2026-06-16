@@ -1,3 +1,4 @@
+import { resolveBackendUrl } from "./backend.js";
 /**
  * WebSocket client for real-time session streaming.
  *
@@ -26,7 +27,7 @@ export class SessionWebSocket {
     if (this._closed) return;
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const backendUrl = import.meta.env.VITE_BACKEND_URL || '';
+    const backendUrl = resolveBackendUrl();
     let wsUrl;
 
     if (backendUrl) {

@@ -57,7 +57,9 @@ RUN pip install --no-cache-dir --upgrade pip && \
         "typer>=0.12.0,<0.24.0" \
         "pydantic>=2.7.0,<2.12.0" \
         "rich>=13.0.0" \
-        "pyjwt[crypto]>=2.8.0"
+        "pyjwt[crypto]>=2.8.0" \
+        "psycopg[binary]>=3.1" \
+        "resend>=2.0.0"
 
 # Step 2: heavy ML/agent deps (separate layer for better caching)
 RUN pip install --no-cache-dir \

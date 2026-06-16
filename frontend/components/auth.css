@@ -1,0 +1,97 @@
+/* GitPilot /auth — premium single-card sign in / create account / GitHub.
+   Scoped .gp-auth. One continuous full-viewport background; the card sits
+   directly on it (no second rectangle) for every state. */
+.gp-auth {
+  --o: #ff5a2b; --o2: #ff7a4c; --tx: #f1f3f5; --mut: #9aa3ad; --faint: #6f7884;
+  --bd: rgba(255,255,255,.08); --field: #15171d;
+  position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; overflow-y: auto;
+  background:
+    radial-gradient(circle at 50% 20%, rgba(255,95,48,.10), transparent 34%),
+    #101114;
+  color: var(--tx);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.gp-auth * { box-sizing: border-box; }
+.gp-auth-card {
+  width: min(100%, 520px); border: 1px solid var(--bd); border-radius: 28px;
+  background: rgba(28,29,33,.92); padding: 40px 46px 32px; text-align: center;
+  box-shadow: 0 32px 80px rgba(0,0,0,.45);
+}
+.gp-auth-logo {
+  width: 64px; height: 64px; border-radius: 16px; margin: 0 auto 22px; display: grid; place-items: center;
+  font-weight: 800; font-size: 22px; color: var(--o);
+  background: linear-gradient(150deg, rgba(255,90,43,.22), rgba(255,90,43,.08));
+  border: 1px solid rgba(255,90,43,.25);
+}
+.gp-auth h2 { font-size: 26px; font-weight: 750; margin: 0 0 12px; letter-spacing: -0.02em; }
+.gp-auth .lead { color: var(--mut); font-size: 14.5px; line-height: 1.5; margin: 0 0 26px; }
+
+.gp-github {
+  display: flex; align-items: center; justify-content: center; gap: 11px; width: 100%;
+  border: none; border-radius: 12px; padding: 14px; font-size: 15px; font-weight: 600; cursor: pointer;
+  color: #fff; background: linear-gradient(150deg, var(--o2), var(--o));
+  box-shadow: 0 16px 38px -16px rgba(255,90,43,.85); transition: .15s;
+  text-decoration: none;
+}
+.gp-github:hover { filter: brightness(1.05); transform: translateY(-1px); }
+.gp-github svg { width: 20px; height: 20px; }
+
+.gp-or { display: flex; align-items: center; gap: 14px; color: var(--faint); font-size: 13px; margin: 22px 0; }
+.gp-or::before, .gp-or::after { content: ""; flex: 1; height: 1px; background: var(--bd); }
+
+.gp-field { margin-bottom: 14px; position: relative; text-align: left; }
+.gp-field input {
+  width: 100%; border: 1px solid var(--bd); background: var(--field); color: var(--tx);
+  border-radius: 11px; padding: 14px 15px; font-size: 14.5px; outline: none; transition: border-color .15s;
+}
+.gp-field input::placeholder { color: var(--faint); }
+.gp-field input:focus { border-color: rgba(255,90,43,.5); }
+.gp-pw .gp-eye {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  background: none; border: none; color: var(--faint); cursor: pointer; padding: 8px; display: grid; place-items: center;
+}
+.gp-pw .gp-eye:hover { color: var(--mut); }
+.gp-pw .gp-eye svg { width: 18px; height: 18px; }
+
+.gp-forgot { text-align: right; margin: -2px 0 16px; }
+.gp-submit {
+  width: 100%; border: 1px solid var(--bd); border-radius: 11px; padding: 14px; font-size: 15px; font-weight: 600;
+  color: var(--tx); background: #21242c; cursor: pointer; transition: .15s;
+}
+.gp-submit:hover:not(:disabled) { background: #272a33; }
+.gp-submit:disabled { opacity: .6; cursor: default; }
+
+.gp-foot { font-size: 14px; color: var(--mut); margin-top: 22px; }
+.gp-copy { font-size: 12px; color: var(--faint); margin-top: 18px; }
+.gp-link { color: var(--o); cursor: pointer; background: none; border: none; font-size: inherit; padding: 0; font-weight: 550; }
+.gp-link:hover { text-decoration: underline; }
+.gp-back { background: none; border: none; color: var(--mut); font-size: 13px; cursor: pointer; margin-bottom: 14px; padding: 0; }
+
+.gp-note { border-radius: 10px; padding: 11px 13px; font-size: 13.5px; margin-bottom: 16px; text-align: left; }
+.gp-note.ok { background: rgba(34,200,120,.1); border: 1px solid rgba(34,200,120,.3); color: #8ff0bf; }
+.gp-note.err { background: rgba(255,107,107,.1); border: 1px solid rgba(255,107,107,.3); color: #ffb3b3; }
+
+/* ── GitHub authorization (same card) ── */
+.gp-spinwrap { display: grid; place-items: center; padding: 18px 0 6px; }
+.gp-spin {
+  width: 30px; height: 30px; border-radius: 50%;
+  border: 3px solid rgba(255,90,43,.22); border-top-color: var(--o);
+  animation: gp-spin 0.8s linear infinite; display: inline-block;
+}
+.gp-spin-sm { width: 15px; height: 15px; border-width: 2px; vertical-align: middle; }
+@keyframes gp-spin { to { transform: rotate(360deg); } }
+
+.gp-code {
+  display: block; width: 100%; margin: 4px 0 16px; padding: 14px;
+  font-size: 24px; font-weight: 750; letter-spacing: 5px; color: var(--o);
+  background: var(--field); border: 1px dashed rgba(255,90,43,.5); border-radius: 12px;
+  cursor: pointer; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.gp-code:hover { background: #181b22; }
+.gp-waiting {
+  display: flex; align-items: center; justify-content: center; gap: 9px;
+  color: var(--faint); font-size: 13px; margin-top: 18px;
+}
+
+@media (max-width: 480px) { .gp-auth-card { padding: 30px 24px 24px; } }

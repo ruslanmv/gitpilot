@@ -1,0 +1,6 @@
+# GitPilot — https://gitpilot.ruslanmv.com
+User-agent: *
+Allow: /
+Disallow: /auth
+
+Sitemap: https://gitpilot.ruslanmv.com/sitemap.xml
