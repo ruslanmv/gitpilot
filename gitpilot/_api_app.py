@@ -283,7 +283,23 @@ app = FastAPI(
     version=__version__,
     description="Agentic AI assistant for GitHub repositories.",
     lifespan=_lifespan,
+    # Disable the built-in Swagger/OpenAPI: schema generation currently 500s, and
+    # /docs should point users at the product docs instead. See the redirect below.
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
+
+
+@app.get("/docs", include_in_schema=False)
+@app.get("/redoc", include_in_schema=False)
+async def _docs_redirect():
+    """Send /docs (and /redoc) to the GitPilot product docs."""
+    from fastapi.responses import RedirectResponse
+
+    target = os.getenv("GITPILOT_DOCS_URL", "https://ruslanmv.com/gitpilot/")
+    return RedirectResponse(url=target, status_code=307)
+
 
 # ==========================================================================
 # Optional A2A Adapter (MCP ContextForge)
@@ -360,6 +376,18 @@ try:
     logger.info("Matrix runs API enabled (mounting /api/v1/gitpilot/* + /api/matrix/*)")
 except Exception:  # noqa: BLE001
     logger.exception("Matrix runs API failed to mount; /api/v1/gitpilot/runs will be unavailable")
+
+# GitPilot accounts (account-first identity: email/password + verification +
+# sessions). Off by default so the existing bring-your-own-GitHub-token flow is
+# unchanged; enable with GITPILOT_ENABLE_ACCOUNTS=true. See docs/auth.md.
+if _env_bool("GITPILOT_ENABLE_ACCOUNTS", False):
+    try:
+        from .auth import build_account_router
+
+        app.include_router(build_account_router())
+        logger.info("Accounts API enabled (mounting /api/account/*)")
+    except Exception:  # noqa: BLE001
+        logger.exception("Accounts API failed to mount; /api/account/* will be unavailable")
 
 # GitPilot-as-MCP-server (turns GitPilot into an MCP server other agents
 # can drive). Off by default; mount only when GITPILOT_EXPOSE_MCP_SERVER=true.

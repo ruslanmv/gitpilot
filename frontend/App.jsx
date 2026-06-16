@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import StartupScreen from "./components/StartupScreen.jsx";
 import LoginPage from "./components/LoginPage.jsx";
+import LandingPage from "./components/LandingPage.jsx";
+import AuthPage from "./components/AuthPage.jsx";
 import RepoSelector from "./components/RepoSelector.jsx";
 import ProjectContextPanel from "./components/ProjectContextPanel.jsx";
 import ChatPanel from "./components/ChatPanel.jsx";
@@ -849,6 +851,24 @@ export default function App() {
         localStorage.removeItem("github_user");
       }
 
+      // No GitHub token — but a GitPilot account session (HttpOnly cookie) may
+      // exist. Recognise it so email users stay signed in across reloads.
+      try {
+        const me = await safeFetchJSON(apiUrl("/api/account/me"), {
+          method: "GET",
+          credentials: "include",
+          timeout: 8000,
+        });
+        if (me && me.id) {
+          setIsAuthenticated(true);
+          setUserInfo({ login: me.email, name: me.name || me.email, email: me.email });
+          setIsLoading(false);
+          return;
+        }
+      } catch (err) {
+        /* no account session — fall through to sign-in */
+      }
+
       setStartupPhase("ready");
       setStartupStatusMessage("Preparing sign-in...");
       setStartupDetailMessage(
@@ -882,6 +902,33 @@ export default function App() {
     clearAllContext();
   };
 
+  // Public pages must render instantly — never gated behind backend startup.
+  // (A marketing landing page that shows "Connecting to backend…" is bad for
+  // users and for SEO crawlers.) Only a returning GitHub-token session, which
+  // startup is about to validate into the workspace, defers to the loader.
+  if (!isAuthenticated) {
+    const path = typeof window !== "undefined" ? window.location.pathname : "/";
+    const hasGithubToken =
+      typeof window !== "undefined" && !!localStorage.getItem("github_token");
+
+    // The auth/device-flow screen lives at "/auth"; it manages its own backend
+    // readiness via the backendReady prop, so render it immediately.
+    if (path.startsWith("/auth")) {
+      return (
+        <AuthPage
+          onAuthenticated={handleAuthenticated}
+          backendReady={!!startupStatusSnapshot}
+        />
+      );
+    }
+
+    // Public landing page at "/". Render instantly for anonymous visitors;
+    // only show the loader if a stored GitHub session is still resolving.
+    if (!hasGithubToken || !isLoading) {
+      return <LandingPage />;
+    }
+  }
+
   if (isLoading) {
     return (
       <StartupScreen
@@ -893,15 +940,6 @@ export default function App() {
         statusMessage={startupStatusMessage}
         detailMessage={startupDetailMessage}
         phase={startupPhase}
-      />
-    );
-  }
-
-  if (!isAuthenticated) {
-    return (
-      <LoginPage
-        onAuthenticated={handleAuthenticated}
-        backendReady={!!startupStatusSnapshot}
       />
     );
   }

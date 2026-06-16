@@ -1,13 +1,13 @@
 /**
  * API utilities for authenticated requests
  */
+import { resolveBackendUrl } from "./backend.js";
 
 /**
- * Get backend URL from environment or use relative path (for local dev)
- * - Production (Vercel): Uses VITE_BACKEND_URL env var (e.g., https://gitpilot-backend.onrender.com)
- * - Development (local): Uses relative paths (proxied by Vite to localhost:8000)
+ * Backend base URL — VITE_BACKEND_URL if set, else the hosted GitPilot backend
+ * (so production works without the env var), else relative for local dev.
  */
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
+const BACKEND_URL = resolveBackendUrl();
 
 /**
  * Check if backend URL is configured

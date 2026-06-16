@@ -1,0 +1,12 @@
+{
+  "name": "GitPilot — Agentic GitHub Workflows",
+  "short_name": "GitPilot",
+  "description": "Agentic GitHub assistant. Connect your repositories, understand context, and run secure agentic workflows from one workspace.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#101114",
+  "theme_color": "#101114",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
