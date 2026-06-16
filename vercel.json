@@ -2,5 +2,8 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "installCommand": "npm install",
-  "framework": "vite"
+  "framework": "vite",
+  "rewrites": [
+    { "source": "/((?!assets/|favicon|robots|sitemap|og-image|site\\.webmanifest|api/).*)", "destination": "/index.html" }
+  ]
 }
