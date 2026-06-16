@@ -4,12 +4,12 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>GitPilot — The first open-source multi-agent AI coding assistant.</title>
-  <meta name="description" content="GitPilot deploys four specialized AI agents (Explorer, Planner, Coder, Reviewer) that collaborate on every coding task. They read your repo, plan safe changes, write code, run tests, and wait for your approval. Open source, any LLM, free with Ollama." />
+  <meta name="description" content="GitPilot orchestrates specialized AI agents in configurable topologies (routing, ReAct + subagents, task pipelines). They read your repo, plan safe changes, write code, run tests, and wait for your approval. Open source, any LLM, free with Ollama." />
   <meta name="theme-color" content="#1C1C1F" />
 
   <!-- Open Graph -->
   <meta property="og:title" content="GitPilot — Multi-Agent AI Coding Assistant" />
-  <meta property="og:description" content="Four specialized AI agents collaborate on every task. Not a chatbot — a team. Open source, any LLM, you approve every change." />
+  <meta property="og:description" content="Specialized AI agents collaborate on every task in configurable topologies. Not a chatbot — a team. Open source, any LLM, you approve every change." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://ruslanmv.github.io/gitpilot/" />
   <meta property="og:image" content="./logo.svg" />
@@ -58,8 +58,8 @@
 
         <p class="hero__sub">
           Most AI coding tools are a single model guessing at your codebase.
-          GitPilot deploys <strong>four specialized agents</strong> &mdash; Explorer, Planner, Coder, Reviewer &mdash;
-          that collaborate on every task. They read your repo, draft a plan, write the code, run your tests, and
+          GitPilot orchestrates <strong>specialized agents</strong> &mdash; Explorer, Planner, Coder, Reviewer and more &mdash;
+          in configurable topologies that collaborate on every task. They read your repo, draft a plan, write the code, run your tests, and
           <strong>wait for your approval</strong> before touching a single file.
           Any LLM. Free and local with Ollama. Enterprise-ready.
         </p>
@@ -112,7 +112,7 @@
       <header class="section__head">
         <span class="eyebrow">Why multi-agent matters</span>
         <h2>A single chatbot guesses. A team of agents delivers.</h2>
-        <p class="section__sub">Four specialized AI agents share context, divide work, and check each other &mdash; the same pattern elite engineering teams use, automated at machine speed.</p>
+        <p class="section__sub">Specialized AI agents share context, divide work, and check each other &mdash; the same pattern elite engineering teams use, automated at machine speed.</p>
       </header>
 
       <ul class="features">
@@ -172,7 +172,7 @@
     <div class="container">
       <header class="section__head">
         <span class="eyebrow">The multi-agent pipeline</span>
-        <h2>Four agents. One mission. You stay in command.</h2>
+        <h2>A team of agents. One mission. You stay in command.</h2>
         <p class="section__sub">Each agent is a specialist. Together they do what no single model can: understand your repo deeply, plan safely, execute precisely, and catch their own mistakes.</p>
       </header>
 
@@ -212,15 +212,22 @@
 
       <div class="tabs" data-tabs>
         <div class="tabs__list" role="tablist" aria-label="Install options">
-          <button class="tabs__tab is-active" role="tab" aria-selected="true" data-tab="pypi">Python / CLI</button>
+          <button class="tabs__tab is-active" role="tab" aria-selected="true" data-tab="web">Web</button>
+          <button class="tabs__tab" role="tab" aria-selected="false" data-tab="pypi">Python / CLI</button>
           <button class="tabs__tab" role="tab" aria-selected="false" data-tab="vscode">VS Code</button>
           <button class="tabs__tab" role="tab" aria-selected="false" data-tab="docker">Docker</button>
           <button class="tabs__tab" role="tab" aria-selected="false" data-tab="source">From source</button>
         </div>
 
         <div class="tabs__panels">
-          <div class="tabs__panel is-active" role="tabpanel" data-panel="pypi">
-            <p class="tabs__note">Fastest path. Python 3.11 or 3.12.</p>
+          <div class="tabs__panel is-active" role="tabpanel" data-panel="web">
+            <p class="tabs__note">Zero install &mdash; nothing to set up. Just open the hosted app.</p>
+            <p><a class="btn btn--primary" href="https://gitpilot.ruslanmv.com" rel="noopener">Open the web app &rarr;</a></p>
+            <p class="tabs__hint">Runs in your browser at <a href="https://gitpilot.ruslanmv.com" rel="noopener">gitpilot.ruslanmv.com</a> &mdash; same sessions, settings and approvals as the CLI and VS Code. Nothing to install.</p>
+          </div>
+
+          <div class="tabs__panel" role="tabpanel" data-panel="pypi" hidden>
+            <p class="tabs__note">Fastest local path. Python 3.11 or 3.12.</p>
             <div class="code" data-copy>
               <pre><code>pip install gitcopilot
 gitpilot serve</code></pre>
@@ -291,7 +298,7 @@ make run</code></pre>
     <div class="container cta__inner">
       <div>
         <h2>Stop chatting with a chatbot. Start working with a team of agents.</h2>
-        <p>Open source. Apache 2.0. Four agents, any LLM, you approve every change. Your repo, your rules.</p>
+        <p>Open source. Apache 2.0. A team of agents, any LLM, you approve every change. Your repo, your rules.</p>
       </div>
       <div class="cta__actions">
         <a class="btn btn--primary" href="#quickstart">Install GitPilot</a>

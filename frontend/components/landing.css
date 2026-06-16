@@ -24,10 +24,19 @@
 .gp-landing * { box-sizing: border-box; }
 .gp-wrap { max-width: 1160px; margin: 0 auto; padding: 0 28px; }
 
+/* --- sticky top bar --- */
+.gp-topbar {
+  position: sticky; top: 0; z-index: 60;
+  background: rgba(10, 10, 12, 0.72);
+  backdrop-filter: saturate(150%) blur(12px);
+  -webkit-backdrop-filter: saturate(150%) blur(12px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
 /* --- nav --- */
 .gp-nav {
   display: flex; align-items: center; justify-content: space-between;
-  height: 78px;
+  height: 72px;
 }
 .gp-brand { display: flex; align-items: center; gap: 12px; text-decoration: none; }
 .gp-logo {
@@ -81,8 +90,9 @@
 .gp-trust span { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--gp-faint); }
 .gp-trust svg { width: 15px; height: 15px; color: var(--gp-orange); }
 
-/* --- above-the-fold container: nav + hero + capabilities = one viewport --- */
-.gp-fold { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
+/* --- above-the-fold container: hero + capabilities fill the viewport
+   (minus the 72px sticky top bar) so the next section stays below the fold --- */
+.gp-fold { min-height: calc(100vh - 72px); min-height: calc(100dvh - 72px); display: flex; flex-direction: column; }
 .gp-fold-main { flex: 1 1 auto; display: flex; align-items: center; }
 .gp-fold-main .gp-hero { width: 100%; padding: 24px 0; }
 .gp-fold .gp-llm-sec { padding: 44px 0 46px; }
