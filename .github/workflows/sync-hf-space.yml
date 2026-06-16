@@ -69,6 +69,13 @@ jobs:
           # Frontend source (needed for multi-stage Docker build)
           cp -r frontend "$DEPLOY_DIR/frontend"
 
+          # HF Spaces reject committed binaries (they must go through Xet/LFS).
+          # The OG image is only needed on the canonical domain (Vercel), where
+          # the SEO meta tags point by absolute URL — the Space never serves it.
+          # Drop it (and any stray build output) so the push isn't rejected.
+          rm -f "$DEPLOY_DIR/frontend/public/og-image.png"
+          rm -rf "$DEPLOY_DIR/frontend/node_modules" "$DEPLOY_DIR/frontend/dist"
+
           # -- Create an orphan commit and force push --------------------------
           cd "$DEPLOY_DIR"
           git init -b main
