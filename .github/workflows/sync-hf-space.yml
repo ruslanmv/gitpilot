@@ -20,8 +20,10 @@ jobs:
   sync-to-hub:
     runs-on: ubuntu-latest
     concurrency:
+      # Supersede queued/in-flight deploys so a burst of merges results in a
+      # single push to HF instead of hammering it (which triggers HTTP 429).
       group: hf-space-sync-canonical
-      cancel-in-progress: false
+      cancel-in-progress: true
     env:
       HF_USERNAME: ${{ secrets.HF_USERNAME }}
       SPACE_NAME:  ${{ secrets.SPACE_NAME }}
@@ -86,6 +88,22 @@ jobs:
           git commit -m "Deploy from ${GITHUB_SHA::8}"
 
           echo "🔁 Pushing deploy tree → HF Space main..."
-          git push --force "$REMOTE_URL" main
+          # HuggingFace frequently returns HTTP 429 (rate limit) on git pushes,
+          # especially after several deploys in a row. Retry with exponential
+          # backoff instead of failing the whole job on a transient throttle.
+          push_with_retry() {
+            local max=6 delay=10 attempt=1
+            until git push --force "$REMOTE_URL" main; do
+              if [ "$attempt" -ge "$max" ]; then
+                echo "❌ Push still failing after ${max} attempts — giving up."
+                return 1
+              fi
+              echo "⚠️  Push failed (attempt ${attempt}/${max}). Likely HF 429 rate limit; waiting ${delay}s..."
+              sleep "$delay"
+              delay=$(( delay * 2 ))
+              attempt=$(( attempt + 1 ))
+            done
+          }
+          push_with_retry
 
           echo "✅ Sync complete: only Docker deployment files were pushed."
