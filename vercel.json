@@ -4,6 +4,6 @@
   "installCommand": "npm install",
   "framework": "vite",
   "rewrites": [
-    { "source": "/((?!assets/|favicon|robots|sitemap|og-image|site\\.webmanifest|api/).*)", "destination": "/index.html" }
+    { "source": "/(.*)", "destination": "/index.html" }
   ]
 }

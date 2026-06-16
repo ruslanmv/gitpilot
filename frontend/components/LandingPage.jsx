@@ -320,13 +320,25 @@ function PreviewCarousel() {
 }
 
 export default function LandingPage() {
+  // The app shell sets `body { overflow: hidden }` for the fixed workspace
+  // layout, which freezes mouse-wheel scrolling on this public page. Allow the
+  // page to scroll while the landing is mounted; restore on unmount.
+  useEffect(() => {
+    const prevBody = document.body.style.overflow;
+    const prevHtml = document.documentElement.style.overflow;
+    document.body.style.overflow = "auto";
+    document.documentElement.style.overflow = "auto";
+    return () => {
+      document.body.style.overflow = prevBody;
+      document.documentElement.style.overflow = prevHtml;
+    };
+  }, []);
+
   return (
     <div className="gp-landing">
-      <div className="gp-wrap">
-        {/* above-the-fold: navbar + hero + capabilities occupy one viewport */}
-        <div className="gp-fold">
-        {/* nav */}
-        <nav className="gp-nav">
+      {/* sticky top bar — keeps brand/home reachable from anywhere on the page */}
+      <header className="gp-topbar">
+        <nav className="gp-nav gp-wrap">
           <a className="gp-brand" href="/">
             <span className="gp-logo">GP</span>
             <span>
@@ -346,7 +358,11 @@ export default function LandingPage() {
             <a className="gp-btn gp-btn-primary" href="/auth?mode=signup">Get started</a>
           </div>
         </nav>
+      </header>
 
+      <div className="gp-wrap">
+        {/* above-the-fold: hero + capabilities occupy one viewport */}
+        <div className="gp-fold">
         {/* hero — vertically centered in the remaining fold space */}
         <div className="gp-fold-main">
         <header className="gp-hero">

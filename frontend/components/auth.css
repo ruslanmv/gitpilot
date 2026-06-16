@@ -20,10 +20,19 @@
 }
 .gp-auth-logo {
   width: 64px; height: 64px; border-radius: 16px; margin: 0 auto 22px; display: grid; place-items: center;
-  font-weight: 800; font-size: 22px; color: var(--o);
+  font-weight: 800; font-size: 22px; color: var(--o); text-decoration: none;
   background: linear-gradient(150deg, rgba(255,90,43,.22), rgba(255,90,43,.08));
-  border: 1px solid rgba(255,90,43,.25);
+  border: 1px solid rgba(255,90,43,.25); transition: filter .15s, transform .15s;
 }
+a.gp-auth-logo:hover { filter: brightness(1.12); transform: translateY(-1px); }
+
+/* subtle "back to home" affordance on the dedicated auth page */
+.gp-home {
+  position: fixed; top: 18px; left: 20px; z-index: 5;
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; color: var(--mut); text-decoration: none; opacity: .72;
+}
+.gp-home:hover { opacity: 1; color: var(--tx); }
 .gp-auth h2 { font-size: 26px; font-weight: 750; margin: 0 0 12px; letter-spacing: -0.02em; }
 .gp-auth .lead { color: var(--mut); font-size: 14.5px; line-height: 1.5; margin: 0 0 26px; }
 

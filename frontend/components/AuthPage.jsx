@@ -221,9 +221,10 @@ export default function AuthPage({ onAuthenticated, backendReady = false }) {
   if (view === "github") {
     return (
       <div className="gp-auth">
+        <a className="gp-home" href="/">← Back to home</a>
         <div className="gp-auth-card">
           <button className="gp-back" onClick={goEmail}>← Back to sign in</button>
-          <div className="gp-auth-logo">GP</div>
+          <a className="gp-auth-logo" href="/" aria-label="Back to GitPilot home">GP</a>
 
           {ghPhase === "connecting" && (
             <>
@@ -271,11 +272,12 @@ export default function AuthPage({ onAuthenticated, backendReady = false }) {
   // ── Email / password card (sign in + create account share this shell) ──
   return (
     <div className="gp-auth">
+      <a className="gp-home" href="/">← Back to home</a>
       <form className="gp-auth-card" onSubmit={submit}>
         {mode === "signup" && (
           <button type="button" className="gp-back" onClick={() => { setMode("signin"); setNote(null); }}>← Back to sign in</button>
         )}
-        <div className="gp-auth-logo">GP</div>
+        <a className="gp-auth-logo" href="/" aria-label="Back to GitPilot home">GP</a>
         {mode === "signin" ? (
           <>
             <h2>GitPilot Enterprise</h2>
