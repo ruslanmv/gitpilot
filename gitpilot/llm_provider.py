@@ -107,11 +107,15 @@ def build_llm() -> Any:
         if not model.startswith("anthropic/"):
             model = f"anthropic/{model}"
 
+        # Anthropic requires an explicit max_tokens; without it litellm falls
+        # back to a low default that truncates large single-file generations
+        # (e.g. a full self-contained game). Allow override via env.
         return _wrap_llm(
             LLM(
                 model=model,
                 api_key=api_key,
                 base_url=base_url if base_url else None,
+                max_tokens=int(os.getenv("GITPILOT_MAX_TOKENS", "32000")),
             ),
             model,
         )
@@ -161,7 +165,7 @@ def build_llm() -> Any:
                 base_url=base_url,
                 project_id=project_id,  # \u2190 CRITICAL: This was missing!
                 temperature=0.3,  # Default temperature
-                max_tokens=1024,  # Default max tokens
+                max_tokens=int(os.getenv("GITPILOT_MAX_TOKENS", "4096")),
             ),
             model,
         )
