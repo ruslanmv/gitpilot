@@ -38,32 +38,14 @@ export default function IntegrationsTab({ userInfo, onDisconnect, showToast }) {
     };
   }, []);
 
-  const handleConnect = async () => {
+  const handleConnect = () => {
+    // Link GitHub without leaving the account: the in-workspace connect flow
+    // runs the GitHub device flow (or web OAuth if a secret is configured) and
+    // returns here. Works the same whether or not an account is already signed
+    // in. See App.jsx (?connect=github) and AuthPage connectMode.
     setConnecting(true);
     setError(null);
-    try {
-      if (authStatus?.mode === "web") {
-        // Web OAuth flow — redirect to GitHub authorization URL
-        const { authorization_url, state } = await safeFetchJSON(
-          apiUrl("/api/auth/url"),
-          { timeout: 5000 }
-        );
-        if (state) {
-          sessionStorage.setItem("gitpilot_oauth_state", state);
-        }
-        // Full page redirect (OAuth providers don't support iframes)
-        window.location.href = authorization_url;
-      } else {
-        // Device flow — the LoginPage already handles this.
-        showToast?.(
-          "Device flow",
-          "GitHub device flow is configured. Sign out and sign in again to reconnect."
-        );
-      }
-    } catch (err) {
-      setError(err?.message || "Failed to start OAuth flow");
-      setConnecting(false);
-    }
+    window.location.href = "/auth?connect=github&view=github";
   };
 
   const handleDisconnect = () => {

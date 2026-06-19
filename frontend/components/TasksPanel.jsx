@@ -16,6 +16,7 @@
 // inline styles + scoped <style> block, same pattern as ContextMeter.
 
 import React, { useEffect, useRef, useState } from "react";
+import { apiUrl } from "../utils/api.js";
 
 const GITPILOT_ORANGE = "#D95C3D";
 const SUCCESS_GREEN = "#10B981";
@@ -115,7 +116,7 @@ export default function TasksPanel({ sessionId = null }) {
     setLoading(true);
     setError(null);
     try {
-      const r = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/tasks`);
+      const r = await fetch(apiUrl(`/api/sessions/${encodeURIComponent(sessionId)}/tasks`));
       if (!r.ok) {
         if (r.status === 404) {
           setError("disabled");

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { testProvider } from "../utils/api";
+import { testProvider, apiUrl } from "../utils/api";
 
 const PROVIDERS = ["ollabridge", "openai", "claude", "watsonx", "ollama"];
 
@@ -85,7 +85,7 @@ export default function LlmSettings() {
         setLoadingSlow(true);
       }, 1500);
 
-      const res = await fetch("/api/settings");
+      const res = await fetch(apiUrl("/api/settings"));
       const data = await res.json();
 
       if (!res.ok) {
@@ -122,7 +122,7 @@ export default function LlmSettings() {
     setSavedMsg("");
 
     try {
-      const res = await fetch("/api/settings/llm", {
+      const res = await fetch(apiUrl("/api/settings/llm"), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(settings),
@@ -147,7 +147,7 @@ export default function LlmSettings() {
     setLoadingModelsFor(provider);
 
     try {
-      const res = await fetch(`/api/settings/models?provider=${provider}`);
+      const res = await fetch(apiUrl(`/api/settings/models?provider=${provider}`));
       const data = await res.json();
 
       if (!res.ok || data.error) {
@@ -176,7 +176,7 @@ export default function LlmSettings() {
       const baseUrl =
         settings?.ollabridge?.base_url || "https://ruslanmv-ollabridge.hf.space";
 
-      const res = await fetch("/api/ollabridge/pair", {
+      const res = await fetch(apiUrl("/api/ollabridge/pair"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ base_url: baseUrl, code: pairCode.trim() }),
@@ -295,6 +295,30 @@ export default function LlmSettings() {
         Choose which LLM provider GitPilot should use for planning and agent
         workflows. Provider settings are stored on the server.
       </p>
+
+      <div className="settings-upsell">
+        <div className="settings-upsell-icon" aria-hidden="true">✨</div>
+        <div className="settings-upsell-body">
+          <div className="settings-upsell-title">
+            {provider === "ollabridge"
+              ? "You're on OllaBridge Cloud — free, no setup required."
+              : "Tip: OllaBridge Cloud is free and needs no setup."}
+          </div>
+          <div className="settings-upsell-text">
+            Perfect for getting started. Need sharper results? Switch to a premium
+            provider (OpenAI, Claude, Watsonx) below using your own API key — or run
+            your own models on your machine and connect them with{" "}
+            <a
+              href="https://huggingface.co/spaces/ruslanmv/ollabridge"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              OllaBridge ↗
+            </a>
+            .
+          </div>
+        </div>
+      </div>
 
       {error && <div className="settings-error-banner">{error}</div>}
       {savedMsg && <div className="settings-success-banner">{savedMsg}</div>}

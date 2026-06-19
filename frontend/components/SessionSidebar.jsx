@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { apiUrl } from "../utils/api.js";
 import SessionItem from "./SessionItem.jsx";
 
 /**
@@ -36,7 +37,7 @@ export default function SessionSidebar({
       try {
         const token = localStorage.getItem("github_token");
         const headers = token ? { Authorization: `Bearer ${token}` } : {};
-        const res = await fetch(`/api/sessions`, { headers, cache: "no-cache" });
+        const res = await fetch(apiUrl(`/api/sessions`), { headers, cache: "no-cache" });
         if (!res.ok) return;
         const data = await res.json();
         if (cancelled) return;
@@ -68,7 +69,7 @@ export default function SessionSidebar({
     try {
       const token = localStorage.getItem("github_token");
       const headers = token ? { Authorization: `Bearer ${token}` } : {};
-      await fetch(`/api/sessions/${sessionId}`, { method: "DELETE", headers });
+      await fetch(apiUrl(`/api/sessions/${sessionId}`), { method: "DELETE", headers });
       setSessions((prev) => prev.filter((s) => s.id !== sessionId));
       // Notify parent so it can clear the chat if this was the active session
       onDeleteSession?.(sessionId);

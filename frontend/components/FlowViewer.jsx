@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
+import { apiUrl } from "../utils/api.js";
 import ReactFlow, { Background, Controls, MiniMap } from "reactflow";
 import "reactflow/dist/style.css";
 
@@ -285,8 +286,8 @@ export default function FlowViewer() {
     (async () => {
       try {
         const [topoRes, prefRes] = await Promise.all([
-          fetch("/api/flow/topologies"),
-          fetch("/api/settings/topology"),
+          fetch(apiUrl("/api/flow/topologies")),
+          fetch(apiUrl("/api/settings/topology")),
         ]);
         if (topoRes.ok) {
           const data = await topoRes.json();
@@ -313,7 +314,7 @@ export default function FlowViewer() {
       const url = topologyId
         ? `/api/flow/current?topology=${encodeURIComponent(topologyId)}`
         : "/api/flow/current";
-      const res = await fetch(url);
+      const res = await fetch(apiUrl(url));
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to load flow");
 
@@ -430,7 +431,7 @@ export default function FlowViewer() {
       setAutoMode(false); // Manual selection disables auto
       // Persist preference (fire-and-forget)
       try {
-        await fetch("/api/settings/topology", {
+        await fetch(apiUrl("/api/settings/topology"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ topology: newTopologyId }),
@@ -454,7 +455,7 @@ export default function FlowViewer() {
     async (message) => {
       if (!message.trim()) return;
       try {
-        const res = await fetch("/api/flow/classify", {
+        const res = await fetch(apiUrl("/api/flow/classify"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ message }),

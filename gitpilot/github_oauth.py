@@ -64,17 +64,61 @@ def get_oauth_config() -> OAuthConfig:
         client_secret=client_secret if client_secret else None
     )
 
+
+def web_flow_available() -> bool:
+    """
+    True when the standard OAuth Web Flow is usable.
+
+    The Web Flow exchanges an authorization ``code`` for a token and that
+    exchange requires ``GITHUB_CLIENT_SECRET``. When no secret is configured we
+    must NOT advertise a web authorization URL — otherwise the browser is sent
+    to GitHub and bounced back to the App's registered callback (often
+    ``http://localhost:8000``), which is unreachable in production. In that
+    case the caller should fall back to the Device Flow instead.
+    """
+    return bool(get_oauth_config().client_secret)
+
+
+def resolve_redirect_uri(explicit: Optional[str] = None) -> Optional[str]:
+    """
+    Determine the OAuth callback URL the browser returns to after authorizing.
+
+    Priority:
+      1. ``explicit`` argument (caller-provided, e.g. from the request origin)
+      2. ``GITHUB_REDIRECT_URI``         — full-URL override
+      3. ``{GITPILOT_PUBLIC_BASE_URL}/auth`` — the deployed frontend /auth page
+      4. ``None``                        — let GitHub use the App's registered
+                                           default callback (legacy behaviour)
+
+    The frontend ``/auth`` page (AuthPage) reads ``?code`` and ``?state`` from
+    the URL and POSTs them to ``/api/auth/callback`` to finish the exchange, so
+    the callback must point at the FRONTEND origin, not the API host.
+    """
+    candidate = (explicit or os.getenv("GITHUB_REDIRECT_URI", "")).strip()
+    if candidate:
+        return candidate.rstrip("/")
+
+    base = os.getenv("GITPILOT_PUBLIC_BASE_URL", "").strip().rstrip("/")
+    if base:
+        return f"{base}/auth"
+
+    return None
+
 # ============================================================================
 # WEB FLOW (Standard OAuth2 - Requires Client Secret)
 # ============================================================================
 
-def generate_authorization_url() -> tuple[str, str]:
+def generate_authorization_url(redirect_uri: Optional[str] = None) -> tuple[str, str]:
     """
     Generate GitHub OAuth authorization URL with PKCE (Web Flow).
     Returns: (authorization_url, state)
+
+    An explicit ``redirect_uri`` is sent so GitHub returns the user to *our*
+    frontend instead of the App's registered default callback. It is derived
+    from ``GITHUB_REDIRECT_URI`` / ``GITPILOT_PUBLIC_BASE_URL`` when not passed.
     """
     config = get_oauth_config()
-    
+
     # 1. State for CSRF protection
     state = secrets.token_urlsafe(32)
     code_verifier = secrets.token_urlsafe(32)
@@ -95,17 +139,27 @@ def generate_authorization_url() -> tuple[str, str]:
         "allow_signup": "true",
     }
 
+    redirect_uri = resolve_redirect_uri(redirect_uri)
+    if redirect_uri:
+        params["redirect_uri"] = redirect_uri
+
     auth_url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
+    logger.info(
+        "Generated OAuth authorization URL (redirect_uri=%s)",
+        redirect_uri or "GitHub App default",
+    )
     return auth_url, state
 
 
-async def exchange_code_for_token(code: str, state: str) -> AuthSession:
+async def exchange_code_for_token(
+    code: str, state: str, redirect_uri: Optional[str] = None
+) -> AuthSession:
     """
     Exchange authorization code for access token (Web Flow).
     Requires GITHUB_CLIENT_SECRET to be set.
     """
     config = get_oauth_config()
-    
+
     if not config.client_secret:
         raise ValueError("Web Flow requires GITHUB_CLIENT_SECRET. Please use Device Flow or configure the secret.")
 
@@ -118,16 +172,23 @@ async def exchange_code_for_token(code: str, state: str) -> AuthSession:
     if time.time() - oauth_state.timestamp > 600:
         raise ValueError("OAuth interaction timed out.")
 
+    # GitHub requires the same redirect_uri at token exchange that was sent at
+    # the authorize step. Resolve it the same way generate_authorization_url did.
+    token_request = {
+        "client_id": config.client_id,
+        "client_secret": config.client_secret,
+        "code": code,
+    }
+    redirect_uri = resolve_redirect_uri(redirect_uri)
+    if redirect_uri:
+        token_request["redirect_uri"] = redirect_uri
+
     # 2. Exchange Code
     async with httpx.AsyncClient(timeout=10.0) as client:
         try:
             token_response = await client.post(
                 "https://github.com/login/oauth/access_token",
-                data={
-                    "client_id": config.client_id,
-                    "client_secret": config.client_secret,
-                    "code": code,
-                },
+                data=token_request,
                 headers={"Accept": "application/json"},
             )
             token_response.raise_for_status()

@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { apiUrl } from "../utils/api.js";
 
 /**
  * CreatePRButton — Claude-Code-on-Web parity PR creation action.
@@ -34,7 +35,7 @@ export default function CreatePRButton({
       const owner = repo.full_name?.split("/")[0] || repo.owner;
       const name = repo.full_name?.split("/")[1] || repo.name;
 
-      const res = await fetch(`/api/repos/${owner}/${name}/pulls`, {
+      const res = await fetch(apiUrl(`/api/repos/${owner}/${name}/pulls`), {
         method: "POST",
         headers,
         body: JSON.stringify({

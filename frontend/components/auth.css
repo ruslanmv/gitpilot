@@ -104,3 +104,13 @@ a.gp-auth-logo:hover { filter: brightness(1.12); transform: translateY(-1px); }
 }
 
 @media (max-width: 480px) { .gp-auth-card { padding: 30px 24px 24px; } }
+
+/* Email-confirmation success check (verify-email screen) */
+.gp-verify-check {
+  width: 64px; height: 64px; margin: 6px auto 14px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  background: rgba(34,200,120,.12);
+  border: 1px solid rgba(34,200,120,.35);
+  color: #8ff0bf; font-size: 32px; line-height: 1; font-weight: 700;
+}

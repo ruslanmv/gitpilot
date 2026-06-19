@@ -18,6 +18,7 @@
 // machine work for Batch 3 — here we only render and consent.
 
 import React from "react";
+import { apiUrl } from "../utils/api.js";
 
 const SEVERITY_STYLE = {
   high:   { bg: "#3d1111", fg: "#fca5a5", border: "#7f1d1d", icon: "⛔" },
@@ -159,7 +160,7 @@ function Field({ label, value }) {
 // ---------------------------------------------------------------------------
 
 export async function fetchExecutionPlan(payload) {
-  const res = await fetch("/api/sandbox/plan", {
+  const res = await fetch(apiUrl("/api/sandbox/plan"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

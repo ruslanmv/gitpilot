@@ -1,4 +1,5 @@
 import { resolveBackendUrl } from "../utils/backend.js";
+import { apiUrl } from "../utils/api.js";
 // frontend/components/ChatPanel.jsx
 import React, { useEffect, useRef, useState } from "react";
 import AssistantMessage from "./AssistantMessage.jsx";
@@ -255,7 +256,7 @@ export default function ChatPanel({
         const url = `/api/repos/${repo.owner}/${repo.name}/file`
                   + `?path=${encodeURIComponent(path)}`
                   + `&ref=${encodeURIComponent(branch)}`;
-        const res = await fetch(url, { headers: getHeaders() });
+        const res = await fetch(apiUrl(url), { headers: getHeaders() });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           setCanvasError(data.detail || `Could not load ${path} (HTTP ${res.status})`);
@@ -303,7 +304,7 @@ export default function ChatPanel({
         const url = `/api/repos/${repo.owner}/${repo.name}/file`
                   + `?path=${encodeURIComponent(path)}`
                   + `&ref=${encodeURIComponent(branch)}`;
-        const res = await fetch(url, { headers: getHeaders() });
+        const res = await fetch(apiUrl(url), { headers: getHeaders() });
         const data = await res.json().catch(() => ({}));
         return { res, data };
       };
@@ -412,7 +413,7 @@ export default function ChatPanel({
     if (metadata && typeof metadata === "object" && Object.keys(metadata).length > 0) {
       body.metadata = metadata;
     }
-    fetch(`/api/sessions/${sid}/message`, {
+    fetch(apiUrl(`/api/sessions/${sid}/message`), {
       method: "POST",
       headers: getHeaders(),
       body: JSON.stringify(body),
@@ -498,7 +499,7 @@ export default function ChatPanel({
 
       let res;
       try {
-        res = await fetch("/api/chat/plan", {
+        res = await fetch(apiUrl("/api/chat/plan"), {
           method: "POST",
           headers: getHeaders(),
           body: JSON.stringify({
@@ -713,7 +714,7 @@ export default function ChatPanel({
       // - If already on AI branch -> currentBranch (backend updates existing)
       const branch_name = safeCurrent === safeDefault ? undefined : safeCurrent;
 
-      const res = await fetch("/api/chat/execute", {
+      const res = await fetch(apiUrl("/api/chat/execute"), {
         method: "POST",
         headers: getHeaders(),
         body: JSON.stringify({

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { apiUrl } from "../../utils/api.js";
 
 export default function ConventionsTab({ owner, repo }) {
   const [content, setContent] = useState("");
@@ -12,7 +13,7 @@ export default function ConventionsTab({ owner, repo }) {
     setError("");
     setBusy(true);
     try {
-      const res = await fetch(`/api/repos/${owner}/${repo}/context`);
+      const res = await fetch(apiUrl(`/api/repos/${owner}/${repo}/context`));
       if (!res.ok) throw new Error(`Failed to load conventions (${res.status})`);
       const data = await res.json();
       // backend may return { context: "..."} or { conventions: "..."} depending on implementation
@@ -29,7 +30,7 @@ export default function ConventionsTab({ owner, repo }) {
     setError("");
     setBusy(true);
     try {
-      const res = await fetch(`/api/repos/${owner}/${repo}/context/init`, {
+      const res = await fetch(apiUrl(`/api/repos/${owner}/${repo}/context/init`), {
         method: "POST",
       });
       if (!res.ok) {

@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import re
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Response, status
 from pydantic import BaseModel
 
 from .accounts import Account, get_account_store
@@ -76,21 +76,41 @@ class ResetRequest(BaseModel):
     password: str
 
 
+class UpdateProfileRequest(BaseModel):
+    name: str | None = None
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class DeleteAccountRequest(BaseModel):
+    password: str | None = None
+
+
 class AccountResponse(BaseModel):
     id: str
     email: str
     name: str | None = None
     provider: str = "password"
     email_verified: bool = False
+    # Portable session token. Returned on login / verify / reset so SPAs on a
+    # different origin than the API (e.g. Vercel frontend + HF backend) can
+    # authenticate via the X-GitPilot-Session header — cross-site cookies are
+    # unreliable (SameSite + third-party cookie blocking). Cookie is still set
+    # for same-origin deployments.
+    session_token: str | None = None
 
 
-def _public(acc: Account) -> AccountResponse:
+def _public(acc: Account, *, session_token: str | None = None) -> AccountResponse:
     return AccountResponse(
         id=acc.id,
         email=acc.email,
         name=acc.name,
         provider=acc.provider,
         email_verified=acc.is_verified,
+        session_token=session_token,
     )
 
 
@@ -101,24 +121,41 @@ def _valid_email(email: str) -> str:
     return e
 
 
-def _set_session_cookie(response: Response, acc: Account) -> None:
+def _issue_session(response: Response, acc: Account) -> str:
+    """Mint a session, set the cookie, and return the token for the body.
+
+    Production runs the SPA and API on different sites (Vercel + HF Space), so
+    the cookie is set ``SameSite=None; Secure`` to survive cross-site requests,
+    and the same token is returned in the body for header-based auth. Local /
+    same-origin deployments fall back to ``SameSite=Lax``.
+    """
+    token = make_session(acc.id, acc.email)
+    https = public_base_url().startswith("https")
     response.set_cookie(
         SESSION_COOKIE,
-        make_session(acc.id, acc.email),
+        token,
         max_age=SESSION_TTL_SECONDS,
         httponly=True,
-        secure=public_base_url().startswith("https"),
-        samesite="lax",
+        secure=https,
+        samesite="none" if https else "lax",
         path="/",
     )
+    return token
 
 
 # --- dependency -------------------------------------------------------------
 
 
-def current_account(gitpilot_session: str | None = Cookie(default=None)) -> Account:
-    """The signed‑in account, or 401. Reads the HttpOnly session cookie."""
-    claims = read_session(gitpilot_session)
+def current_account(
+    gitpilot_session: str | None = Cookie(default=None),
+    x_gitpilot_session: str | None = Header(default=None),
+) -> Account:
+    """The signed‑in account, or 401.
+
+    Accepts the session from the ``X-GitPilot-Session`` header (cross-origin
+    SPAs) or the HttpOnly cookie (same-origin), in that order.
+    """
+    claims = read_session(x_gitpilot_session) or read_session(gitpilot_session)
     acc = get_account_store().get_by_id(claims["uid"]) if claims else None
     if acc is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not signed in.")
@@ -180,8 +217,23 @@ def build_account_router() -> APIRouter:  # noqa: PLR0915 — nested route handl
         acc = store.get_by_email(email)
         if acc is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found.")
-        _set_session_cookie(response, acc)
-        return _public(acc)
+        token = _issue_session(response, acc)
+        return _public(acc, session_token=token)
+
+    @router.post("/resend-verification")
+    def resend_verification(payload: EmailRequest) -> dict[str, str]:
+        """Re‑send the confirmation link for an unverified account.
+
+        Generic response (no account enumeration): only actually emails when an
+        account exists and is still unverified.
+        """
+        email = (payload.email or "").strip().lower()
+        acc = store.get_by_email(email)
+        if acc is not None and not acc.is_verified:
+            send_verification_email(
+                email, make_link_token(email, VERIFY_EMAIL, ttl_seconds=_LINK_TTL)
+            )
+        return {"message": "If your account needs confirmation, we've sent a new link."}
 
     @router.post("/login", response_model=AccountResponse)
     def login(payload: LoginRequest, response: Response) -> AccountResponse:
@@ -192,8 +244,8 @@ def build_account_router() -> APIRouter:  # noqa: PLR0915 — nested route handl
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid email or password.")
         if not acc.is_verified:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Verify your email before signing in.")
-        _set_session_cookie(response, acc)
-        return _public(acc)
+        token = _issue_session(response, acc)
+        return _public(acc, session_token=token)
 
     @router.post("/logout")
     def logout(response: Response) -> dict[str, str]:
@@ -203,6 +255,52 @@ def build_account_router() -> APIRouter:  # noqa: PLR0915 — nested route handl
     @router.get("/me", response_model=AccountResponse)
     def me(acc: Account = Depends(current_account)) -> AccountResponse:  # noqa: B008 — FastAPI idiom
         return _public(acc)
+
+    @router.patch("/profile", response_model=AccountResponse)
+    def update_profile(
+        payload: UpdateProfileRequest,
+        acc: Account = Depends(current_account),  # noqa: B008 — FastAPI idiom
+    ) -> AccountResponse:
+        """Update editable account fields (currently the display name)."""
+        new_name = (payload.name or "").strip() or None
+        store.set_name(acc.email, new_name)
+        updated = store.get_by_email(acc.email)
+        return _public(updated or acc)
+
+    @router.post("/password/change", response_model=AccountResponse)
+    def password_change(
+        payload: ChangePasswordRequest,
+        response: Response,
+        acc: Account = Depends(current_account),  # noqa: B008 — FastAPI idiom
+    ) -> AccountResponse:
+        """Change password for the signed‑in user (verifies the current one)."""
+        if not verify_password(payload.current_password, acc.password_hash):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Current password is incorrect.")
+        try:
+            pw = hash_password(payload.new_password)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        store.set_password(acc.email, pw)
+        # Re-issue the session so the change refreshes the active token.
+        token = _issue_session(response, acc)
+        return _public(acc, session_token=token)
+
+    @router.post("/delete")
+    def delete_account(
+        payload: DeleteAccountRequest,
+        response: Response,
+        acc: Account = Depends(current_account),  # noqa: B008 — FastAPI idiom
+    ) -> dict[str, str]:
+        """Permanently delete the signed‑in account.
+
+        Password‑based accounts must confirm with their current password so a
+        stolen/leftover session can't nuke the account.
+        """
+        if acc.password_hash and not verify_password(payload.password or "", acc.password_hash):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Password is incorrect.")
+        store.delete_by_email(acc.email)
+        response.delete_cookie(SESSION_COOKIE, path="/")
+        return {"message": "Your account has been permanently deleted."}
 
     @router.post("/password/forgot")
     def password_forgot(payload: EmailRequest) -> dict[str, str]:
@@ -225,8 +323,8 @@ def build_account_router() -> APIRouter:  # noqa: PLR0915 — nested route handl
         acc = store.get_by_email(email)
         if acc is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found.")
-        _set_session_cookie(response, acc)
-        return _public(acc)
+        token = _issue_session(response, acc)
+        return _public(acc, session_token=token)
 
     return router
 

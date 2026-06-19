@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { apiUrl } from "../utils/api.js";
 
 /**
  * Simple recursive file tree viewer with refresh support
@@ -62,7 +63,7 @@ export default function FileTree({ repo, refreshTrigger, branch }) {
 
     let cancelled = false;
 
-    fetch(`/api/repos/${repo.owner}/${repo.name}/tree${cacheBuster}`, { headers })
+    fetch(apiUrl(`/api/repos/${repo.owner}/${repo.name}/tree${cacheBuster}`), { headers })
       .then(async (res) => {
         if (!res.ok) {
             const errData = await res.json().catch(() => ({}));
