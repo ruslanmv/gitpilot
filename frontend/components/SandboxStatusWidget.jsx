@@ -14,6 +14,7 @@
 // Purely informational: failures here never block the chat / planner.
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { apiUrl } from "../utils/api.js";
 
 const POLL_MS = 30_000;
 
@@ -31,7 +32,7 @@ export default function SandboxStatusWidget({ onOpenSettings }) {
 
   const refresh = useCallback(async () => {
     try {
-      const res = await fetch("/api/sandbox/status");
+      const res = await fetch(apiUrl("/api/sandbox/status"));
       const data = await res.json();
       if (!res.ok) {
         setError(data.detail || `HTTP ${res.status}`);
@@ -53,7 +54,7 @@ export default function SandboxStatusWidget({ onOpenSettings }) {
   const switchToLocal = async () => {
     setSwitching(true);
     try {
-      await fetch("/api/sandbox/config", {
+      await fetch(apiUrl("/api/sandbox/config"), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ backend: "subprocess" }),

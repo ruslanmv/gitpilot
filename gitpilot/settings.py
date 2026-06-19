@@ -356,6 +356,37 @@ def get_settings() -> AppSettings:
     return _settings
 
 
+def runtime_environment() -> str:
+    """Where GitPilot is running: ``"cloud"`` or ``"local"``.
+
+    This drives the onboarding mental model:
+      - cloud: no user-owned filesystem, so a "pick a local folder" flow is
+        meaningless. GitHub (or another remote source) is the way in.
+      - local: the user is on their own machine, so local folder / Git paths
+        are first-class and GitHub is optional.
+
+    Detection (first match wins):
+      1. ``GITPILOT_RUNTIME`` explicit override (``cloud`` | ``local``)
+      2. Known hosted platforms — Hugging Face Spaces (``SPACE_ID`` /
+         ``SPACE_HOST``), Vercel (``VERCEL``), or ``GITPILOT_CLOUD``
+      3. Otherwise ``local``
+    """
+    override = (os.getenv("GITPILOT_RUNTIME") or "").strip().lower()
+    if override in {"cloud", "local"}:
+        return override
+
+    cloud_markers = (
+        "GITPILOT_CLOUD",
+        "SPACE_ID",        # Hugging Face Spaces
+        "SPACE_HOST",      # Hugging Face Spaces
+        "VERCEL",
+        "GITPILOT_VERCEL_DEPLOYMENT",
+    )
+    if any(os.getenv(m) for m in cloud_markers):
+        return "cloud"
+    return "local"
+
+
 def reload_settings() -> AppSettings:
     """
     Reload settings from disk/environment.

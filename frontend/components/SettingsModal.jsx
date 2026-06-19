@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { apiUrl } from "../utils/api.js";
 
 const SANDBOX_BACKENDS = [
   {
@@ -43,7 +44,7 @@ export default function SettingsModal({ onClose }) {
   const [showLifecycleLog, setShowLifecycleLog] = useState(false);
 
   const loadSettings = async () => {
-    const res = await fetch("/api/settings");
+    const res = await fetch(apiUrl("/api/settings"));
     const data = await res.json();
     setSettings(data);
     if (data?.sandbox) setSandbox(data.sandbox);
@@ -51,7 +52,7 @@ export default function SettingsModal({ onClose }) {
 
   const loadSandboxStatus = async () => {
     try {
-      const res = await fetch("/api/sandbox/status");
+      const res = await fetch(apiUrl("/api/sandbox/status"));
       const data = await res.json();
       setSandboxStatus({ ok: data.ok, error: data.error, remote: data.remote });
       // /status returns the same shape as the persisted block, so refresh
@@ -74,7 +75,7 @@ export default function SettingsModal({ onClose }) {
   const updateSandbox = async (patch) => {
     setSandboxBusy(true);
     try {
-      const res = await fetch("/api/sandbox/config", {
+      const res = await fetch(apiUrl("/api/sandbox/config"), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
@@ -105,7 +106,7 @@ export default function SettingsModal({ onClose }) {
 
   const loadLifecycle = async () => {
     try {
-      const res = await fetch("/api/sandbox/matrixlab/lifecycle");
+      const res = await fetch(apiUrl("/api/sandbox/matrixlab/lifecycle"));
       const data = await res.json();
       setLifecycle(data);
       if (Array.isArray(data.steps) && data.steps.length) {
@@ -127,7 +128,7 @@ export default function SettingsModal({ onClose }) {
     setLifecycleBusy(action);
     setShowLifecycleLog(true);
     try {
-      const res = await fetch(`/api/sandbox/matrixlab/${action}`, { method: "POST" });
+      const res = await fetch(apiUrl(`/api/sandbox/matrixlab/${action}`), { method: "POST" });
       const data = await res.json();
       if (!res.ok) {
         setLifecycle((prev) => ({ ...(prev || {}), error: data.detail || `HTTP ${res.status}` }));
@@ -150,7 +151,7 @@ export default function SettingsModal({ onClose }) {
   }, []);
 
   const changeProvider = async (provider) => {
-    const res = await fetch("/api/settings/provider", {
+    const res = await fetch(apiUrl("/api/settings/provider"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ provider }),
@@ -232,7 +233,7 @@ export default function SettingsModal({ onClose }) {
       };
     }
 
-    const res = await fetch("/api/settings/llm", {
+    const res = await fetch(apiUrl("/api/settings/llm"), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -246,7 +247,7 @@ export default function SettingsModal({ onClose }) {
     setTesting(true);
     setTestResult(null);
     try {
-      const res = await fetch(`/api/settings/test?provider=${settings.provider}`);
+      const res = await fetch(apiUrl(`/api/settings/test?provider=${settings.provider}`));
       const data = await res.json();
       if (!res.ok || data.error) {
         setTestResult({ ok: false, message: data.error || data.detail || "Connection failed" });
@@ -264,7 +265,7 @@ export default function SettingsModal({ onClose }) {
     if (!settings) return;
     const newValue = !settings.lite_mode;
     try {
-      const res = await fetch("/api/settings/lite-mode", {
+      const res = await fetch(apiUrl("/api/settings/lite-mode"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ lite_mode: newValue }),

@@ -20,6 +20,7 @@ import React, { useEffect, useRef, useState, useCallback } from "react";
 export default function UserMenu({
   userInfo,
   sidebarCollapsed = false,
+  onOpenAccount,
   onOpenSettings,
   onOpenAbout,
   onLogout,
@@ -304,6 +305,13 @@ export default function UserMenu({
             </div>
           </div>
 
+          {onOpenAccount && (
+            <MenuItem
+              icon={<UserIcon />}
+              label="Account"
+              onClick={() => handleItemClick(onOpenAccount)}
+            />
+          )}
           <MenuItem
             icon={<SettingsIcon />}
             label="Settings"
@@ -394,6 +402,15 @@ function MenuItem({ icon, label, onClick, danger = false }) {
 }
 
 // ── Inline icons (no extra asset loads) ────────────────────────────
+function UserIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+      <circle cx="12" cy="7" r="4" />
+    </svg>
+  );
+}
+
 function SettingsIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

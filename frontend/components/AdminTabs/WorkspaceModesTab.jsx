@@ -51,11 +51,16 @@ const MODES = [
   },
 ];
 
-export default function WorkspaceModesTab({ onSessionStarted, showToast }) {
+export default function WorkspaceModesTab({ onSessionStarted, showToast, runtime }) {
   const [activeModeId, setActiveModeId] = useState(null);
   const [inputValue, setInputValue] = useState("");
   const [submittingId, setSubmittingId] = useState(null);
   const [errorByMode, setErrorByMode] = useState({});
+
+  // In a cloud workspace there is no user-owned filesystem, so folder and
+  // local-Git modes can't work — only GitHub-sourced code makes sense.
+  const isCloud = runtime === "cloud";
+  const modes = isCloud ? MODES.filter((m) => m.id === "github") : MODES;
 
   const handleCardClick = (mode) => {
     if (submittingId) return;
@@ -109,11 +114,19 @@ export default function WorkspaceModesTab({ onSessionStarted, showToast }) {
     <div>
       <h3 style={{ marginBottom: "16px" }}>Workspace Modes</h3>
       <p style={{ fontSize: "12px", opacity: 0.7, marginBottom: "16px" }}>
-        Choose how you want GitPilot to interact with your code. You can switch modes at any time.
+        {isCloud
+          ? "You're in a cloud workspace, so GitPilot works from a GitHub repository. Folder and Local Git modes are only available when running GitPilot on your own machine."
+          : "Choose how you want GitPilot to interact with your code. You can switch modes at any time."}
       </p>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "16px" }}>
-        {MODES.map((mode) => {
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: `repeat(${Math.min(modes.length, 3)}, 1fr)`,
+          gap: "16px",
+        }}
+      >
+        {modes.map((mode) => {
           const isActive = activeModeId === mode.id;
           const isSubmitting = submittingId === mode.id;
           const error = errorByMode[mode.id];

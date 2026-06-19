@@ -117,6 +117,7 @@ from .github_oauth import (
     validate_token,
     initiate_device_flow,
     poll_device_token,
+    web_flow_available,
     AuthSession,
     GitHubUser,
 )
@@ -765,6 +766,9 @@ class PaginatedReposResponse(BaseModel):
     total_count: Optional[int] = None
     has_more: bool
     query: Optional[str] = None
+    # False when no usable GitHub identity is configured yet. This is a normal
+    # pre-link state (not an error): the UI shows a "Connect GitHub" prompt.
+    github_connected: bool = True
 
 
 class FileEntry(BaseModel):
@@ -975,7 +979,25 @@ async def api_list_repos(
             total_count=result.get("total_count"),
             has_more=result["has_more"],
             query=query,
+            github_connected=True,
         )
+
+    except HTTPException as he:
+        # No usable GitHub identity (not linked yet, or token expired) is NOT an
+        # error — it's a normal state for an email-only account. Return an empty,
+        # successful result flagged github_connected=False so the UI can show a
+        # friendly "Connect GitHub" prompt instead of a red error.
+        if he.status_code == 401:
+            return PaginatedReposResponse(
+                repositories=[],
+                page=page,
+                per_page=per_page,
+                total_count=0,
+                has_more=False,
+                query=query,
+                github_connected=False,
+            )
+        raise
 
     except httpx.ConnectTimeout:
         logger.exception("GitHub connection timed out while fetching repositories")
@@ -2326,8 +2348,15 @@ async def api_chat_route(payload: dict):
 async def api_get_auth_url():
     """
     Generate GitHub OAuth authorization URL (Web Flow).
-    Requires Client Secret to be configured.
+
+    The Web Flow needs GITHUB_CLIENT_SECRET to exchange the code for a token.
+    When it is not configured we return an empty authorization_url so the
+    frontend transparently falls back to the Device Flow (no secret / no
+    callback URL required). This prevents bouncing the browser to the GitHub
+    App's default localhost callback, which is unreachable in production.
     """
+    if not web_flow_available():
+        return AuthUrlResponse(authorization_url="", state="")
     auth_url, state = generate_authorization_url()
     return AuthUrlResponse(authorization_url=auth_url, state=state)
 
@@ -3728,10 +3757,18 @@ async def api_status():
         warning=provider_summary.warning,
     )
 
-    # Workspace capabilities
+    # Workspace capabilities — gated by runtime. In a cloud workspace there is
+    # no user-owned filesystem, so local folder / Git modes are not offered;
+    # GitHub is the way to bring in code. Locally, the opposite: folder/Git are
+    # first-class and GitHub is optional.
+    from gitpilot.settings import runtime_environment
+
+    _runtime = runtime_environment()
+    _is_cloud = _runtime == "cloud"
     workspace = WorkspaceCapabilitySummary(
-        folder_mode_available=True,
-        local_git_available=True,
+        runtime=_runtime,
+        folder_mode_available=not _is_cloud,
+        local_git_available=not _is_cloud,
         github_mode_available=False,
     )
 

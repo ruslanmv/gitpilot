@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { apiUrl } from "../../utils/api.js";
 
 export default function ContextTab({ owner, repo }) {
   const [assets, setAssets] = useState([]);
@@ -13,7 +14,7 @@ export default function ContextTab({ owner, repo }) {
     if (!canUse) return;
     setError("");
     try {
-      const res = await fetch(`/api/repos/${owner}/${repo}/context/assets`);
+      const res = await fetch(apiUrl(`/api/repos/${owner}/${repo}/context/assets`));
       if (!res.ok) throw new Error(`Failed to list assets (${res.status})`);
       const data = await res.json();
       setAssets(data.assets || []);

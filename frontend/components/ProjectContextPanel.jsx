@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { apiUrl } from "../utils/api.js";
 import FileTree from "./FileTree.jsx";
 import BranchPicker from "./BranchPicker.jsx";
 import SandboxStatusWidget from "./SandboxStatusWidget.jsx";
@@ -38,6 +39,7 @@ export default function ProjectContextPanel({
   onBranchChange,
   pulseNonce,
   onSettingsClick,
+  runtime,
 }) {
   const [appUrl, setAppUrl] = useState("");
   const [fileCount, setFileCount] = useState(0);
@@ -67,7 +69,7 @@ export default function ProjectContextPanel({
 
   // Fetch App URL on mount
   useEffect(() => {
-    fetch("/api/auth/app-url")
+    fetch(apiUrl("/api/auth/app-url"))
       .then((res) => res.json())
       .then((data) => {
         if (data.app_url) setAppUrl(data.app_url);
@@ -109,7 +111,7 @@ export default function ProjectContextPanel({
     const cacheBuster = `&_t=${Date.now()}&retry=${retryCount}`;
 
     // A) Access Check (with Stale Cache Fix)
-    fetch(`/api/auth/repo-access?owner=${repo.owner}&repo=${repo.name}${cacheBuster}`, {
+    fetch(apiUrl(`/api/auth/repo-access?owner=${repo.owner}&repo=${repo.name}${cacheBuster}`), {
       headers,
       cache: "no-cache",
     })
@@ -140,7 +142,7 @@ export default function ProjectContextPanel({
     const hadFileCount = fileCount > 0;
     if (!hadFileCount) setAnalyzing(true);
 
-    fetch(`/api/repos/${repo.owner}/${repo.name}/tree?ref=${encodeURIComponent(branch)}&_t=${Date.now()}`, {
+    fetch(apiUrl(`/api/repos/${repo.owner}/${repo.name}/tree?ref=${encodeURIComponent(branch)}&_t=${Date.now()}`), {
       headers,
       cache: "no-cache",
     })
@@ -527,9 +529,11 @@ export default function ProjectContextPanel({
             <p style={{ ...styles.installText, margin: "8px 0" }}>
               Install the GitPilot App to enable AI agent operations.
             </p>
-            <p style={{ ...styles.installText, margin: "0 0 8px 0", fontSize: "11px", opacity: 0.7 }}>
-              Alternatively, use Folder or Local Git mode for local-first workflows without GitHub.
-            </p>
+            {runtime !== "cloud" && (
+              <p style={{ ...styles.installText, margin: "0 0 8px 0", fontSize: "11px", opacity: 0.7 }}>
+                Alternatively, use Folder or Local Git mode for local-first workflows without GitHub.
+              </p>
+            )}
             <button
               type="button"
               style={{

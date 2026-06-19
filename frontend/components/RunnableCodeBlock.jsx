@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { apiUrl } from "../utils/api.js";
 import SandboxCanvas from "./SandboxCanvas.jsx";
 import ExecutionPlanCard, { fetchExecutionPlan } from "./ExecutionPlanCard.jsx";
 
@@ -105,7 +106,7 @@ export default function RunnableCodeBlock({ language, code, owner, repo }) {
     setResult(null);
     setError(null);
     try {
-      const res = await fetch("/api/sandbox/run", {
+      const res = await fetch(apiUrl("/api/sandbox/run"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -152,7 +153,7 @@ export default function RunnableCodeBlock({ language, code, owner, repo }) {
     setSaving(true);
     setSaveMsg(null);
     try {
-      const res = await fetch(`/api/repos/${owner}/${repo}/file`, {
+      const res = await fetch(apiUrl(`/api/repos/${owner}/${repo}/file`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

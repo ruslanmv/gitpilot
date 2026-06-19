@@ -24,8 +24,9 @@ import {
   SessionsTab,
   AdvancedTab,
   SandboxTab,
+  AccountTab,
 } from "./components/AdminTabs";
-import { apiUrl, safeFetchJSON, fetchStatus } from "./utils/api.js";
+import { apiUrl, safeFetchJSON, fetchStatus, getAuthHeaders, clearSessionToken, startSession } from "./utils/api.js";
 import { initApp } from "./utils/appInit.js";
 
 function makeRepoKey(repo) {
@@ -267,7 +268,7 @@ export default function App() {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         };
 
-        const res = await fetch("/api/sessions", {
+        const res = await fetch(apiUrl("/api/sessions"), {
           method: "POST",
           headers,
           body: JSON.stringify({
@@ -317,7 +318,7 @@ export default function App() {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       };
 
-      const res = await fetch("/api/sessions", {
+      const res = await fetch(apiUrl("/api/sessions"), {
         method: "POST",
         headers,
         body: JSON.stringify({
@@ -857,6 +858,7 @@ export default function App() {
         const me = await safeFetchJSON(apiUrl("/api/account/me"), {
           method: "GET",
           credentials: "include",
+          headers: getAuthHeaders(), // X-GitPilot-Session survives cross-origin
           timeout: 8000,
         });
         if (me && me.id) {
@@ -895,12 +897,37 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    // Best-effort backend logout (clears the session cookie); ignore failures.
+    try {
+      fetch(apiUrl("/api/account/logout"), {
+        method: "POST",
+        credentials: "include",
+        headers: getAuthHeaders(),
+      }).catch(() => {});
+    } catch { /* ignore */ }
     localStorage.removeItem("github_token");
     localStorage.removeItem("github_user");
+    clearSessionToken();
     setIsAuthenticated(false);
     setUserInfo(null);
     clearAllContext();
   };
+
+  // In-workspace "Connect GitHub": let an already-signed-in account user run
+  // the GitHub device flow to link their repos, then return to the workspace.
+  // This renders even when authenticated (unlike the sign-in screen below).
+  if (typeof window !== "undefined") {
+    const qs = new URLSearchParams(window.location.search);
+    if (window.location.pathname.startsWith("/auth") && qs.get("connect") === "github") {
+      return (
+        <AuthPage
+          onAuthenticated={handleAuthenticated}
+          backendReady={!!startupStatusSnapshot}
+          connectMode
+        />
+      );
+    }
+  }
 
   // Public pages must render instantly — never gated behind backend startup.
   // (A marketing landing page that shows "Connecting to backend…" is bad for
@@ -1037,7 +1064,18 @@ export default function App() {
           {!sidebarCollapsed && (
             <>
               {!hasContext && (
-                <RepoSelector onSelect={(r) => addRepoToContext(r)} />
+                <RepoSelector
+                  onSelect={(r) => addRepoToContext(r)}
+                  workspace={startupStatusSnapshot?.workspace}
+                  onOpenLocal={async (payload) => {
+                    const result = await startSession(payload);
+                    setActiveSessionId(result.session_id);
+                    setSessionRefreshNonce((n) => n + 1);
+                    setActivePage("workspace");
+                    showToast?.("Workspace ready", "Local project opened.");
+                    return result;
+                  }}
+                />
               )}
 
               {repo && (
@@ -1058,6 +1096,10 @@ export default function App() {
               <UserMenu
                 userInfo={userInfo}
                 sidebarCollapsed={sidebarCollapsed}
+                onOpenAccount={() => {
+                  setActivePage("admin");
+                  setAdminTab("account");
+                }}
                 onOpenSettings={() => {
                   setActivePage("admin");
                   setAdminTab("advanced");
@@ -1071,9 +1113,20 @@ export default function App() {
 
         <main className="workspace">
           {activePage === "admin" && (
-            <div style={{ padding: "24px", maxWidth: "960px", margin: "0 auto" }}>
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                overflowY: "auto",
+                padding: "24px",
+                maxWidth: "960px",
+                width: "100%",
+                margin: "0 auto",
+                boxSizing: "border-box",
+              }}
+            >
               <div style={{ display: "flex", gap: "8px", marginBottom: "24px", flexWrap: "wrap" }}>
-                {["overview", "providers", "workspace-modes", "integrations", "mcp-servers", "sandbox", "sessions", "skills", "security", "advanced"].map((tab) => (
+                {["overview", "account", "providers", "workspace-modes", "integrations", "mcp-servers", "sandbox", "sessions", "skills", "security", "advanced"].map((tab) => (
                   <button
                     key={tab}
                     onClick={() => setAdminTab(tab)}
@@ -1164,6 +1217,10 @@ export default function App() {
                 </div>
               )}
 
+              {adminTab === "account" && (
+                <AccountTab onLogout={handleLogout} />
+              )}
+
               {adminTab === "providers" && (
                 <div>
                   <h3 style={{ marginBottom: "16px" }}>AI Providers</h3>
@@ -1174,6 +1231,7 @@ export default function App() {
               {adminTab === "workspace-modes" && (
                 <WorkspaceModesTab
                   showToast={showToast}
+                  runtime={startupStatusSnapshot?.workspace?.runtime}
                   onSessionStarted={(result) => {
                     setActiveSessionId(result.session_id);
                     setSessionRefreshNonce((n) => n + 1);
@@ -1248,6 +1306,7 @@ export default function App() {
                       onBranchChange={handleBranchChange}
                       pulseNonce={pulseNonce}
                       lastExecution={lastExecution}
+                      runtime={startupStatusSnapshot?.workspace?.runtime}
                       onSettingsClick={() => setSettingsOpen(true)}
                     />
                   </aside>

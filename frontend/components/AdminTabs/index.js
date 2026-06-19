@@ -8,3 +8,4 @@ export { default as SkillsTab } from "./SkillsTab.jsx";
 export { default as SessionsTab } from "./SessionsTab.jsx";
 export { default as AdvancedTab } from "./AdvancedTab.jsx";
 export { default as SandboxTab } from "./SandboxTab.jsx";
+export { default as AccountTab } from "./AccountTab.jsx";

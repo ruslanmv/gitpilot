@@ -31,6 +31,9 @@ export function getBackendUrl() {
  * @returns {string} Full URL to API endpoint
  */
 export function apiUrl(path) {
+  // Idempotent: an already-absolute URL is returned untouched, so wrapping a
+  // call site in apiUrl() is always safe even if the value was already absolute.
+  if (/^https?:\/\//i.test(path)) return path;
   // Ensure path starts with /
   const cleanPath = path.startsWith('/') ? path : `/${path}`;
   return `${BACKEND_URL}${cleanPath}`;
@@ -105,20 +108,42 @@ export async function safeFetchJSON(url, options = {}) {
   }
 }
 
+// ─── GitPilot account session (portable token) ───────────────────────────
+// The account session also rides in localStorage + the X-GitPilot-Session
+// header (not just the cookie) so email/password accounts stay signed in when
+// the SPA (Vercel) and API (HF Space) are on different origins.
+const SESSION_TOKEN_KEY = 'gitpilot_session_token';
+
+export function getSessionToken() {
+  try { return localStorage.getItem(SESSION_TOKEN_KEY) || ''; } catch { return ''; }
+}
+
+export function setSessionToken(token) {
+  try {
+    if (token) localStorage.setItem(SESSION_TOKEN_KEY, token);
+    else localStorage.removeItem(SESSION_TOKEN_KEY);
+  } catch { /* storage may be blocked */ }
+}
+
+export function clearSessionToken() {
+  setSessionToken('');
+}
+
 /**
- * Get authorization headers with GitHub token
- * @returns {Object} Headers object with Authorization if token exists
+ * Get authorization headers: GitHub bearer token (repos) and/or the GitPilot
+ * account session header. Either/both may be present.
+ * @returns {Object} Headers object
  */
 export function getAuthHeaders() {
-  const token = localStorage.getItem('github_token');
+  const headers = {};
+  let githubToken = '';
+  let sessionToken = '';
+  try { githubToken = localStorage.getItem('github_token') || ''; } catch { /* blocked */ }
+  sessionToken = getSessionToken();
 
-  if (!token) {
-    return {};
-  }
-
-  return {
-    'Authorization': `Bearer ${token}`,
-  };
+  if (githubToken) headers['Authorization'] = `Bearer ${githubToken}`;
+  if (sessionToken) headers['X-GitPilot-Session'] = sessionToken;
+  return headers;
 }
 
 /**
@@ -133,7 +158,9 @@ export async function authFetch(url, options = {}) {
     ...options.headers,
   };
 
-  return fetch(url, {
+  // Resolve root-relative paths against the configured backend so callers that
+  // pass "/api/..." work on the split frontend(Vercel)/backend(HF) deployment.
+  return fetch(apiUrl(url), {
     ...options,
     headers,
   });
@@ -152,7 +179,7 @@ export async function authFetchJSON(url, options = {}) {
     ...options.headers,
   };
 
-  const response = await fetch(url, {
+  const response = await fetch(apiUrl(url), {
     ...options,
     headers,
   });

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import "./auth.css";
 import { resolveBackendUrl } from "../utils/backend.js";
+import { getSessionToken, setSessionToken } from "../utils/api.js";
 
 // Premium /auth — GitPilot account (email/password) + "Continue with GitHub".
 // GitPilot account = who you are; GitHub = repository access (the device flow).
@@ -13,11 +14,23 @@ import { resolveBackendUrl } from "../utils/backend.js";
 
 const api = (path) => `${resolveBackendUrl()}${path}`;
 
+// The account session also travels in a header (not just the cross-site cookie)
+// so email/password sign-in survives the Vercel-frontend / HF-backend split.
+function sessionHeaders() {
+  const t = getSessionToken();
+  return t ? { "X-GitPilot-Session": t } : {};
+}
+
+// Persist the portable session token returned by account endpoints.
+function rememberSession(data) {
+  if (data && data.session_token) setSessionToken(data.session_token);
+}
+
 async function post(path, body) {
   const r = await fetch(api(path), {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    credentials: "include", // receive/send the HttpOnly session cookie
+    headers: { "content-type": "application/json", ...sessionHeaders() },
+    credentials: "include", // also send/receive the session cookie when same-origin
     body: JSON.stringify(body || {}),
   });
   let data = {};
@@ -26,7 +39,11 @@ async function post(path, body) {
 }
 
 async function getJSON(path, opts = {}) {
-  const r = await fetch(api(path), { credentials: "include", ...opts });
+  const r = await fetch(api(path), {
+    credentials: "include",
+    ...opts,
+    headers: { ...sessionHeaders(), ...(opts.headers || {}) },
+  });
   let data = {};
   try { data = await r.json(); } catch { /* empty body */ }
   return { ok: r.ok, status: r.status, data };
@@ -40,10 +57,19 @@ const Eye = ({ off }) => (off
   : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
 );
 
-export default function AuthPage({ onAuthenticated, backendReady = false }) {
+export default function AuthPage({ onAuthenticated, backendReady = false, connectMode = false }) {
   const params = new URLSearchParams(window.location.search);
+  const isVerifyLink =
+    !!params.get("token") && window.location.pathname.includes("verify-email");
+  // connectMode / ?view=github: jump straight to the GitHub device flow (used by
+  // the in-workspace "Connect GitHub" button for already-signed-in accounts).
+  const wantsGithub = !!params.get("code") || params.get("view") === "github" || connectMode;
   const [mode, setMode] = useState(params.get("mode") === "signup" ? "signup" : "signin");
-  const [view, setView] = useState("email"); // "email" | "github"
+  // Pick the opening view: GitHub flow → github; an email confirmation link
+  // (?token= on /verify-email) → verify; otherwise email.
+  const [view, setView] = useState(
+    wantsGithub ? "github" : isVerifyLink ? "verify" : "email"
+  ); // "email" | "github" | "verify"
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
@@ -59,18 +85,45 @@ export default function AuthPage({ onAuthenticated, backendReady = false }) {
   const stopPolling = useRef(false);
   const ghStarted = useRef(false);
 
-  // Email-verification links land here with ?token=...
+  // Email-verification state (dedicated screen, not a silent redirect)
+  const [verifyPhase, setVerifyPhase] = useState("verifying"); // "verifying" | "success" | "error"
+  const [verifyMsg, setVerifyMsg] = useState("");
+  const [verifyUser, setVerifyUser] = useState(null);
+  const [resendBusy, setResendBusy] = useState(false);
+  const verifyStarted = useRef(false);
+
+  // Exchange the email-confirmation token once, then show success/error in place.
   useEffect(() => {
+    if (view !== "verify" || verifyStarted.current) return;
+    verifyStarted.current = true;
     const token = params.get("token");
-    if (token && window.location.pathname.includes("verify-email")) {
-      (async () => {
-        const r = await post("/api/account/verify-email", { token });
-        if (r.ok && typeof onAuthenticated === "function") onAuthenticated({ user: r.data });
-        else setNote({ kind: "err", text: r.data.detail || "Invalid or expired link." });
-      })();
-    }
+    setVerifyPhase("verifying");
+    (async () => {
+      const r = await post("/api/account/verify-email", { token });
+      // Strip the token from the URL so a refresh can't replay a stale link.
+      window.history.replaceState({}, document.title, "/auth");
+      if (r.ok) {
+        rememberSession(r.data);
+        setVerifyUser(r.data);
+        setVerifyPhase("success");
+      } else {
+        setVerifyMsg(r.data.detail || "This confirmation link is invalid or has expired.");
+        setVerifyPhase("error");
+      }
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [view]);
+
+  const resendVerification = async () => {
+    if (!email) { setNote({ kind: "err", text: "Enter your email to resend the link." }); return; }
+    setResendBusy(true);
+    try {
+      await post("/api/account/resend-verification", { email });
+      setNote({ kind: "ok", text: "If your account needs confirmation, a new link is on its way." });
+    } finally {
+      setResendBusy(false);
+    }
+  };
 
   // ── GitHub authorization (device + web OAuth), all inside the same card ──
   function finishGitHub(data) {
@@ -87,6 +140,10 @@ export default function AuthPage({ onAuthenticated, backendReady = false }) {
     } catch { /* storage may be blocked */ }
     if (typeof onAuthenticated === "function") {
       onAuthenticated({ access_token: data.access_token, user: data.user });
+    }
+    // Linked from inside the workspace → reload into it with the new GitHub token.
+    if (connectMode) {
+      window.location.href = "/";
     }
   }
 
@@ -196,7 +253,10 @@ export default function AuthPage({ onAuthenticated, backendReady = false }) {
     try {
       if (mode === "signin") {
         const r = await post("/api/account/login", { email, password });
-        if (r.ok && typeof onAuthenticated === "function") onAuthenticated({ user: r.data });
+        if (r.ok) {
+          rememberSession(r.data);
+          if (typeof onAuthenticated === "function") onAuthenticated({ user: r.data });
+        }
         else if (r.status === 403) setNote({ kind: "err", text: "Verify your email before signing in." });
         else setNote({ kind: "err", text: r.data.detail || "Invalid email or password." });
       } else {
@@ -217,13 +277,78 @@ export default function AuthPage({ onAuthenticated, backendReady = false }) {
     setNote({ kind: "ok", text: "If an account exists, we'll send a reset link." });
   };
 
+  // ── Email-confirmation card (landed from the verify-email link) ──
+  if (view === "verify") {
+    return (
+      <div className="gp-auth">
+        <a className="gp-home" href="/">← Back to home</a>
+        <div className="gp-auth-card">
+          <a className="gp-auth-logo" href="/" aria-label="Back to GitPilot home">GP</a>
+
+          {verifyPhase === "verifying" && (
+            <>
+              <h2>Confirming your email…</h2>
+              <p className="lead">Activating your GitPilot account. This only takes a moment.</p>
+              <div className="gp-spinwrap"><span className="gp-spin" /></div>
+            </>
+          )}
+
+          {verifyPhase === "success" && (
+            <>
+              <div className="gp-verify-check" aria-hidden="true">✓</div>
+              <h2>Email confirmed</h2>
+              <p className="lead">
+                Welcome{verifyUser?.name ? `, ${verifyUser.name}` : ""}! Your GitPilot
+                account is active.
+              </p>
+              <button
+                type="button"
+                className="gp-submit"
+                onClick={() => onAuthenticated && onAuthenticated({ user: verifyUser })}
+              >
+                Continue to GitPilot →
+              </button>
+            </>
+          )}
+
+          {verifyPhase === "error" && (
+            <>
+              <h2>Confirmation link problem</h2>
+              <div className="gp-note err">{verifyMsg}</div>
+              <p className="lead">Links expire after 15 minutes. Enter your email to get a fresh one.</p>
+              {note && <div className={`gp-note ${note.kind}`}>{note.text}</div>}
+              <div className="gp-field">
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="Email"
+                />
+              </div>
+              <button type="button" className="gp-submit" onClick={resendVerification} disabled={resendBusy}>
+                {resendBusy ? "Sending…" : "Resend confirmation email"}
+              </button>
+              <button type="button" className="gp-link" onClick={() => setView("email")} style={{ marginTop: 12 }}>
+                Back to sign in
+              </button>
+            </>
+          )}
+
+          <div className="gp-copy">© {new Date().getFullYear()} GitPilot Inc.</div>
+        </div>
+      </div>
+    );
+  }
+
   // ── GitHub authorization card (same shell, no nested rectangle) ──
   if (view === "github") {
     return (
       <div className="gp-auth">
         <a className="gp-home" href="/">← Back to home</a>
         <div className="gp-auth-card">
-          <button className="gp-back" onClick={goEmail}>← Back to sign in</button>
+          {connectMode
+            ? <button className="gp-back" onClick={() => { window.location.href = "/"; }}>← Back to workspace</button>
+            : <button className="gp-back" onClick={goEmail}>← Back to sign in</button>}
           <a className="gp-auth-logo" href="/" aria-label="Back to GitPilot home">GP</a>
 
           {ghPhase === "connecting" && (

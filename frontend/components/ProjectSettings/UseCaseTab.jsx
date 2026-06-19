@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { apiUrl } from "../../utils/api.js";
 
 export default function UseCaseTab({ owner, repo }) {
   const [useCases, setUseCases] = useState([]);
@@ -23,7 +24,7 @@ export default function UseCaseTab({ owner, repo }) {
     if (!canUse) return;
     setError("");
     try {
-      const res = await fetch(`/api/repos/${owner}/${repo}/use-cases`);
+      const res = await fetch(apiUrl(`/api/repos/${owner}/${repo}/use-cases`));
       if (!res.ok) throw new Error(`Failed to list use cases (${res.status})`);
       const data = await res.json();
       const list = data.use_cases || [];
@@ -42,7 +43,7 @@ export default function UseCaseTab({ owner, repo }) {
     if (!canUse || !id) return;
     setError("");
     try {
-      const res = await fetch(`/api/repos/${owner}/${repo}/use-cases/${id}`);
+      const res = await fetch(apiUrl(`/api/repos/${owner}/${repo}/use-cases/${id}`));
       if (!res.ok) throw new Error(`Failed to load use case (${res.status})`);
       const data = await res.json();
       setUseCase(data.use_case || null);
@@ -68,7 +69,7 @@ export default function UseCaseTab({ owner, repo }) {
     setBusy(true);
     setError("");
     try {
-      const res = await fetch(`/api/repos/${owner}/${repo}/use-cases`, {
+      const res = await fetch(apiUrl(`/api/repos/${owner}/${repo}/use-cases`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: draftTitle || "New Use Case" }),

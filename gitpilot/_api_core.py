@@ -74,6 +74,7 @@ from .github_oauth import (
     validate_token,
     initiate_device_flow,
     poll_device_token,
+    web_flow_available,
     AuthSession,
     GitHubUser,
 )
@@ -1099,8 +1100,15 @@ async def api_chat_route(payload: dict):
 async def api_get_auth_url():
     """
     Generate GitHub OAuth authorization URL (Web Flow).
-    Requires Client Secret to be configured.
+
+    The Web Flow needs GITHUB_CLIENT_SECRET to exchange the code for a token.
+    When it is not configured we return an empty authorization_url so the
+    frontend transparently falls back to the Device Flow (no secret / no
+    callback URL required). This prevents bouncing the browser to the GitHub
+    App's default localhost callback, which is unreachable in production.
     """
+    if not web_flow_available():
+        return AuthUrlResponse(authorization_url="", state="")
     auth_url, state = generate_authorization_url()
     return AuthUrlResponse(authorization_url=auth_url, state=state)
 

@@ -20,6 +20,7 @@
 // only then /api/sandbox/run actually executes.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { apiUrl } from "../utils/api.js";
 import { fetchExecutionPlan } from "./ExecutionPlanCard.jsx";
 
 const BACKEND_LABELS = {
@@ -254,7 +255,7 @@ function CodeCanvas({
     setElapsed(0);
     setPhase("running");
     try {
-      const res = await fetch("/api/sandbox/run", {
+      const res = await fetch(apiUrl("/api/sandbox/run"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

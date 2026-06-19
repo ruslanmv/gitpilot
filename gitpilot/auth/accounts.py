@@ -135,6 +135,13 @@ class AccountStore:
                 acc.email_verified_at = acc.email_verified_at or time()
                 self._save()
 
+    def set_name(self, email: str, name: str | None) -> None:
+        with self._lock:
+            acc = self._by_email.get(_norm(email))
+            if acc:
+                acc.name = name
+                self._save()
+
     def delete_by_email(self, email: str) -> None:
         with self._lock:
             self._by_email.pop(_norm(email), None)
@@ -227,6 +234,13 @@ class PgAccountStore:
                 f"UPDATE {db.TABLE} SET password_hash = %s, "  # noqa: S608
                 "email_verified_at = COALESCE(email_verified_at, %s) WHERE email = %s",
                 (password_hash, time(), _norm(email)),
+            )
+
+    def set_name(self, email: str, name: str | None) -> None:
+        with db.connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE {db.TABLE} SET name = %s WHERE email = %s",  # noqa: S608
+                (name, _norm(email)),
             )
 
     def delete_by_email(self, email: str) -> None:

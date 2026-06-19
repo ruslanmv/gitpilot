@@ -17,6 +17,7 @@
 // <style> block for animations / focus rings.
 
 import React, { useEffect, useRef, useState } from "react";
+import { apiUrl } from "../utils/api.js";
 
 const GITPILOT_ORANGE = "#D95C3D";
 const SATURATED_RED = "#B91C1C";
@@ -104,7 +105,7 @@ export default function ContextMeter({ sessionId = null }) {
     setError(null);
     try {
       const qs = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "";
-      const r = await fetch(`/api/context/usage${qs}`);
+      const r = await fetch(apiUrl(`/api/context/usage${qs}`));
       if (!r.ok) {
         // 404 means the feature flag is off — render nothing in that case.
         if (r.status === 404) {

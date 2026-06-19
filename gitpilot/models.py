@@ -77,6 +77,9 @@ class ProviderStatusResponse(BaseModel):
 # ─── Workspace Models ────────────────────────────────────
 
 class WorkspaceCapabilitySummary(BaseModel):
+    # "cloud" (hosted — no user filesystem; GitHub is the way in) or
+    # "local" (user's machine — local folder/Git first-class, GitHub optional).
+    runtime: str = "local"
     folder_mode_available: bool = False
     local_git_available: bool = False
     github_mode_available: bool = False

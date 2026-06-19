@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { apiUrl } from "../utils/api.js";
 import EnvironmentEditor from "./EnvironmentEditor.jsx";
 
 /**
@@ -14,7 +15,7 @@ export default function EnvironmentSelector({ activeEnvId, onEnvChange }) {
 
   const fetchEnvs = async () => {
     try {
-      const res = await fetch("/api/environments", { cache: "no-cache" });
+      const res = await fetch(apiUrl("/api/environments"), { cache: "no-cache" });
       if (!res.ok) return;
       const data = await res.json();
       setEnvs(data.environments || []);
@@ -34,7 +35,7 @@ export default function EnvironmentSelector({ activeEnvId, onEnvChange }) {
     try {
       const method = config.id ? "PUT" : "POST";
       const url = config.id ? `/api/environments/${config.id}` : "/api/environments";
-      await fetch(url, {
+      await fetch(apiUrl(url), {
         method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(config),
@@ -49,7 +50,7 @@ export default function EnvironmentSelector({ activeEnvId, onEnvChange }) {
 
   const handleDelete = async (envId) => {
     try {
-      await fetch(`/api/environments/${envId}`, { method: "DELETE" });
+      await fetch(apiUrl(`/api/environments/${envId}`), { method: "DELETE" });
       await fetchEnvs();
       if (activeEnvId === envId) {
         onEnvChange?.(null);

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Coder API** (`POST /repair` + `GET /repair/health`), bearer-token gated (`GITPILOT_API_TOKEN`), mounted into the main app — turns a repair-plan into a dry-run patch preview for SelfRepair / matrix-maintainer over HTTPS.
+- **Runtime-aware onboarding** — `/api/status` now reports `workspace.runtime` (`cloud`/`local`); in a cloud workspace the empty state guides you to connect GitHub and pick a repository, while a local install offers Folder / Local Git paths with GitHub optional.
+- **Account-first auth across split deployments** — portable `X-GitPilot-Session` token (cross-origin Vercel↔HF), a dedicated email-verification screen, a Settings → Account tab (update name, change password, delete account), and "GitHub not linked" now shows a calm Connect prompt instead of a repo-fetch error.
 
 ### Changed — `make run` now starts the MCP Context Forge stack by default
 
