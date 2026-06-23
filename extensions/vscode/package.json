@@ -2,7 +2,7 @@
   "name": "gitpilot-vscode",
   "displayName": "GitPilot — Multi-Agent AI Coding Assistant",
   "description": "The first multi-agent AI pair programmer for VS Code. Four specialized agents (Explorer, Planner, Coder, Reviewer) collaborate on every task — you approve every change. Works with OpenAI, Claude, Ollama, Watsonx.",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "preview": false,
   "publisher": "ruslanmv",
   "license": "Apache-2.0",
