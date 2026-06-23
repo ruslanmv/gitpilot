@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 # PyPI project name – MUST match what you configured in PyPI Trusted Publishers
 name = "gitcopilot"
-version = "0.2.6"
+version = "0.2.7"
 description = "Multi-agent AI coding assistant — four specialized agents (Explorer, Planner, Coder, Reviewer) that read your repo, plan safe changes, write code, run tests, and wait for your approval. Any LLM."
 requires-python = ">=3.11,<3.13"
 readme = "README.md"
