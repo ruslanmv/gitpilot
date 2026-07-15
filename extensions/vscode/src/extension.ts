@@ -67,6 +67,8 @@ import { ProjectContextService } from "./services/context/projectContextService"
 import { WorkingSetService } from "./services/context/workingSetService";
 import { ContextAssembler } from "./services/context/contextAssembler";
 import { ProjectIndexCache } from "./services/context/projectIndexCache";
+import { DiffService } from "./services/patch/diffService";
+import { PatchApplier } from "./services/patch/patchApplier";
 
 import {
   detectIntent,
@@ -175,6 +177,8 @@ export function activate(context: vscode.ExtensionContext): void {
   const workingSetService = new WorkingSetService();
   const contextAssembler = new ContextAssembler();
   const projectIndexCache = new ProjectIndexCache<StructuredProjectContext>();
+  const diffService = new DiffService();
+  const patchApplier = new PatchApplier();
 
   const sessionCoordinator = new SessionCoordinator(
     sessionClient,
@@ -259,12 +263,65 @@ export function activate(context: vscode.ExtensionContext): void {
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   };
 
+  const resolveWorkspaceFileUri = (
+    workspaceRoot: string,
+    requestedPath: string
+  ): vscode.Uri | undefined => {
+    if (!requestedPath || path.isAbsolute(requestedPath)) {
+      return undefined;
+    }
+
+    const normalizedRoot = path.resolve(workspaceRoot);
+    const resolvedPath = path.resolve(normalizedRoot, requestedPath);
+    const relativePath = path.relative(normalizedRoot, resolvedPath);
+
+    if (
+      relativePath === "" ||
+      relativePath === ".." ||
+      relativePath.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relativePath)
+    ) {
+      return undefined;
+    }
+
+    try {
+      const realRoot = fs.realpathSync.native(normalizedRoot);
+      const realTarget = fs.existsSync(resolvedPath)
+        ? fs.realpathSync.native(resolvedPath)
+        : fs.realpathSync.native(path.dirname(resolvedPath));
+      const realRelative = path.relative(realRoot, realTarget);
+
+      if (
+        realRelative === ".." ||
+        realRelative.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(realRelative)
+      ) {
+        return undefined;
+      }
+    } catch {
+      return undefined;
+    }
+
+    return vscode.Uri.file(resolvedPath);
+  };
+
   const isWorkspaceTrusted = (): boolean => {
     try {
       return vscode.workspace.isTrusted;
     } catch {
+      return false;
+    }
+  };
+
+  const requireWorkspaceTrust = (operation: string): boolean => {
+    if (isWorkspaceTrusted()) {
       return true;
     }
+
+    vscode.window.showWarningMessage(
+      `GitPilot blocked ${operation} because this workspace is not trusted.`
+    );
+    return false;
   };
 
   const findGitRoot = (startPath?: string): string | undefined => {
@@ -1648,9 +1705,19 @@ export function activate(context: vscode.ExtensionContext): void {
               return;
             }
 
-            const fileUri = vscode.Uri.file(
-              path.join(folderPath, msg.payload.path)
+            const fileUri = resolveWorkspaceFileUri(
+              folderPath,
+              msg.payload.path
             );
+            if (!fileUri) {
+              postErrorToPanel({
+                code: "INVALID_WORKSPACE_PATH",
+                title: "Open File Failed",
+                message: "The requested file path is outside the workspace.",
+              });
+              return;
+            }
+
             await vscode.commands.executeCommand("vscode.open", fileUri);
             return;
           }
@@ -1681,9 +1748,19 @@ export function activate(context: vscode.ExtensionContext): void {
               return;
             }
 
-            const fileUri = vscode.Uri.file(
-              path.join(folderPath, msg.payload.path)
+            const fileUri = resolveWorkspaceFileUri(
+              folderPath,
+              msg.payload.path
             );
+            if (!fileUri) {
+              postErrorToPanel({
+                code: "INVALID_WORKSPACE_PATH",
+                title: "Reveal Failed",
+                message: "The requested file path is outside the workspace.",
+              });
+              return;
+            }
+
             await vscode.commands.executeCommand("revealInExplorer", fileUri);
             return;
           }
@@ -1866,6 +1943,10 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   registerCommand("gitpilot.runCommand", async () => {
+    if (!requireWorkspaceTrust("terminal command execution")) {
+      return;
+    }
+
     const command = await vscode.window.showInputBox({
       prompt: "Enter command to run via GitPilot",
       placeHolder: "e.g. npm test",
@@ -1899,12 +1980,32 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
 
-    const filePath = path.join(folderPath, relativePath);
-    const fileUri = vscode.Uri.file(filePath);
-    await vscode.commands.executeCommand("vscode.open", fileUri);
+    const edit = stateStore.state.activeTask?.edits?.find(
+      (candidate) => candidate.file === relativePath
+    );
+
+    if (!edit) {
+      vscode.window.showWarningMessage(
+        "Unable to open diff. No proposed change was found for the target file."
+      );
+      return;
+    }
+
+    try {
+      await diffService.openDiff(folderPath, edit);
+    } catch (error) {
+      appendOutputError("[GitPilot] Failed to open diff", error);
+      vscode.window.showWarningMessage(
+        "Unable to open diff. The target file is outside the workspace or unavailable."
+      );
+    }
   });
 
   registerCommand("gitpilot.applyProposedChanges", async () => {
+    if (!requireWorkspaceTrust("file modification")) {
+      return;
+    }
+
     const task = stateStore.state.activeTask;
     const edits = task?.edits || [];
     const folderPath = stateStore.state.workspace.folderPath;
@@ -1921,8 +2022,6 @@ export function activate(context: vscode.ExtensionContext): void {
 
     try {
       stateStore.setTaskStatus("applying");
-      const { PatchApplier } = await import("./services/patch/patchApplier");
-      const patchApplier = new PatchApplier();
       const result = await patchApplier.apply(folderPath, edits);
 
       if (result.success) {
@@ -1945,8 +2044,10 @@ export function activate(context: vscode.ExtensionContext): void {
           const firstPath = typeof firstFile === "string"
             ? firstFile
             : (firstFile as { path?: string })?.path || "";
-          const fileUri = vscode.Uri.file(path.join(folderPath, firstPath));
-          void vscode.commands.executeCommand("vscode.open", fileUri);
+          const fileUri = resolveWorkspaceFileUri(folderPath, firstPath);
+          if (fileUri) {
+            void vscode.commands.executeCommand("vscode.open", fileUri);
+          }
         }
 
         output.appendLine(
@@ -1966,6 +2067,41 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
+  registerCommand("gitpilot.revertProposedChanges", async () => {
+    if (!requireWorkspaceTrust("file modification")) {
+      return;
+    }
+
+    const folderPath = stateStore.state.workspace.folderPath;
+    if (!folderPath) {
+      vscode.window.showWarningMessage("No workspace folder open.");
+      return;
+    }
+
+    try {
+      stateStore.setTaskStatus("applying");
+      const result = await patchApplier.revert(folderPath);
+      if (result.success) {
+        stateStore.updateActiveTask({
+          ...(stateStore.state.activeTask || {}),
+          status: "done",
+          summary: `Reverted ${result.appliedFiles.length} file(s).`,
+        });
+        void vscode.commands.executeCommand("gitpilot.refreshProjectContext");
+        vscode.window.showInformationMessage(
+          `GitPilot reverted ${result.appliedFiles.length} file(s).`
+        );
+      } else {
+        stateStore.setTaskStatus("failed");
+        vscode.window.showWarningMessage("GitPilot could not revert all files.");
+      }
+    } catch (err) {
+      stateStore.setTaskStatus("failed");
+      appendOutputError("[GitPilot] Revert failed", err);
+      vscode.window.showErrorMessage(`Failed to revert changes: ${err}`);
+    }
+  });
+
   registerCommand("gitpilot.regenerateTaskPlan", async () => {
     const task = stateStore.state.activeTask;
     if (!task?.title && !task?.summary) {
@@ -1976,6 +2112,30 @@ export function activate(context: vscode.ExtensionContext): void {
     const prompt = task.title || task.summary || "Regenerate the current task plan";
     stateStore.setTaskStatus("planning");
     await sendChatToBackend(`[Regenerate plan] ${prompt}`);
+  });
+
+  registerCommand("gitpilot.executeApprovedPlan", async () => {
+    const task = stateStore.state.activeTask;
+    const plan = task?.plan;
+    if (!plan) {
+      vscode.window.showInformationMessage("No approved GitPilot plan is ready to execute.");
+      return;
+    }
+
+    const planLines = plan.steps
+      .map((step) => `${step.step}. ${step.title}: ${step.description}`)
+      .join("\n");
+
+    await sendChatToBackend(
+      [
+        "[Execute approved plan]",
+        plan.goal,
+        plan.summary,
+        planLines,
+      ]
+        .filter(Boolean)
+        .join("\n\n")
+    );
   });
 
   registerCommand("gitpilot.explain_project", async () => {
