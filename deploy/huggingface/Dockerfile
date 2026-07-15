@@ -38,7 +38,7 @@ ENV HOME=/home/user \
     GITPILOT_PROVIDER=ollabridge \
     OLLABRIDGE_BASE_URL=https://ruslanmv-ollabridge.hf.space \
     GITPILOT_OLLABRIDGE_MODEL=qwen2.5:1.5b \
-    CORS_ORIGINS="*" \
+    CORS_ORIGINS="https://gitpilot.ruslanmv.com,http://localhost:5173" \
     GITPILOT_CONFIG_DIR=/tmp/gitpilot
 
 WORKDIR $HOME/app

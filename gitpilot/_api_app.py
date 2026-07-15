@@ -414,19 +414,39 @@ except Exception:  # noqa: BLE001
 # CORS Configuration
 # ============================================================================
 # Enable CORS to allow frontend (local dev or Vercel) to connect to backend
-allowed_origins_str = os.getenv("CORS_ORIGINS", "http://localhost:5173")
-allowed_origins = [origin.strip() for origin in allowed_origins_str.split(",")]
+allowed_origins_str = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:5173,https://gitpilot.ruslanmv.com",
+)
+allowed_origins = [
+    origin.strip().rstrip("/")
+    for origin in allowed_origins_str.split(",")
+    if origin.strip()
+]
 
-logger.info(f"CORS enabled for origins: {allowed_origins}")
+logger.info("CORS enabled for origins: %s", allowed_origins)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=[
+        "GET",
+        "HEAD",
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE",
+        "OPTIONS",
+    ],
+    allow_headers=[
+        "Accept",
+        "Authorization",
+        "Content-Type",
+        "X-GitPilot-Session",
+    ],
+    max_age=600,
 )
-
 
 # ──────────────────────────────────────────────────────────────────
 # Request timing middleware (logs slow startup requests for debugging)
