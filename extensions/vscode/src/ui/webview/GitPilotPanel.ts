@@ -20,7 +20,7 @@ export class GitPilotPanel
   constructor(
     private readonly _extensionUri: vscode.Uri,
     private readonly _stateStore: StateStore,
-    private readonly _onMessage: (msg: WebviewToExtensionMessage) => void
+    private readonly _onMessage: (msg: WebviewToExtensionMessage) => unknown | Promise<unknown>
   ) {
     this._output = vscode.window.createOutputChannel("GitPilot");
     this._disposables.push(this._output);
@@ -36,10 +36,8 @@ export class GitPilotPanel
     webviewView.webview.options = {
       enableScripts: true,
       localResourceRoots: [
-        this._extensionUri,
         vscode.Uri.joinPath(this._extensionUri, "out"),
         vscode.Uri.joinPath(this._extensionUri, "resources"),
-        vscode.Uri.joinPath(this._extensionUri, "src"),
       ],
     };
 
@@ -51,6 +49,7 @@ export class GitPilotPanel
           if (msg.type === "INIT") {
             this._log("Received INIT from webview");
             this._syncState();
+            await this._onMessage(msg);
             return;
           }
 
@@ -65,7 +64,7 @@ export class GitPilotPanel
           }
 
           this._log(`Received message from webview: ${msg.type}`);
-          this._onMessage(msg);
+          await this._onMessage(msg);
         } catch (error) {
           this._logError("Error while handling message from webview", error);
           void vscode.window.showErrorMessage(

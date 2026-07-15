@@ -1,19 +1,34 @@
+# Development/editor state
 .vscode/**
 .vscode-test/**
-src/**
-!src/**/*.d.ts
-!src/ui/webview/gitpilotWorkspaceTemplate.html
-!src/ui/webview/gitpilotWorkspace.css
-**/*.map
 .gitignore
+
+# Source and build tooling are not runtime assets.
+src/**
+scripts/**
+Makefile
+EXTENSION_DOCS.md
 tsconfig.json
+package-lock.json
 node_modules/**
+
+# TypeScript/source maps and temporary files.
 **/*.ts
-!out/**
-# Exclude Windows "Copy" artifacts (e.g., "extension copy.ts")
+**/*.tsx
+**/*.map
 **/* copy*.ts
 **/* copy*.tsx
 **/* copy*.js
 **/*.copy.ts
 **/*.backup.ts
 **/*.bak.ts
+
+# Previously generated packages should not be nested in new packages.
+*.vsix
+
+# Keep compiled runtime output and public assets.
+!out/**
+!resources/**
+!README.md
+!CHANGELOG.md
+!LICENSE

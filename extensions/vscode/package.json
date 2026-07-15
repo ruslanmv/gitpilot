@@ -726,17 +726,24 @@
     ]
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run compile && node scripts/remove-source-maps.js",
     "compile": "tsc -p ./ && node scripts/copy-webview-assets.js",
     "watch": "tsc -watch -p ./",
-    "lint": "eslint src --ext ts",
+    "lint": "node scripts/lint.js",
     "package": "vsce package",
-    "publish": "vsce publish"
+    "publish": "vsce publish",
+    "reinstall-vsix": "npm run package && node scripts/install-latest-vsix.js"
   },
   "devDependencies": {
     "@types/node": "^20.19.39",
     "@types/vscode": "^1.110.0",
     "@vscode/vsce": "^2.22.0",
     "typescript": "^5.9.3"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "GitPilot can inspect trusted-safe workspace metadata in restricted mode, but blocks file modifications, terminal execution, package/plugin installation, commits, pushes, and other generated tool execution until the workspace is trusted."
+    }
   }
 }
