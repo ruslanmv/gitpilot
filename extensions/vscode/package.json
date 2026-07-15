@@ -97,11 +97,13 @@
         },
         {
           "id": "gitpilot.sessionsView",
-          "name": "Sessions"
+          "name": "Sessions",
+          "visibility": "collapsed"
         },
         {
           "id": "gitpilot.skillsView",
-          "name": "Skills & Plugins"
+          "name": "Skills & Plugins",
+          "visibility": "collapsed"
         }
       ]
     },

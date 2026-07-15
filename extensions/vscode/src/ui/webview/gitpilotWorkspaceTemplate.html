@@ -4,1445 +4,265 @@
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy" content="__CSP__" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>GitPilot Workspace</title>
+  <title>GitPilot Sidebar</title>
   <link rel="stylesheet" href="__CSS_URI__" />
 </head>
 <body>
-  <div class="app">
-    <section class="surface header">
-      <div class="header-top">
-        <div>
-          <div class="eyebrow">
-            <span class="eyebrow-dot"></span>
-            GitPilot
-          </div>
-          <div class="header-subtitle" id="provider-line">Provider state</div>
-          <div class="header-meta" id="repo-line">Repo state</div>
+  <div class="gp-sidebar">
+    <header class="gp-sidebar-header">
+      <div class="gp-title-row">
+        <div class="gp-product">
+          <span class="gp-product-name">GitPilot</span>
+          <span
+            class="gp-connection-dot is-disconnected"
+            id="connection-dot"
+            role="status"
+            aria-label="Disconnected"
+            title="Disconnected"
+          ></span>
         </div>
 
-        <div class="header-actions">
-          <button class="icon-btn" id="settings-header-btn" type="button" title="Settings" aria-label="Settings">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <div class="gp-toolbar" aria-label="GitPilot actions">
+          <button class="gp-icon-btn" id="new-chat-btn" type="button" title="New chat" aria-label="New chat">
+            <span aria-hidden="true">＋</span>
           </button>
-          <button class="icon-btn" id="setup-context-btn" type="button" title="Refresh Context" aria-label="Refresh Context">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9"/><path d="M3 4v5h5"/></svg>
+          <button class="gp-icon-btn" id="open-workspace-btn" type="button" title="Open folder" aria-label="Open folder">
+            <span aria-hidden="true">↗</span>
           </button>
-          <button class="icon-btn" id="provider-setup-btn" type="button" title="Change Provider" aria-label="Change Provider">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10H12V2z"/><path d="M20.24 7.76L12 12"/></svg>
+          <button class="gp-icon-btn" id="settings-header-btn" type="button" title="Settings" aria-label="Settings">
+            <span aria-hidden="true">⚙</span>
           </button>
         </div>
       </div>
 
-      <div class="status-row">
-        <span class="pill" id="connection-pill">Disconnected</span>
-        <span class="pill" id="task-pill">Ready</span>
-      </div>
-    </section>
+      <button class="gp-provider-line" id="provider-setup-btn" type="button" title="Configure provider and model">
+        <span id="provider-line">Provider state</span>
+      </button>
 
-    <section class="surface card notice-banner hidden" id="error-banner">
-      <div class="section-head">
-        <h2 class="section-title">Workspace Notice</h2>
-      </div>
-      <div class="section-copy" id="error-copy"></div>
-    </section>
-
-    <section class="surface card hidden" id="assistant-summary-section">
-      <div class="section-head">
-        <h2 class="section-title">Task Status</h2>
-        <span class="pill" id="task-status-pill">Idle</span>
+      <div class="gp-repository-row">
+        <div class="gp-repository-line" id="repo-line" title="Repository state">Repository state</div>
+        <button class="gp-index-status" id="refresh-context-card" type="button" title="Refresh project context" aria-label="Refresh project context">
+          <span class="gp-index-check" aria-hidden="true">✓</span>
+          <span class="gp-index-label">Indexed</span>
+          <span class="gp-index-refresh" aria-hidden="true">↻</span>
+        </button>
       </div>
 
-      <div class="summary-card">
-        <div class="summary-title" id="task-title"></div>
-
-        <div class="status-row">
-          <span class="pill" id="task-step-pill"></span>
-        </div>
-
-        <div class="summary-note" id="task-summary"></div>
-
-        <div class="progress">
-          <div class="progress-track">
-            <div class="progress-bar" id="task-progress-bar"></div>
-          </div>
-          <div class="progress-label" id="task-progress-label"></div>
-        </div>
+      <!-- Compatibility nodes retained for the existing state renderer. -->
+      <div class="gp-header-meta hidden" aria-hidden="true">
+        <span id="connection-pill"></span>
+        <span id="task-pill"></span>
       </div>
-    </section>
+    </header>
 
-    <section class="surface card" id="overview-section">
-      <details class="disclosure" id="advanced-tools">
-        <summary>
-          <span class="summary-label">Quick Actions</span>
-          <span class="chevron">⌄</span>
-        </summary>
-        <div class="disclosure-body">
-          <div class="tool-grid">
-            <button class="tool-button secondary" data-quick-action="explain_project" type="button">
-              <span class="tool-title">Explain Project</span>
-            </button>
-
-            <button class="tool-button secondary" data-quick-action="review_file" type="button">
-              <span class="tool-title">Review File</span>
-            </button>
-
-            <button class="tool-button secondary" data-quick-action="fix_selection" type="button">
-              <span class="tool-title">Fix Selection</span>
-            </button>
-
-            <button class="tool-button secondary" data-quick-action="generate_tests" type="button">
-              <span class="tool-title">Generate Tests</span>
-            </button>
-
-            <button class="tool-button secondary" data-quick-action="security_scan" type="button">
-              <span class="tool-title">Security Scan</span>
-            </button>
-
-            <button class="tool-button secondary" id="refresh-context-card" type="button">
-              <span class="tool-title">Refresh Index</span>
-            </button>
-
-            <button class="tool-button ghost" id="idle-setup-btn" type="button">
-              <span class="tool-title">Setup Wizard</span>
-            </button>
-          </div>
-        </div>
-      </details>
-    </section>
-
-    <section class="surface card hidden" id="idle-recent-section">
-      <div class="section-head">
-        <h2 class="section-title">Recent Files</h2>
-      </div>
-      <ul class="list" id="recent-files-list"></ul>
-    </section>
-
-    <section class="surface card" id="chat-section">
-      <div class="section-head">
-        <h2 class="section-title">Chat</h2>
+    <main class="gp-conversation" id="conversation">
+      <div class="notice-banner error-banner hidden" id="error-banner" role="alert">
+        <span id="error-copy"></span>
       </div>
 
-      <div class="chat-shell">
-        <div class="chat-empty-state" id="chat-empty-state">
-          <div class="empty-icon">GP</div>
-          <div class="empty-heading">What can I help you with?</div>
-          <div class="empty-subtext">Ask GitPilot to explain, review, change, or test your project.</div>
-          <div class="empty-suggestions">
-            <button class="suggestion-chip" data-suggestion="Explain this project's architecture" type="button">Explain project</button>
-            <button class="suggestion-chip" data-suggestion="Review the current file for issues" type="button">Review file</button>
-            <button class="suggestion-chip" data-suggestion="Find potential bugs in the codebase" type="button">Find bugs</button>
-            <button class="suggestion-chip" data-suggestion="Write tests for the current file" type="button">Write tests</button>
-          </div>
+      <section class="gp-inline-card gp-task-summary hidden" id="assistant-summary-section" aria-live="polite">
+        <div class="section-head">
+          <h2 class="section-title">Task status</h2>
+          <span class="pill" id="task-status-pill"></span>
         </div>
-
-        <ul class="chat-list hidden" id="chat-list" aria-live="polite" aria-label="Chat messages"></ul>
-
-        <div class="approval-card hidden" id="approval-card">
-          <div class="approval-header">
-            <span class="approval-title" id="approval-title">GitPilot wants to edit a file</span>
-            <span class="pill approval-risk" id="approval-risk">medium</span>
-          </div>
-          <div class="approval-body">
-            <div class="approval-summary" id="approval-summary"></div>
-            <pre class="approval-diff hidden" id="approval-diff"></pre>
-          </div>
-          <div class="approval-actions">
-            <button id="approval-allow" type="button">Allow</button>
-            <button class="secondary" id="approval-allow-session" type="button">Allow for session</button>
-            <button class="ghost" id="approval-deny" type="button">Deny</button>
-          </div>
-        </div>
-
-        <div class="tool-activity-feed hidden" id="tool-activity-feed">
-          <ul class="activity-list" id="activity-list"></ul>
-        </div>
-
-        <div class="terminal-panel hidden" id="terminal-panel">
-          <div class="terminal-panel-header">
-            <span class="section-title">Terminal</span>
-            <button class="quiet" id="terminal-close" type="button">Close</button>
-          </div>
-          <pre class="terminal-output" id="terminal-output"></pre>
-        </div>
-
-        <div class="results-bar hidden" id="results-bar">
-          <span class="test-badge passed hidden" id="test-passed-badge">0 passed</span>
-          <span class="test-badge failed hidden" id="test-failed-badge">0 failed</span>
-          <span class="test-badge skipped hidden" id="test-skipped-badge">0 skipped</span>
-          <span class="diag-badge errors hidden" id="diag-errors-badge">0 errors</span>
-          <span class="diag-badge warnings hidden" id="diag-warnings-badge">0 warnings</span>
-        </div>
-
-        <div class="chat-compose">
-          <textarea id="chat-input" placeholder="Describe the task, ask a question, or request a change..."></textarea>
-
-          <div class="compose-meta">
-            <span id="compose-hint">Enter to send · Shift+Enter for a new line</span>
-            <span id="compose-status">Ready</span>
-          </div>
-
-          <div class="primary-row">
-            <div class="mode-selector" id="mode-selector" role="radiogroup" aria-label="Execution mode">
-              <button class="mode-btn" id="mode-auto" role="radio" aria-checked="false" data-mode="auto" type="button" title="Execute without prompts">Auto</button>
-              <button class="mode-btn active" id="mode-ask" role="radio" aria-checked="true" data-mode="ask" type="button" title="Approve each risky action">Ask</button>
-              <button class="mode-btn" id="mode-plan" role="radio" aria-checked="false" data-mode="plan" type="button" title="Read-only planning, no writes">Plan</button>
+        <div class="summary-card">
+          <div class="summary-title" id="task-title"></div>
+          <span class="pill hidden" id="task-step-pill"></span>
+          <div class="summary-note" id="task-summary"></div>
+          <div class="progress hidden" id="task-progress">
+            <div class="progress-track">
+              <div class="progress-bar" id="task-progress-bar"></div>
             </div>
-            <button id="send-btn" type="button">Send</button>
-            <button class="ghost" id="new-chat-btn" type="button" title="Start a new conversation">New Chat</button>
+            <div class="progress-label" id="task-progress-label"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Legacy/compatibility sections. They remain hidden until state requires them. -->
+      <section class="hidden" id="overview-section"></section>
+      <section class="hidden" id="advanced-tools">
+        <button id="contextual-btn" type="button" data-action="apply">Action</button>
+      </section>
+      <button class="hidden" id="setup-context-btn" type="button">Set up project context</button>
+      <button class="hidden" id="idle-setup-btn" type="button">Setup Wizard</button>
+
+      <section class="gp-inline-card hidden" id="idle-recent-section">
+        <div class="section-head">
+          <h2 class="section-title">Recent files</h2>
+        </div>
+        <ul class="list" id="recent-files-list"></ul>
+      </section>
+
+      <section class="gp-chat-section" id="chat-section">
+        <div class="chat-empty-state gp-empty-state" id="chat-empty-state">
+          <div class="gp-avatar-orbit" aria-hidden="true">
+            <span class="gp-orbit-ring gp-orbit-ring-one"></span>
+            <span class="gp-orbit-ring gp-orbit-ring-two"></span>
+            <div class="empty-icon gp-avatar">GP</div>
           </div>
 
-          <div class="secondary-row hidden" id="secondary-actions-row">
-            <button class="secondary hidden" id="apply-btn" type="button">Apply Patch</button>
-            <button class="ghost hidden" id="revert-btn" type="button">Revert</button>
+          <div class="gp-empty-copy">
+            <h2 class="empty-heading">What can I help you with?</h2>
+            <p class="empty-subtext">Ask GitPilot to explain, review, change, secure, or test your project.</p>
           </div>
+
+          <div class="gp-suggestion-grid empty-suggestions">
+            <button class="suggestion-chip" type="button" data-quick-action="explain_project">
+              <span class="gp-suggestion-icon" aria-hidden="true">▤</span>
+              <span>Explain project</span>
+            </button>
+            <button class="suggestion-chip" type="button" data-quick-action="review_file">
+              <span class="gp-suggestion-icon" aria-hidden="true">‹/›</span>
+              <span>Review file</span>
+            </button>
+            <button class="suggestion-chip" type="button" data-suggestion="Find potential bugs in the codebase">
+              <span class="gp-suggestion-icon" aria-hidden="true">♧</span>
+              <span>Find bugs</span>
+            </button>
+            <button class="suggestion-chip" type="button" data-quick-action="generate_tests">
+              <span class="gp-suggestion-icon" aria-hidden="true">△</span>
+              <span>Write tests</span>
+            </button>
+          </div>
+        </div>
+
+        <ul class="chat-list hidden" id="chat-list" aria-live="polite" aria-relevant="additions text" aria-label="GitPilot conversation"></ul>
+      </section>
+
+      <section class="approval-card gp-inline-card hidden" id="approval-card" aria-live="assertive">
+        <div class="approval-header">
+          <strong class="approval-title" id="approval-title"></strong>
+          <span class="pill approval-risk" id="approval-risk"></span>
+        </div>
+        <div class="approval-body">
+          <p class="approval-summary" id="approval-summary"></p>
+          <pre class="approval-diff hidden" id="approval-diff"></pre>
+        </div>
+        <div class="approval-actions">
+          <button id="approval-allow" type="button">Allow</button>
+          <button class="secondary" id="approval-allow-session" type="button">Allow for session</button>
+          <button class="ghost" id="approval-deny" type="button">Deny</button>
+        </div>
+      </section>
+
+      <section class="tool-activity-feed gp-inline-card hidden" id="tool-activity-feed" aria-live="polite">
+        <div class="section-head">
+          <h2 class="section-title">Agent activity</h2>
+        </div>
+        <ul class="activity-list" id="activity-list"></ul>
+      </section>
+
+      <section class="terminal-panel gp-inline-card hidden" id="terminal-panel">
+        <div class="terminal-panel-header">
+          <span class="section-title">Terminal</span>
+          <button class="quiet" id="terminal-close" type="button">Close</button>
+        </div>
+        <pre class="terminal-output" id="terminal-output"></pre>
+      </section>
+
+      <section class="results-bar gp-inline-card hidden" id="results-bar" aria-live="polite">
+        <span class="test-badge passed hidden" id="test-passed-badge"></span>
+        <span class="test-badge failed hidden" id="test-failed-badge"></span>
+        <span class="test-badge skipped hidden" id="test-skipped-badge"></span>
+        <span class="diag-badge errors hidden" id="diag-errors-badge"></span>
+        <span class="diag-badge warnings hidden" id="diag-warnings-badge"></span>
+      </section>
+
+      <section class="gp-inline-card hidden" id="plan-section">
+        <details class="disclosure" id="plan-disclosure" open>
+          <summary>
+            <span class="summary-label">Execution plan</span>
+            <span class="chevron" aria-hidden="true">⌄</span>
+          </summary>
+          <div class="disclosure-body">
+            <ul class="list" id="plan-list"></ul>
+          </div>
+        </details>
+        <div class="plan-approval hidden" id="plan-approval-bar">
+          <p class="plan-approval__text">Review the plan before GitPilot starts modifying files.</p>
+          <div class="plan-approval__actions">
+            <button id="plan-approve-btn" type="button">Approve &amp; execute</button>
+            <button class="ghost" id="plan-reject-btn" type="button">Reject</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="gp-inline-card hidden" id="scope-section">
+        <details class="disclosure" id="scope-disclosure" open>
+          <summary>
+            <span class="summary-label">Files in scope</span>
+            <span class="chevron" aria-hidden="true">⌄</span>
+          </summary>
+          <div class="disclosure-body">
+            <ul class="list" id="scope-list"></ul>
+          </div>
+        </details>
+      </section>
+
+      <section class="gp-inline-card hidden" id="changes-section">
+        <details class="disclosure" id="changes-disclosure" open>
+          <summary>
+            <span class="summary-label">Changes</span>
+            <span class="chevron" aria-hidden="true">⌄</span>
+          </summary>
+          <div class="disclosure-body">
+            <ul class="list" id="changes-list"></ul>
+          </div>
+        </details>
+      </section>
+
+      <section class="gp-inline-card hidden" id="actions-section">
+        <details class="disclosure" id="task-controls-disclosure">
+          <summary>
+            <span class="summary-label">Task controls</span>
+            <span class="chevron" aria-hidden="true">⌄</span>
+          </summary>
+          <div class="disclosure-body secondary-row">
+            <button class="secondary" id="replan-btn" type="button">Regenerate plan</button>
+            <button class="ghost" id="setup-btn" type="button">Setup</button>
+          </div>
+        </details>
+      </section>
+    </main>
+
+    <footer class="gp-composer">
+      <div class="gp-input-shell">
+        <textarea id="chat-input" rows="1" placeholder="Describe the task, ask a question, or request a change…" aria-label="Message GitPilot"></textarea>
+        <div class="gp-input-actions">
+          <button id="send-btn" type="button" aria-label="Send message" title="Send message">
+            <span class="gp-send-icon" aria-hidden="true">➤</span>
+          </button>
         </div>
       </div>
-    </section>
 
-    <section class="surface card hidden" id="plan-section">
-      <details class="disclosure" id="plan-disclosure" open>
-        <summary>
-          <span class="summary-label">Execution Plan</span>
-          <span class="chevron">⌄</span>
-        </summary>
-        <div class="disclosure-body">
-          <ul class="list" id="plan-list"></ul>
-          <div class="plan-approval hidden" id="plan-approval-bar">
-            <p class="plan-approval__text">Review the plan above. When you're ready:</p>
-            <div class="plan-approval__actions">
-              <button class="primary" id="plan-approve-btn" type="button">Approve &amp; Execute</button>
-              <button class="ghost" id="plan-reject-btn" type="button">Dismiss</button>
-            </div>
-          </div>
-        </div>
-      </details>
-    </section>
+      <div class="gp-compose-hint" id="compose-hint">Enter to send · Shift+Enter for a new line</div>
 
-    <section class="surface card hidden" id="scope-section">
-      <details class="disclosure" id="scope-disclosure">
-        <summary>
-          <span class="summary-label">Files in Scope</span>
-          <span class="chevron">⌄</span>
-        </summary>
-        <div class="disclosure-body">
-          <ul class="list" id="scope-list"></ul>
+      <div class="gp-composer-footer">
+        <div class="gp-task-status" role="status">
+          <span class="gp-status-dot" id="task-status-dot"></span>
+          <span id="compose-status">Ready</span>
         </div>
-      </details>
-    </section>
 
-    <section class="surface card hidden" id="changes-section">
-      <details class="disclosure" id="changes-disclosure">
-        <summary>
-          <span class="summary-label">Proposed Changes</span>
-          <span class="chevron">⌄</span>
-        </summary>
-        <div class="disclosure-body">
-          <ul class="list" id="changes-list"></ul>
+        <div class="mode-selector gp-mode-selector" id="mode-selector" role="radiogroup" aria-label="Execution mode">
+          <button class="mode-btn active" id="mode-ask" data-mode="ask" role="radio" aria-checked="true" type="button" title="Ask before risky actions">Ask</button>
+          <button class="mode-btn" id="mode-plan" data-mode="plan" role="radio" aria-checked="false" type="button" title="Plan without writing files">Plan</button>
+          <button class="mode-btn" id="mode-auto" data-mode="auto" role="radio" aria-checked="false" type="button" title="Run with configured approvals">Auto</button>
         </div>
-      </details>
-    </section>
+      </div>
 
-    <section class="surface card hidden" id="actions-section">
-      <details class="disclosure" id="task-controls-disclosure">
-        <summary>
-          <span class="summary-label">Task Controls</span>
-          <span class="chevron">⌄</span>
-        </summary>
-        <div class="disclosure-body">
-          <div class="secondary-row">
-            <button class="secondary" id="replan-btn" type="button">Regenerate Plan</button>
-            <button class="ghost" id="setup-btn" type="button">Setup Wizard</button>
-          </div>
-        </div>
-      </details>
-    </section>
+      <div class="secondary-row hidden" id="secondary-actions-row">
+        <button id="apply-btn" type="button">Apply patch</button>
+        <button class="ghost" id="revert-btn" type="button">Revert</button>
+      </div>
+    </footer>
   </div>
 
+  <!-- Kept for compatibility; the inline animated thinking bubble is the main busy indicator. -->
   <div class="busy-overlay" id="busy-overlay" aria-live="polite" aria-hidden="true">
-    <div class="spinner"></div>
-    <div class="busy-text" id="busy-text">GitPilot is working…</div>
+    <span class="spinner" aria-hidden="true"></span>
+    <span class="busy-text" id="busy-text">Working…</span>
   </div>
 
-  <script nonce="__NONCE__">
-    const vscode = acquireVsCodeApi();
-
-    let currentState = null;
-    let lastError = null;
-    let busyCount = 0;
-    let lastRenderedSignature = "";
-    let dynamicHandlerAbortController = null;
-    let thinkingStartedAt = 0;
-    let thinkingTimerId = null;
-
-    const byId = (id) => document.getElementById(id);
-
-    const esc = (value) =>
-      String(value ?? "")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#39;");
-
-    const post = (msg) => vscode.postMessage(msg);
-    const nowIso = () => new Date().toISOString();
-
-    const formatTime = (iso) => {
-      try {
-        const date = iso ? new Date(iso) : new Date();
-        if (Number.isNaN(date.getTime())) return "";
-        return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      } catch {
-        return "";
-      }
-    };
-
-    const formatElapsed = (ms) => {
-      const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-      const minutes = Math.floor(totalSeconds / 60);
-      const seconds = totalSeconds % 60;
-      return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-    };
-
-    const statusLabel = (status) => ({
-      idle: "Idle",
-      planning: "Planning",
-      generating: "Generating",
-      reviewing: "Reviewing",
-      ready_to_apply: "Ready to apply",
-      applying: "Applying",
-      done: "Done",
-      failed: "Failed"
-    }[status] || String(status || "idle"));
-
-    const phaseMap = {
-      planning:    { icon: "&#9679;", label: "Analyzing your request..." },
-      generating:  { icon: "&#9998;", label: "Writing response..." },
-      reviewing:   { icon: "&#128269;", label: "Reviewing changes..." },
-      applying:    { icon: "&#9889;", label: "Applying changes..." },
-    };
-
-    const getPhaseLabel = () => {
-      const status = ((currentState || {}).activeTask || {}).status;
-      return (phaseMap[status] || {}).label || "GitPilot is thinking...";
-    };
-
-    const getPhaseIcon = () => {
-      const status = ((currentState || {}).activeTask || {}).status;
-      return (phaseMap[status] || {}).icon || "&#9679;";
-    };
-
-    const pillClassForStatus = (status) => {
-      if (status === "failed") return "pill pill-danger";
-      if (status === "ready_to_apply" || status === "done") return "pill pill-success";
-      if (status === "planning" || status === "generating" || status === "reviewing" || status === "applying") return "pill pill-accent";
-      return "pill";
-    };
-
-    const normalizeAssistantText = (text) => {
-      const value = String(text || "").trim();
-      if (!value) return "GitPilot is ready for your next request.";
-
-      return esc(value)
-        .replace(/^###\s*(.+)$/gm, "<h4>$1</h4>")
-        .replace(/^##\s*(.+)$/gm, "<h4>$1</h4>")
-        .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
-    };
-
-    const getChatMessages = (state) => {
-      const messages = (((state || {}).chat || {}).messages || []).slice();
-      if (messages.length > 0) return messages;
-
-      return [{
-        id: "assistant:default",
-        role: "assistant",
-        content: "What would you like GitPilot to do?",
-        createdAt: nowIso()
-      }];
-    };
-
-    const taskIsActive = (state) => {
-      if (!state) return false;
-      if (state.ui && state.ui.mode === "idle") return false;
-
-      const task = state.activeTask || {};
-      return Boolean(
-        task.title ||
-        (task.plan && task.plan.steps && task.plan.steps.length) ||
-        (task.filesInScope && task.filesInScope.length) ||
-        (task.changedFiles && task.changedFiles.length) ||
-        (task.status && task.status !== "idle")
-      );
-    };
-
-    const startThinkingTimer = () => {
-      if (!thinkingStartedAt) thinkingStartedAt = Date.now();
-      stopThinkingTimer();
-      thinkingTimerId = window.setInterval(() => {
-        const elapsedNode = byId("chat-thinking-elapsed");
-        if (elapsedNode && thinkingStartedAt) {
-          elapsedNode.textContent = formatElapsed(Date.now() - thinkingStartedAt);
-        }
-      }, 1000);
-    };
-
-    const stopThinkingTimer = () => {
-      if (thinkingTimerId) {
-        window.clearInterval(thinkingTimerId);
-        thinkingTimerId = null;
-      }
-    };
-
-    const pushOptimisticUserMessage = (text) => {
-      if (!currentState) currentState = {};
-      if (!currentState.chat) currentState.chat = {};
-      if (!Array.isArray(currentState.chat.messages)) currentState.chat.messages = [];
-
-      currentState.chat.messages = [
-        ...currentState.chat.messages,
-        {
-          id: "user:optimistic:" + Date.now(),
-          role: "user",
-          content: text,
-          createdAt: nowIso()
-        }
-      ];
-
-      render(currentState);
-    };
-
-    const collapseThinkingBubble = (callback) => {
-      const existing = byId("chat-thinking-item");
-      if (!existing) { callback(); return; }
-      existing.classList.add("collapsing");
-      existing.addEventListener("animationend", () => {
-        existing.remove();
-        callback();
-      }, { once: true });
-      setTimeout(() => { if (existing.parentNode) { existing.remove(); callback(); } }, 250);
-    };
-
-    const setLoadingIndicator = (visible, text) => {
-      const list = byId("chat-list");
-      if (!list) return;
-
-      const existing = byId("chat-thinking-item");
-
-      if (!visible) {
-        if (existing) {
-          collapseThinkingBubble(() => {});
-        }
-        thinkingStartedAt = 0;
-        stopThinkingTimer();
-        return;
-      }
-
-      if (!thinkingStartedAt) {
-        thinkingStartedAt = Date.now();
-      }
-
-      const phaseLabel = text || getPhaseLabel();
-      const phaseIcon = getPhaseIcon();
-
-      if (existing) {
-        const label = existing.querySelector(".thinking-label");
-        const elapsed = existing.querySelector("#chat-thinking-elapsed");
-        const icon = existing.querySelector(".thinking-phase-icon");
-
-        if (label) label.textContent = phaseLabel;
-        if (elapsed) elapsed.textContent = formatElapsed(Date.now() - thinkingStartedAt);
-        if (icon) icon.innerHTML = phaseIcon;
-
-        startThinkingTimer();
-
-        requestAnimationFrame(() => {
-          list.scrollTop = list.scrollHeight;
-        });
-        return;
-      }
-
-      const item = document.createElement("li");
-      item.id = "chat-thinking-item";
-      item.className = "chat-item assistant thinking";
-      item.innerHTML = `
-        <div class="chat-role-row">
-          <div class="chat-role">
-            <span class="role-avatar assistant">G</span>
-            GitPilot
-          </div>
-          <div class="chat-time" id="chat-thinking-elapsed">${formatElapsed(Date.now() - thinkingStartedAt)}</div>
-        </div>
-        <div class="chat-content">
-          <div class="thinking-row">
-            <div class="thinking-main">
-              <span class="thinking-phase-icon" aria-hidden="true">${phaseIcon}</span>
-              <div class="thinking-dots" aria-hidden="true">
-                <span></span><span></span><span></span>
-              </div>
-              <span class="thinking-label">${esc(phaseLabel)}</span>
-            </div>
-          </div>
-        </div>
-      `;
-
-      list.appendChild(item);
-      startThinkingTimer();
-
-      requestAnimationFrame(() => {
-        list.scrollTop = list.scrollHeight;
-      });
-    };
-
-    const pushAssistantMessage = (payload) => {
-      if (!payload) return;
-      if (!currentState) currentState = {};
-      if (!currentState.chat) currentState.chat = {};
-      if (!Array.isArray(currentState.chat.messages)) currentState.chat.messages = [];
-
-      currentState.chat.messages = [
-        ...currentState.chat.messages,
-        {
-          id: payload.id || ("assistant:" + Date.now()),
-          role: payload.role || "assistant",
-          content: payload.content || "",
-          createdAt: payload.createdAt || nowIso()
-        }
-      ];
-
-      const activeTask = currentState.activeTask || {};
-      if (payload.plan && (!activeTask.plan || !activeTask.plan.steps || !activeTask.plan.steps.length)) {
-        currentState.activeTask = {
-          ...activeTask,
-          plan: payload.plan,
-          status: activeTask.status || "planning",
-          title: activeTask.title || "Task in progress"
-        };
-      }
-
-      render(currentState);
-
-      requestAnimationFrame(() => {
-        const items = document.querySelectorAll(".chat-item.assistant:not(.thinking)");
-        const last = items[items.length - 1];
-        if (!last) return;
-        const taskStatus = (currentState.activeTask || {}).status;
-        if (taskStatus === "done") {
-          last.classList.add("success-flash");
-          last.addEventListener("animationend", () => last.classList.remove("success-flash"), { once: true });
-        } else if (taskStatus === "failed") {
-          last.classList.add("error-flash");
-          last.addEventListener("animationend", () => last.classList.remove("error-flash"), { once: true });
-        }
-      });
-    };
-
-    const setActionButtonsDisabled = (visible) => {
-      ["send-btn", "apply-btn", "revert-btn"].forEach((id) => {
-        const button = byId(id);
-        if (button) button.disabled = visible;
-      });
-    };
-
-    const updateSendButton = (busy) => {
-      const btn = byId("send-btn");
-      if (!btn) return;
-      if (busy) {
-        btn.textContent = "Stop";
-        btn.classList.add("stop-mode");
-        btn.disabled = false;
-      } else {
-        btn.textContent = "Send";
-        btn.classList.remove("stop-mode");
-        btn.disabled = false;
-      }
-    };
-
-    const setBusy = (busy, text) => {
-      busyCount = Math.max(0, busy ? busyCount + 1 : busyCount - 1);
-
-      const visible = busyCount > 0;
-      const overlay = byId("busy-overlay");
-      const composeStatus = byId("compose-status");
-
-      overlay.classList.toggle("visible", visible);
-      overlay.setAttribute("aria-hidden", visible ? "false" : "true");
-
-      if (text) byId("busy-text").textContent = text;
-      composeStatus.textContent = visible ? (text || "Working…") : "Ready";
-
-      setLoadingIndicator(visible, text || getPhaseLabel());
-      setActionButtonsDisabled(visible);
-      updateSendButton(visible);
-    };
-
-    const clearBusy = () => {
-      busyCount = 0;
-      byId("busy-overlay").classList.remove("visible");
-      byId("busy-overlay").setAttribute("aria-hidden", "true");
-      byId("compose-status").textContent = "Ready";
-      setLoadingIndicator(false);
-      setActionButtonsDisabled(false);
-      updateSendButton(false);
-    };
-
-    const renderError = (state) => {
-      const banner = byId("error-banner");
-      const copy = byId("error-copy");
-
-      const notice = lastError || (
-        state && state.ui && state.ui.notice
-          ? { title: "Notice", message: state.ui.notice }
-          : undefined
-      );
-
-      if (!notice) {
-        banner.classList.add("hidden");
-        banner.classList.remove("danger");
-        copy.textContent = "";
-        return;
-      }
-
-      banner.classList.remove("hidden");
-      banner.classList.toggle("danger", Boolean(lastError));
-      copy.textContent = String(notice.title || "Notice") + ": " + String(notice.message || "");
-    };
-
-    const renderHeader = (state) => {
-      const provider = state.provider || {};
-      const project = state.projectContextSummary || {};
-      const workspace = state.workspace || {};
-      const server = state.server || {};
-      const task = state.activeTask || {};
-
-      const repoName = project.repoName || (workspace.git && workspace.git.repoName) || workspace.folderName || "No repo";
-      const branch = project.branch || (workspace.git && workspace.git.branch) || (state.session && state.session.branch) || "No branch";
-      const providerName = provider.providerName || "Provider not set";
-      const model = provider.model || "No model";
-      const workflow = (state.workflow && state.workflow.selectedMode) || "auto";
-      const connection = server.connected
-        ? (provider.health === "error" ? "Degraded" : "Connected")
-        : "Disconnected";
-
-      byId("provider-line").textContent = providerName + " · " + connection + " · " + model;
-      byId("repo-line").textContent = "Repo: " + repoName + " · Branch: " + branch;
-
-      // workflow-pill removed from UI for cleaner layout
-
-      byId("connection-pill").textContent = connection;
-      byId("connection-pill").className =
-        connection === "Connected"
-          ? "pill pill-success"
-          : connection === "Degraded"
-            ? "pill pill-warning"
-            : "pill pill-danger";
-
-      const taskActive = task.status && task.status !== "idle";
-      byId("task-pill").textContent = taskActive ? statusLabel(task.status) : "Ready";
-      byId("task-pill").className = taskActive ? "pill pill-accent" : "pill";
-
-      // Sync execution mode selector with state
-      const execMode = state.executionMode || "ask";
-      document.querySelectorAll(".mode-btn").forEach((btn) => {
-        const active = btn.dataset.mode === execMode;
-        btn.classList.toggle("active", active);
-        btn.setAttribute("aria-checked", String(active));
-      });
-    };
-
-    const renderOverview = (state) => {
-      const project = state.projectContextSummary || {};
-      const recentFiles = (project.recentFiles || project.keyFiles || []).slice(0, 6);
-      const recentSection = byId("idle-recent-section");
-
-      if (!recentFiles.length) {
-        recentSection.classList.add("hidden");
-        byId("recent-files-list").innerHTML = "";
-        return;
-      }
-
-      recentSection.classList.remove("hidden");
-      byId("recent-files-list").innerHTML = recentFiles.map((file) => `
-        <li class="row">
-          <div class="item-head">
-            <div>
-              <div class="item-title">${esc(file)}</div>
-              <div class="item-meta">Recently referenced in repository context</div>
-            </div>
-            <div class="item-actions">
-              <button class="secondary" data-open-file="${esc(file)}" type="button">Open</button>
-            </div>
-          </div>
-        </li>
-      `).join("");
-    };
-
-    const renderSummary = (state) => {
-      const task = state.activeTask || {};
-      const steps = ((task.plan || {}).steps || []);
-      const totalSteps = steps.length;
-      const completedCount = steps.filter((step) =>
-        ["applied", "ready", "done"].includes(step.status)
-      ).length;
-      const ratio = totalSteps > 0 ? Math.max(0, Math.min(1, completedCount / totalSteps)) : 0;
-      const activeStepIndex = steps.findIndex((step) => !["applied", "ready", "done"].includes(step.status));
-      const currentStep = totalSteps === 0 ? 0 : (activeStepIndex >= 0 ? activeStepIndex + 1 : totalSteps);
-
-      // ── Only show the Task Status card when there is real progress
-      // to display (plan steps with a progress ratio). During the initial
-      // "planning" / "generating" phases without steps, the inline
-      // thinking bubble in chat is the only status indicator — showing
-      // the Task Status card too creates double-stacked UI that pushes
-      // the chat down and overlaps visually.
-      const hasProgress = totalSteps > 0;
-      const isTerminalWithInfo = ["done", "failed", "ready_to_apply"].includes(task.status) && (task.title || task.summary);
-      const showCard = hasProgress || isTerminalWithInfo;
-      byId("assistant-summary-section").classList.toggle("hidden", !showCard);
-
-      if (!showCard) return;
-
-      byId("task-title").textContent = task.title || "";
-      byId("task-status-pill").textContent = statusLabel(task.status);
-      byId("task-status-pill").className = pillClassForStatus(task.status);
-      const stepPill = byId("task-step-pill");
-      stepPill.textContent = totalSteps > 0 ? ("Step " + Math.max(1, currentStep) + "/" + totalSteps) : "";
-      stepPill.classList.toggle("hidden", totalSteps === 0);
-
-      byId("task-summary").textContent =
-        task.status === "ready_to_apply" ? "Changes ready to review."
-        : task.status === "done" ? (task.summary || "Done.")
-        : task.status === "failed" ? "See chat for details."
-        : "";
-
-      const progressSection = byId("task-progress-bar").parentElement.parentElement;
-      if (totalSteps > 0) {
-        progressSection.classList.remove("hidden");
-        byId("task-progress-bar").style.width = Math.round(ratio * 100) + "%";
-        byId("task-progress-label").textContent = completedCount + "/" + totalSteps + " steps";
-      } else {
-        progressSection.classList.add("hidden");
-      }
-    };
-
-    const renderPlan = (state) => {
-      const section = byId("plan-section");
-      const list = byId("plan-list");
-      const steps = (((state.activeTask || {}).plan || {}).steps || []);
-
-      section.classList.toggle("hidden", !steps.length);
-
-      list.innerHTML = steps.length
-        ? steps.map((step, index) => {
-            let cssClass = "pending";
-            if (["applied", "ready", "done"].includes(step.status)) cssClass = "done";
-            else if (step.status === "failed") cssClass = "failed";
-            else if (index === 0 || step.status === "pending" || step.status === "planning") cssClass = "active";
-
-            const marker =
-              cssClass === "done" ? "✓" :
-              cssClass === "failed" ? "!" :
-              cssClass === "active" ? "→" : "•";
-
-            return `
-              <li class="row plan-item ${cssClass}">
-                <div class="plan-marker">${marker}</div>
-                <div>
-                  <div class="item-title">${esc(step.title || step.action || ("Step " + (index + 1)))}</div>
-                  <div class="item-meta">${esc(step.description || step.file || "Planned task step")}</div>
-                </div>
-              </li>
-            `;
-          }).join("")
-        : "";
-
-      // Show the "Approve & Execute" bar when plan steps exist and
-      // the task has not started executing yet. Once executing/done,
-      // hide it — the user already approved or the agent auto-ran.
-      const approvalBar = byId("plan-approval-bar");
-      if (approvalBar) {
-        const taskStatus = ((state.activeTask) || {}).status || "idle";
-        const planReady = steps.length > 0 && ["planning", "ready_to_apply"].includes(taskStatus);
-        approvalBar.classList.toggle("hidden", !planReady);
-      }
-    };
-
-    const renderScope = (state) => {
-      const section = byId("scope-section");
-      const list = byId("scope-list");
-      const files = ((state.activeTask || {}).filesInScope || []);
-
-      section.classList.toggle("hidden", !files.length);
-
-      list.innerHTML = files.map((item) => `
-        <li class="row">
-          <div class="item-head">
-            <div>
-              <div class="item-title">${esc(item.path)}</div>
-              <div class="item-meta">${esc(item.reason || "In scope for the current task")}</div>
-            </div>
-            <div class="item-actions">
-              <button class="secondary" data-open-file="${esc(item.path)}" type="button">Open</button>
-              <button class="ghost" data-reveal-file="${esc(item.path)}" type="button">Reveal</button>
-            </div>
-          </div>
-        </li>
-      `).join("");
-    };
-
-    const renderChanges = (state) => {
-      const section = byId("changes-section");
-      const list = byId("changes-list");
-      const changes = ((state.activeTask || {}).changedFiles || []);
-
-      section.classList.toggle("hidden", !changes.length);
-
-      list.innerHTML = changes.map((item) => `
-        <li class="row">
-          <div class="item-head">
-            <div>
-              <div class="item-title">${esc((item.kind || "M") + " " + item.path)}</div>
-              <div class="item-meta">${esc(item.summary || item.reason || item.status || "Proposed change")}</div>
-            </div>
-            <div class="item-actions">
-              <span class="mini-tag">${esc(String(item.status || "pending"))}</span>
-              <button class="secondary" data-open-file="${esc(item.path)}" type="button">Open</button>
-              <button class="secondary" data-open-diff="${esc(item.path)}" type="button">Diff</button>
-            </div>
-          </div>
-        </li>
-      `).join("");
-    };
-
-    const roleAvatarLetter = (role) =>
-      role === "user" ? "U" : role === "assistant" ? "G" : "S";
-
-    const roleName = (role) =>
-      role === "assistant" ? "GitPilot" : role === "user" ? "You" : "System";
-
-    const injectCopyButtons = () => {
-      document.querySelectorAll(".chat-content pre").forEach((pre) => {
-        if (pre.querySelector(".code-copy-btn")) return;
-        const btn = document.createElement("button");
-        btn.className = "code-copy-btn";
-        btn.textContent = "Copy";
-        btn.type = "button";
-        btn.addEventListener("click", () => {
-          const code = pre.querySelector("code");
-          const text = code ? code.textContent : pre.textContent;
-          navigator.clipboard.writeText(text || "").then(() => {
-            btn.textContent = "\u2713 Copied";
-            btn.classList.add("copied");
-            setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("copied"); }, 1800);
-          });
-        });
-        pre.appendChild(btn);
-      });
-    };
-
-    const renderChat = (state) => {
-      const list = byId("chat-list");
-      const emptyState = byId("chat-empty-state");
-      const messages = getChatMessages(state);
-      const thinkingVisible = busyCount > 0;
-      const isStreaming = Boolean(streamingItemId);
-
-      const hasRealMessages = (((state || {}).chat || {}).messages || []).length > 0;
-
-      if (!hasRealMessages && !thinkingVisible && !isStreaming) {
-        list.classList.add("hidden");
-        list.innerHTML = "";
-        if (emptyState) emptyState.classList.remove("hidden");
-        return;
-      }
-
-      if (emptyState) emptyState.classList.add("hidden");
-      list.classList.remove("hidden");
-
-      // ── Key fix: preserve in-flight streaming and thinking DOM nodes.
-      // The old code did `list.innerHTML = ...` which destroyed the
-      // streaming <li> created by handleStreamChunk() and the thinking
-      // bubble created by setLoadingIndicator(). Those nodes aren't in
-      // state.chat.messages yet, so the rerender wiped them.
-      //
-      // New approach: detach transient nodes, rebuild the state-driven
-      // messages, then re-attach the transient nodes at the end.
-      const streamingNode = streamingItemId ? document.getElementById(streamingItemId) : null;
-      const thinkingNode = byId("chat-thinking-item");
-
-      // Detach transient nodes before innerHTML wipe
-      if (streamingNode) streamingNode.remove();
-      if (thinkingNode) thinkingNode.remove();
-
-      list.innerHTML = messages.map((msg) => `
-        <li class="chat-item ${esc(msg.role)}">
-          <div class="chat-role-row">
-            <div class="chat-role">
-              <span class="role-avatar ${esc(msg.role)}">${roleAvatarLetter(msg.role)}</span>
-              ${esc(roleName(msg.role))}
-            </div>
-            <div class="chat-time">${esc(formatTime(msg.createdAt))}</div>
-          </div>
-          <div class="chat-content">${msg.role === "assistant" ? normalizeAssistantText(msg.content) : esc(msg.content)}</div>
-        </li>
-      `).join("");
-
-      // Re-attach transient nodes after the state-driven messages
-      if (streamingNode) list.appendChild(streamingNode);
-
-      if (thinkingVisible || isStreaming) {
-        if (thinkingNode) {
-          list.appendChild(thinkingNode);
-        } else {
-          setLoadingIndicator(true, getPhaseLabel());
-        }
-      }
-
-      requestAnimationFrame(() => {
-        list.scrollTop = list.scrollHeight;
-        injectCopyButtons();
-      });
-    };
-
-    const renderContextualActions = (state) => {
-      const task = state.activeTask || {};
-      const changes = task.changedFiles || [];
-      const hasPatch = task.status === "ready_to_apply" || changes.length > 0;
-      const showSecondaryRow = hasPatch;
-
-      byId("secondary-actions-row").classList.toggle("hidden", !showSecondaryRow);
-      byId("apply-btn").classList.toggle("hidden", !hasPatch);
-      byId("revert-btn").classList.toggle("hidden", !hasPatch);
-
-      const showTaskControls = taskIsActive(state) || hasPatch;
-      byId("actions-section").classList.toggle("hidden", !showTaskControls);
-    };
-
-    const bindDynamicEvents = () => {
-      if (dynamicHandlerAbortController) {
-        dynamicHandlerAbortController.abort();
-      }
-
-      dynamicHandlerAbortController = new AbortController();
-      const signal = dynamicHandlerAbortController.signal;
-
-      document.querySelectorAll("[data-open-file]").forEach((node) => {
-        node.addEventListener("click", () => {
-          post({ type: "OPEN_CHANGED_FILE", payload: { path: node.getAttribute("data-open-file") } });
-        }, { signal });
-      });
-
-      document.querySelectorAll("[data-open-diff]").forEach((node) => {
-        node.addEventListener("click", () => {
-          post({ type: "OPEN_CHANGED_DIFF", payload: { path: node.getAttribute("data-open-diff") } });
-        }, { signal });
-      });
-
-      document.querySelectorAll("[data-reveal-file]").forEach((node) => {
-        node.addEventListener("click", () => {
-          post({ type: "REVEAL_FILE", payload: { path: node.getAttribute("data-reveal-file") } });
-        }, { signal });
-      });
-
-      document.querySelectorAll("[data-quick-action]").forEach((node) => {
-        node.addEventListener("click", () => {
-          const action = node.getAttribute("data-quick-action");
-          if (!action) return;
-          setBusy(true, "Running " + action.replace(/_/g, " ") + "…");
-          post({ type: "RUN_QUICK_ACTION", payload: { action } });
-        }, { signal });
-      });
-
-      document.querySelectorAll("[data-suggestion]").forEach((node) => {
-        node.addEventListener("click", () => {
-          const text = node.getAttribute("data-suggestion");
-          if (text) sendSuggestion(text);
-        }, { signal });
-      });
-    };
-
-    const createRenderSignature = (state) => JSON.stringify({
-      provider: state && state.provider,
-      server: state && state.server,
-      workflow: state && state.workflow,
-      projectContextSummary: state && state.projectContextSummary,
-      activeTask: state && state.activeTask,
-      chat: ((state || {}).chat || {}).messages || [],
-      ui: state && state.ui,
-      lastError,
-      busyCount
-    });
-
-    const render = (state) => {
-      const signature = createRenderSignature(state);
-      if (signature === lastRenderedSignature) return;
-      lastRenderedSignature = signature;
-
-      currentState = state || {};
-
-      renderHeader(currentState);
-      renderError(currentState);
-      renderOverview(currentState);
-      renderSummary(currentState);
-      renderPlan(currentState);
-      renderScope(currentState);
-      renderChanges(currentState);
-      renderChat(currentState);
-      renderContextualActions(currentState);
-      bindDynamicEvents();
-    };
-
-    const sendChat = () => {
-      const btn = byId("send-btn");
-
-      if (btn && btn.classList.contains("stop-mode")) {
-        post({ type: "CANCEL_TASK" });
-        clearBusy();
-        return;
-      }
-
-      const input = byId("chat-input");
-      const text = input.value.trim();
-      if (!text) return;
-
-      input.value = "";
-      pushOptimisticUserMessage(text);
-      setBusy(true, getPhaseLabel());
-      post({ type: "SEND_CHAT", payload: { text } });
-    };
-
-    const sendSuggestion = (text) => {
-      if (!text) return;
-      const input = byId("chat-input");
-      if (input) input.value = "";
-      pushOptimisticUserMessage(text);
-      setBusy(true, getPhaseLabel());
-      post({ type: "SEND_CHAT", payload: { text } });
-    };
-
-    const requestRefreshContext = () => {
-      setBusy(true, "Refreshing repository context…");
-      post({ type: "REFRESH_PROJECT_CONTEXT" });
-    };
-
-    const handleContextualAction = () => {
-      const action = byId("contextual-btn").dataset.action;
-
-      if (action === "apply") {
-        setBusy(true, "Applying proposed changes…");
-        post({ type: "APPLY_PROPOSED_CHANGES" });
-        return;
-      }
-
-      if (action === "retry") {
-        const messages = getChatMessages(currentState);
-        const latestUser = [...messages].reverse().find((msg) => msg.role === "user");
-        if (!latestUser) {
-          requestRefreshContext();
-          return;
-        }
-        setBusy(true, "Retrying request…");
-        post({ type: "SEND_CHAT", payload: { text: latestUser.content } });
-        return;
-      }
-
-      requestRefreshContext();
-    };
-
-    // ── V2 event handlers ──
-
-    const handleToolActivity = (payload) => {
-      const feed = byId("tool-activity-feed");
-      const list = byId("activity-list");
-      if (!feed || !list) return;
-
-      feed.classList.remove("hidden");
-
-      let item = document.getElementById("activity-" + payload.id);
-      if (!item) {
-        item = document.createElement("li");
-        item.id = "activity-" + payload.id;
-        item.className = "activity-item running";
-        item.innerHTML = `
-          <span class="activity-icon">&#9679;</span>
-          <span class="activity-name">${esc(payload.name)}</span>
-          <span class="activity-status">running</span>
-        `;
-        list.appendChild(item);
-        if (list.children.length > 8) list.removeChild(list.firstChild);
-      }
-
-      item.className = "activity-item " + esc(payload.status);
-      const statusEl = item.querySelector(".activity-status");
-      if (statusEl) statusEl.textContent = payload.status;
-
-      const iconEl = item.querySelector(".activity-icon");
-      if (iconEl) {
-        iconEl.innerHTML = payload.status === "completed" ? "&#10003;"
-          : payload.status === "failed" ? "&#10007;" : "&#9679;";
-      }
-    };
-
-    let pendingApprovalId = null;
-
-    const showApprovalCard = (payload) => {
-      const card = byId("approval-card");
-      if (!card) return;
-
-      pendingApprovalId = payload.id;
-      byId("approval-title").textContent = "GitPilot wants to " + esc(payload.tool).replace(/_/g, " ");
-      byId("approval-summary").textContent = payload.summary || "";
-
-      const riskEl = byId("approval-risk");
-      riskEl.textContent = payload.riskLevel || "medium";
-      riskEl.className = "pill approval-risk risk-" + (payload.riskLevel || "medium");
-
-      const diffEl = byId("approval-diff");
-      if (payload.diffPreview) {
-        diffEl.textContent = payload.diffPreview;
-        diffEl.classList.remove("hidden");
-      } else {
-        diffEl.classList.add("hidden");
-      }
-
-      card.classList.remove("hidden");
-    };
-
-    const resolveApproval = (approved, scope) => {
-      if (!pendingApprovalId) return;
-      post({
-        type: "TOOL_APPROVAL_RESPONSE",
-        payload: { id: pendingApprovalId, approved, scope: scope || "once" },
-      });
-      pendingApprovalId = null;
-      const card = byId("approval-card");
-      if (card) card.classList.add("hidden");
-    };
-
-    const handlePlanStepUpdate = (payload) => {
-      const list = byId("plan-list");
-      if (!list) return;
-
-      const items = list.querySelectorAll(".plan-item");
-      const item = items[payload.stepIndex];
-      if (!item) return;
-
-      const marker = item.querySelector(".plan-marker");
-      if (!marker) return;
-
-      if (payload.status === "started" || payload.status === "running" || payload.status === "pending") {
-        item.className = "row plan-item active";
-        marker.textContent = "\u2192";
-      } else if (payload.status === "completed" || payload.status === "applied") {
-        item.className = "row plan-item done";
-        marker.textContent = "\u2713";
-      } else if (payload.status === "failed") {
-        item.className = "row plan-item failed";
-        marker.textContent = "!";
-      }
-    };
-
-    const handleTerminalOutput = (payload) => {
-      const panel = byId("terminal-panel");
-      const output = byId("terminal-output");
-      if (!panel || !output) return;
-
-      panel.classList.remove("hidden");
-      output.textContent += payload.text || "";
-
-      requestAnimationFrame(() => {
-        output.scrollTop = output.scrollHeight;
-      });
-    };
-
-    const handleDiagnostics = (payload) => {
-      const bar = byId("results-bar");
-      if (!bar) return;
-      bar.classList.remove("hidden");
-
-      const errBadge = byId("diag-errors-badge");
-      const warnBadge = byId("diag-warnings-badge");
-
-      if (payload.errors > 0 && errBadge) {
-        errBadge.textContent = payload.errors + " error" + (payload.errors !== 1 ? "s" : "");
-        errBadge.classList.remove("hidden");
-      }
-      if (payload.warnings > 0 && warnBadge) {
-        warnBadge.textContent = payload.warnings + " warning" + (payload.warnings !== 1 ? "s" : "");
-        warnBadge.classList.remove("hidden");
-      }
-    };
-
-    const handleTestResult = (payload) => {
-      const bar = byId("results-bar");
-      if (!bar) return;
-      bar.classList.remove("hidden");
-
-      const passed = byId("test-passed-badge");
-      const failed = byId("test-failed-badge");
-      const skipped = byId("test-skipped-badge");
-
-      if (payload.passed > 0 && passed) {
-        passed.textContent = payload.passed + " passed";
-        passed.classList.remove("hidden");
-      }
-      if (payload.failed > 0 && failed) {
-        failed.textContent = payload.failed + " failed";
-        failed.classList.remove("hidden");
-      }
-      if (payload.skipped > 0 && skipped) {
-        skipped.textContent = payload.skipped + " skipped";
-        skipped.classList.remove("hidden");
-      }
-    };
-
-    const bindStaticEvents = () => {
-      byId("send-btn").addEventListener("click", sendChat);
-
-      byId("chat-input").addEventListener("keydown", (event) => {
-        if (event.key === "Enter" && !event.shiftKey) {
-          event.preventDefault();
-          sendChat();
-        }
-      });
-
-      byId("setup-context-btn").addEventListener("click", requestRefreshContext);
-      byId("refresh-context-card").addEventListener("click", requestRefreshContext);
-
-      byId("provider-setup-btn").addEventListener("click", () => {
-        post({ type: "OPEN_PROVIDER_SETUP" });
-      });
-
-      byId("idle-setup-btn").addEventListener("click", () => {
-        post({ type: "OPEN_SETUP_WIZARD" });
-      });
-
-      // ── New Chat button: clears chat and starts a fresh session ──
-      byId("new-chat-btn").addEventListener("click", () => {
-        // Clear local webview state immediately for instant feedback
-        const list = byId("chat-list");
-        if (list) list.innerHTML = "";
-        const emptyState = byId("chat-empty-state");
-        if (emptyState) emptyState.classList.remove("hidden");
-        streamingItemId = null;
-        clearBusy();
-        // Tell the extension host to create a fresh session
-        post({ type: "NEW_SESSION" });
-      });
-
-      // ── Plan approval: user must click before execution proceeds ──
-      byId("plan-approve-btn").addEventListener("click", () => {
-        byId("plan-approval-bar").classList.add("hidden");
-        setBusy(true, "Executing approved plan…");
-        post({ type: "APPROVE_PLAN" });
-      });
-
-      byId("plan-reject-btn").addEventListener("click", () => {
-        byId("plan-approval-bar").classList.add("hidden");
-        clearBusy();
-        post({ type: "REJECT_PLAN" });
-      });
-
-      byId("apply-btn").addEventListener("click", () => {
-        setBusy(true, "Applying proposed changes…");
-        post({ type: "APPLY_PROPOSED_CHANGES" });
-      });
-
-      byId("revert-btn").addEventListener("click", () => {
-        setBusy(true, "Reverting proposed changes…");
-        post({ type: "REVERT_PROPOSED_CHANGES" });
-      });
-
-      byId("replan-btn").addEventListener("click", () => {
-        setBusy(true, "Regenerating plan…");
-        post({ type: "REGENERATE_TASK_PLAN" });
-      });
-
-      byId("setup-btn").addEventListener("click", () => {
-        post({ type: "OPEN_SETUP_WIZARD" });
-      });
-
-      byId("settings-header-btn").addEventListener("click", () => {
-        post({ type: "OPEN_SETTINGS" });
-      });
-
-      // V2 approval card buttons
-      byId("approval-allow")?.addEventListener("click", () => resolveApproval(true, "once"));
-      byId("approval-allow-session")?.addEventListener("click", () => resolveApproval(true, "session"));
-      byId("approval-deny")?.addEventListener("click", () => resolveApproval(false));
-
-      // Terminal close
-      byId("terminal-close")?.addEventListener("click", () => {
-        const panel = byId("terminal-panel");
-        if (panel) panel.classList.add("hidden");
-      });
-
-      // ── Execution mode selector ──
-      document.querySelectorAll(".mode-btn").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          document.querySelectorAll(".mode-btn").forEach((b) => {
-            b.classList.remove("active");
-            b.setAttribute("aria-checked", "false");
-          });
-          btn.classList.add("active");
-          btn.setAttribute("aria-checked", "true");
-          post({ type: "SET_EXECUTION_MODE", payload: { mode: btn.dataset.mode } });
-        });
-      });
-    };
-
-    let streamingItemId = null;
-
-    const handleStreamChunk = (payload) => {
-      if (!payload || !payload.content) return;
-      const list = byId("chat-list");
-      const emptyState = byId("chat-empty-state");
-      if (emptyState) emptyState.classList.add("hidden");
-      list.classList.remove("hidden");
-
-      const existing = byId("chat-thinking-item");
-      if (existing) { existing.remove(); stopThinkingTimer(); }
-
-      let item = streamingItemId ? document.getElementById(streamingItemId) : null;
-
-      if (!item) {
-        streamingItemId = "streaming-" + Date.now();
-        item = document.createElement("li");
-        item.id = streamingItemId;
-        item.className = "chat-item assistant streaming";
-        item.innerHTML = `
-          <div class="chat-role-row">
-            <div class="chat-role">
-              <span class="role-avatar assistant">G</span>
-              GitPilot
-            </div>
-            <div class="chat-time">${esc(formatTime(nowIso()))}</div>
-          </div>
-          <div class="chat-content"></div>
-        `;
-        list.appendChild(item);
-      }
-
-      const content = item.querySelector(".chat-content");
-      if (content) {
-        content.innerHTML = normalizeAssistantText(
-          (content.getAttribute("data-raw") || "") + payload.content
-        );
-        content.setAttribute("data-raw",
-          (content.getAttribute("data-raw") || "") + payload.content
-        );
-      }
-
-      requestAnimationFrame(() => {
-        list.scrollTop = list.scrollHeight;
-        injectCopyButtons();
-      });
-    };
-
-    const finalizeStream = (payload) => {
-      const item = streamingItemId ? document.getElementById(streamingItemId) : null;
-      if (item) {
-        item.classList.remove("streaming");
-        item.classList.add("success-flash");
-        item.addEventListener("animationend", () => item.classList.remove("success-flash"), { once: true });
-      }
-
-      if (item) {
-        const rawText = item.querySelector(".chat-content")?.getAttribute("data-raw") || "";
-        if (!currentState) currentState = {};
-        if (!currentState.chat) currentState.chat = {};
-        if (!Array.isArray(currentState.chat.messages)) currentState.chat.messages = [];
-        currentState.chat.messages.push({
-          id: (payload && payload.id) || streamingItemId,
-          role: "assistant",
-          content: rawText,
-          createdAt: (payload && payload.createdAt) || nowIso()
-        });
-      }
-
-      streamingItemId = null;
-      clearBusy();
-    };
-
-    window.addEventListener("message", (event) => {
-      const msg = event.data;
-      if (!msg || typeof msg !== "object") return;
-
-      if (msg.type === "STATE_SYNC") {
-        lastError = undefined;
-        const syncState = msg.payload || {};
-        const taskStatus = ((syncState.activeTask) || {}).status || "idle";
-
-        const isTerminal = ["idle", "done", "failed", "ready_to_apply"].includes(taskStatus);
-        const isActive = ["planning", "generating", "reviewing"].includes(taskStatus);
-
-        if (isTerminal) {
-          clearBusy();
-        } else if (isActive && busyCount === 0) {
-          // The v2 stream may have cleared busy (via CHAT_STREAM_END or
-          // a premature "done" status_change) but the extension host is
-          // still working (e.g. batch fallback). Re-activate the thinking
-          // bubble so the user sees the animation during the entire call.
-          setBusy(true, getPhaseLabel());
-        }
-
-        render(syncState);
-        return;
-      }
-
-      if (msg.type === "CHAT_RESPONSE") {
-        clearBusy();
-        pushAssistantMessage(msg.payload);
-        return;
-      }
-
-      if (msg.type === "CHAT_STREAM_CHUNK") {
-        handleStreamChunk(msg.payload);
-        return;
-      }
-
-      if (msg.type === "CHAT_STREAM_END") {
-        finalizeStream(msg.payload);
-        return;
-      }
-
-      if (msg.type === "AGENT_TOOL_ACTIVITY") {
-        handleToolActivity(msg.payload);
-        return;
-      }
-
-      if (msg.type === "TOOL_APPROVAL_REQUEST") {
-        showApprovalCard(msg.payload);
-        return;
-      }
-
-      if (msg.type === "PLAN_STEP_UPDATE") {
-        handlePlanStepUpdate(msg.payload);
-        return;
-      }
-
-      if (msg.type === "TERMINAL_OUTPUT") {
-        handleTerminalOutput(msg.payload);
-        return;
-      }
-
-      if (msg.type === "DIAGNOSTICS_RESULT") {
-        handleDiagnostics(msg.payload);
-        return;
-      }
-
-      if (msg.type === "TEST_RESULT") {
-        handleTestResult(msg.payload);
-        return;
-      }
-
-      if (msg.type === "ERROR") {
-        clearBusy();
-        lastError = msg.payload || { title: "Error", message: "Unknown error" };
-        render(currentState || {});
-      }
-    });
-
-    bindStaticEvents();
-    post({ type: "INIT" });
-  </script>
+  <script nonce="__NONCE__" src="__SCRIPT_URI__"></script>
 </body>
 </html>
