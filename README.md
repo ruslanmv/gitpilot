@@ -128,7 +128,13 @@ Open [http://localhost:8000](http://localhost:8000) and you're done.
 ---
 
 ## VS Code Extension
-![assets/2026-04-07-14-15-33.png](assets/2026-04-07-14-15-33.png)
+
+[Open in Microsoft Market place](https://marketplace.visualstudio.com/items?itemName=ruslanmv.gitpilot-vscode)
+![assets/vs1.jpg](assets/vs1.jpg)
+
+
+
+
 The sidebar panel gives you everything in one place:
 
 | Feature | What it does |
@@ -181,6 +187,7 @@ You send a request
 
 > **Note:** Simple questions (e.g. "explain this code") may return a direct answer without generating a multi-step plan. This is expected — the planner activates for tasks that require file changes or multi-step execution.
 
+![assets/vs2.jpg](assets/vs2.jpg)
 ### Code generation and Apply Patch
 
 When you ask GitPilot to create or edit files, the response includes structured `edits` — not just text. The **Apply Patch** button writes them directly to your workspace.
@@ -217,6 +224,7 @@ How it works under the hood:
 | **OpenAI** | Add your API key in settings | Paid |
 | **Claude** | Add your Anthropic API key | Paid |
 | **Watsonx** | Add IBM credentials | Paid |
+
 
 ---
 
