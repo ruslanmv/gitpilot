@@ -1,27 +1,35 @@
 #!/usr/bin/env bash
 # scripts/register-mcp-servers.sh
 #
-# After 'make run-mcp' brings the compose stack up, the three MCP servers
-# are running -- but Context Forge does not know they exist yet. This
-# script federates them by POSTing to Forge's /gateways endpoint, so:
+# After the MCP stack is up, the servers are running -- but Context Forge does
+# not know they exist yet. This script federates them by POSTing to Forge's
+# /gateways endpoint, so:
 #
 #   * the GitPilot UI's Sync button has something to pull,
 #   * the inspector's batch_validate can route through Forge,
 #   * 'forge transport error' on the per-server cards goes away.
 #
-# Strategy: run every probe + POST FROM INSIDE the docker network via a
-# disposable `curlimages/curl` sidecar. This sidesteps every host-side
-# port-mapping pitfall (Windows+WSL2 port-forward latency, IPv6 vs v4,
-# `localhost` resolution quirks) and is the exact same pattern used by
-# `compose run --no-deps` test harnesses in production stacks.
+# Two things it is careful about, both learned the hard way:
+#
+#   WHICH FORGE. A Forge started by HomePilot (or any sibling stack) is
+#   adopted rather than duplicated. When we adopt one, the servers must be
+#   registered by an address that Forge can actually reach: it is not on our
+#   docker network, so "http://mcp-postgre-server:8080" would resolve to
+#   nothing. Registering an unreachable URL succeeds and then fails forever
+#   afterwards, which is the worst kind of failure.
+#
+#   WHICH CREDENTIAL. Forge is asked what it accepts instead of being handed a
+#   guess. With AUTH_REQUIRED=false the correct request carries NO
+#   Authorization header at all -- a bad token is worse than no token, because
+#   Forge's anonymous path is only reached when the header is absent.
 #
 # Best practices applied:
-#   * In-network probe          — bypass host port mapping entirely
-#   * Wait-for-ready loop       — up to 120s (Forge first start can be slow)
-#   * Idempotent                — 409 Conflict treated as success
-#   * Independent per server    — one failure does not abort the others
-#   * No secrets on argv        — token comes from .mcp.env via env vars
-#   * Structured logs           — ✅ / ➖ / ⚠️ glyphs for at-a-glance status
+#   * Adopt-don't-duplicate  — reuse a healthy Forge, never fight for :4444
+#   * Preflight once         — one actionable error, not one per server
+#   * Reachability-correct   — advertise the address Forge can dial
+#   * Idempotent             — 409 Conflict treated as success
+#   * Independent per server — one failure does not abort the others
+#   * No secrets on argv     — credentials travel in env and stdin only
 
 set -uo pipefail
 
@@ -43,120 +51,160 @@ if [[ ! -f .mcp.env ]]; then
   exit 0
 fi
 
-if ! command -v docker >/dev/null 2>&1; then
-  warn "docker not found; cannot reach the gitpilot-mcp network."
-  exit 0
-fi
-
 # shellcheck disable=SC1091
 set -a
 source .mcp.env
 set +a
 
-NETWORK="${MCP_NETWORK_NAME:-gitpilot-mcp}"
-FORGE_HOST="${MCP_FORGE_SERVICE:-mcp-context-forge}"   # compose service name
-FORGE_INTERNAL_PORT="4444"
-TOKEN="${MCP_AUTH_TOKEN:-}"
+# shellcheck source=scripts/lib/forge-auth.sh
+source "${SCRIPT_DIR}/lib/forge-auth.sh"
 
-if [[ -z "${TOKEN}" ]]; then
-  warn "MCP_AUTH_TOKEN missing in .mcp.env; cannot authenticate with Forge."
-  exit 0
-fi
-
-# One-shot curl on the docker network. Discards the response body (we
-# only care about the status code for the readiness probe). No volume
-# mounts -- avoids the WSL/Docker-Desktop bind-mount permission quirk.
-forge_curl_status() {
-  docker run --rm --network "${NETWORK}" \
-    curlimages/curl:8.10.1 \
-    -sS -o /dev/null -w "%{http_code}" "$@"
-}
-
-# Pre-pull the curl image once (silent on cache hit).
-docker image pull --quiet curlimages/curl:8.10.1 >/dev/null 2>&1 || true
-
-# --- wait for Forge --------------------------------------------------------
-step "Probing Forge at http://${FORGE_HOST}:${FORGE_INTERNAL_PORT}/health from inside the ${NETWORK} network (up to 120s)..."
+# --- 1. find a Forge -------------------------------------------------------
+step "Looking for a running MCP Context Forge..."
 READY=0
-for i in $(seq 1 60); do
-  code=$(forge_curl_status \
-    "http://${FORGE_HOST}:${FORGE_INTERNAL_PORT}/health" 2>/dev/null || true)
-  if [[ "${code}" == "200" ]]; then
-    ok "Forge healthy after $((i * 2))s."
+for _ in $(seq 1 60); do
+  if forge_discover; then
     READY=1
     break
   fi
   sleep 2
 done
+
 if [[ "${READY}" -ne 1 ]]; then
-  warn "Forge did not respond in 120s; skipping registration."
-  info "Tail logs with: make logs-mcp"
+  warn "No MCP Context Forge is reachable; skipping registration."
+  info "Start one with 'make run-mcp', or point MCP_FORGE_URL at an existing gateway."
   exit 0
 fi
 
-# --- register one gateway --------------------------------------------------
+case "${FORGE_OWNERSHIP}" in
+  gitpilot) ok "Using GitPilot's own Forge at ${FORGE_URL}" ;;
+  external) ok "Reusing the Forge already running at ${FORGE_URL} (not started by GitPilot)" ;;
+esac
+
+# --- 2. resolve the credential ONCE ----------------------------------------
+if ! forge_resolve_auth "${FORGE_URL}"; then
+  forge_explain_auth_failure
+  info "Nothing was registered; the MCP servers are running and can be registered later"
+  info "with 'make register-mcp-servers' once a credential is configured."
+  exit 0
+fi
+
+if [[ "${FORGE_AUTH_MODE}" == "anonymous" ]]; then
+  info "Forge has authentication disabled — registering without a credential."
+else
+  info "Authenticated with Forge."
+fi
+
+mapfile -t AUTH_ARGS < <(forge_auth_args)
+
+# --- 3. work out how Forge can reach our servers ---------------------------
+ADVERTISE_HOST="$(forge_advertise_host)"
+
+if [[ -n "${ADVERTISE_HOST}" ]]; then
+  info "Advertising servers to Forge as ${ADVERTISE_HOST}:<published port>."
+fi
+
+# --- 4. register ------------------------------------------------------------
 #
-# JSON travels via STDIN, never via a bind mount. Docker Desktop on
-# Windows + WSL2 has uid + filesystem-overlay quirks that make
-# `-v /tmp/foo:/tmp/foo --data-binary @/tmp/foo` flaky inside curl
-# containers (the file mounts but curl can't read it -- "error
-# encountered when reading a file"). Stdin works on every Docker host
-# the project supports. This is the same recipe the kubectl docs use
-# for one-shot `kubectl exec ... curl --data @-` probes.
+# Forge does not merely record a gateway: it dials the URL and performs an MCP
+# `initialize` handshake before accepting it. A failure comes back as a flat
+# 503 "Unable to connect to gateway" that says nothing about which of the three
+# possible causes it was. So each target is checked here first — is it up, and
+# which path does it actually speak MCP on — and the answer is used, or
+# reported.
 register() {
-  local name="$1" container_url="$2" tags="$3"
-  step "Registering ${name}..."
+  local name="$1" service="$2" internal_port="$3" host_port="$4" tags="$5"
+
+  local host_base="http://localhost:${host_port}"
+  if ! mcp_wait_for_server "${host_base}" "${MCP_SERVER_WAIT_SECONDS:-45}"; then
+    warn "${name}: not answering on ${host_base} — skipping registration."
+    info "It may still be starting. Check with: make logs-mcp"
+    info "Then re-run: make register-mcp-servers"
+    return
+  fi
+
+  # Ask the server which path speaks MCP rather than assuming /mcp.
+  local path="/mcp" transport="STREAMABLEHTTP" discovered
+  if discovered=$(mcp_discover_endpoint "${host_base}"); then
+    path="${discovered%% *}"
+    transport="${discovered##* }"
+  else
+    warn "${name}: no MCP endpoint answered on ${host_base} (tried /mcp, /mcp/, /sse, /)."
+    info "Registering ${path} anyway; if Forge rejects it the server is not speaking MCP yet."
+  fi
+
+  # Same network → service name (stable, no host port needed).
+  # Adopted Forge  → the published host port via the advertise host.
+  local url
+  if [[ -z "${ADVERTISE_HOST}" ]]; then
+    url="http://${service}:${internal_port}${path}"
+  else
+    url="http://${ADVERTISE_HOST}:${host_port}${path}"
+  fi
+
+  step "Registering ${name} → ${url} (${transport})"
 
   local body
   body=$(cat <<JSON
 {
   "name": "${name}",
-  "url": "${container_url}",
+  "url": "${url}",
   "description": "Auto-registered by gitpilot make run-mcp.",
-  "transport": "STREAMABLEHTTP",
-  "auth_type": "bearer",
-  "auth_token": "${TOKEN}",
+  "transport": "${transport}",
   "tags": ${tags},
   "visibility": "public"
 }
 JSON
 )
 
-  # `-i` keeps STDIN open in the container; curl reads the JSON via @-.
-  # No volume mounts means no uid mismatch, no Windows-path translation.
-  # `-w '\n%{http_code}'` appends the HTTP status on its own final line,
-  # so we can split body and status with shell parameter expansion.
-  local out
-  out=$(printf '%s' "${body}" | docker run --rm -i \
-    --network "${NETWORK}" \
-    curlimages/curl:8.10.1 \
-    -sS -o - -w '\n%{http_code}' \
-    -X POST "http://${FORGE_HOST}:${FORGE_INTERNAL_PORT}/gateways" \
-    -H "Authorization: Bearer ${TOKEN}" \
+  local out code resp_body
+  out=$(printf '%s' "${body}" | curl -sS -o - -w '\n%{http_code}' \
+    --max-time 30 \
+    -X POST "${FORGE_URL%/}/gateways" \
+    "${AUTH_ARGS[@]}" \
     -H "Content-Type: application/json" \
-    --data-binary @-)
-  local code resp_body
+    --data-binary @- 2>/dev/null || printf '\n000')
   code="${out##*$'\n'}"
   resp_body="${out%$'\n'*}"
 
   case "${code}" in
-    200|201)
-      ok "${name}: registered (HTTP ${code})." ;;
-    409)
-      skip "${name}: already registered." ;;
+    200|201) ok "${name}: registered (HTTP ${code})." ;;
+    409)     skip "${name}: already registered." ;;
     401|403)
-      warn "${name}: auth rejected (HTTP ${code}). Check MCP_AUTH_TOKEN matches Forge's."
+      # Preflight passed, so this is a scope/permission issue, not a bad token.
+      warn "${name}: rejected (HTTP ${code}) although the credential was accepted."
+      info "The credential may lack permission to federate gateways."
       printf '%.240s\n' "${resp_body}" ;;
+    503)
+      # Forge reached us but the MCP handshake failed. We already know the
+      # server is up and which path answered, so name the remaining causes.
+      warn "${name}: Forge could not complete an MCP handshake with ${url}."
+      if [[ -n "${ADVERTISE_HOST}" ]]; then
+        info "Forge runs elsewhere and must reach this host as ${ADVERTISE_HOST}."
+        info "If that name does not resolve inside it, set MCP_ADVERTISE_HOST to this host's LAN IP."
+      else
+        info "The server answered on ${host_base}${path} from here, so it is running;"
+        info "Forge could not speak ${transport} to it. Check: make logs-mcp"
+      fi ;;
+    000)
+      warn "${name}: no response from ${FORGE_URL}." ;;
     *)
       warn "${name}: unexpected HTTP ${code:-<empty>}."
       printf '%.240s\n' "${resp_body}" ;;
   esac
 }
 
-# Containers reach each other by service name on the gitpilot-mcp network.
-register "mcp-postgre-server"   "http://mcp-postgre-server:8080/mcp"   '["postgresql","database","code-generation","testing"]'
-register "mcp-milvus-server"    "http://mcp-milvus-server:8082/mcp"    '["milvus","vector-database","rag","code-generation"]'
-register "mcp-inspector-server" "http://mcp-inspector-server:8081/mcp" '["mcp","diagnostics"]'
+register "mcp-postgre-server" mcp-postgre-server 8080 "${MCP_POSTGRE_PORT:-8080}" \
+  '["postgresql","database","code-generation","testing"]'
+register "mcp-inspector-server" mcp-inspector-server 8081 "${MCP_INSPECTOR_PORT:-8081}" \
+  '["mcp","diagnostics"]'
+# Milvus is on an opt-in profile; only register it when it is actually running.
+if [[ "$(forge_status "http://localhost:${MCP_MILVUS_PORT:-8082}/health")" != "000" ]]; then
+  register "mcp-milvus-server" mcp-milvus-server 8082 "${MCP_MILVUS_PORT:-8082}" \
+    '["milvus","vector-database","rag","code-generation"]'
+else
+  skip "mcp-milvus-server: not running (start it with the milvus profile)."
+fi
 
 echo
 bold "✨ Forge registry sync complete."

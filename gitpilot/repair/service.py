@@ -3,7 +3,7 @@
 Pipeline (see deliverable spec):
 
 1. validate schema
-2. clone repo into a temp workspace (skip/clone-stub in dry-run/demo if unreachable)
+2. clone repo into a temp workspace (credentialed; stubbed only in demo mode)
 3. create local branch ``gitpilot/<task_id>``
 4. refuse forbidden paths
 5. call ``code-fast`` to inspect context
@@ -22,10 +22,10 @@ from __future__ import annotations
 
 import re
 import subprocess
-import tempfile
 from dataclasses import dataclass
 from typing import Any
 
+from ..inference.coder_registry import build_coder
 from ..inference.ollabridge_client import OllaBridgeClient
 from ..inference.openai_compatible_client import demo_mode_enabled
 from ..sandbox_providers.base import SandboxProvider, SandboxResult
@@ -44,6 +44,9 @@ from .schema import (
     RepairResponse,
     RiskLevel,
 )
+from .workspace import WorkspaceError, create_branch
+from .workspace import clone as clone_repository
+from .workspace import redact as redact_credentials
 
 # Matches the file path on the `+++ b/<path>` line of a unified diff.
 _DIFF_PLUS = re.compile(r"^\+\+\+ [ab]/(?P<path>.+?)\s*$", re.MULTILINE)
@@ -70,6 +73,10 @@ class RepairService:
         demo_mode: bool | None = None,
     ) -> None:
         self._demo = demo_mode if demo_mode is not None else demo_mode_enabled()
+        # An explicitly injected coder always wins (tests, embedders). Otherwise
+        # the coder is resolved per run from the request's CoderSpec, so a
+        # workspace can pick the built-in model or a coding agent per task.
+        self._explicit_coder = coder is not None
         self.coder = coder or OllaBridgeClient(demo_mode=self._demo)
         self.sandbox = sandbox  # may be None; built on demand from request
         self.pr_writer = pr_writer or DraftPRWriter()
@@ -85,6 +92,11 @@ class RepairService:
         )
         ctx = RepairContext(branch=f"gitpilot/{request.task_id}")
 
+        # Per-run coder selection: the built-in model, or a coding agent that
+        # works directly in the prepared workspace. An injected coder wins.
+        if not self._explicit_coder:
+            self.coder = build_coder(request.coder, demo_mode=self._demo)
+
         try:
             # (4) refuse forbidden paths up front (empty allowed_paths => block)
             if not request.allowed_paths:
@@ -94,8 +106,10 @@ class RepairService:
                 )
                 return response
 
-            # (2) clone repo (best-effort; stubbed in demo/unreachable)
+            # (2) clone repo — a run with no code to read fails here
             self._prepare_workspace(request, ctx, response)
+            if response.status == "error":
+                return response
 
             # (3) branch creation noted (best-effort, local only)
             response.messages.append(f"Local branch: {ctx.branch}")
@@ -122,6 +136,11 @@ class RepairService:
                     f"Context summary:\n{inspection}\n\nIssues:\n{issues_text}"
                 ),
                 system="You are an expert software engineer producing safe unified diffs.",
+                # Agent coders work inside the prepared checkout and read their
+                # diff back from it; the built-in client ignores these extras.
+                workspace=ctx.workspace,
+                dry_run=(request.mode == RepairMode.dry_run),
+                allowed_paths=list(request.allowed_paths),
             )
             patch = _ensure_diff(patch)
             response.patch_preview = patch
@@ -203,27 +222,24 @@ class RepairService:
         if self._demo:
             response.messages.append("Demo mode: workspace clone stubbed (offline).")
             return
-        # Best-effort shallow clone; never fatal in dry-run.
+        # A real checkout, with credentials when the repository needs them. An
+        # agent can only build what it can read, so a failed clone fails the run
+        # rather than letting a coder invent a patch for code it never saw.
         try:
-            ctx.workspace = tempfile.mkdtemp(prefix="gitpilot-repair-")
-            subprocess.run(
-                ["git", "clone", "--depth", "1", request.repo_url, ctx.workspace],
-                check=True,
-                capture_output=True,
-                timeout=120,
-            )
+            workspace = clone_repository(request.repo_url, branch=request.branch)
+            ctx.workspace = workspace.path
             ctx.cloned = True
-            subprocess.run(
-                ["git", "-C", ctx.workspace, "checkout", "-b", ctx.branch],
-                check=False,
-                capture_output=True,
-                timeout=30,
+            create_branch(ctx.workspace, ctx.branch)
+            if workspace.fell_back_to_default:
+                response.warnings.append(
+                    f"base branch {request.branch!r} not found; used the repository default"
+                )
+            response.messages.append(
+                f"Cloned {redact_credentials(request.repo_url)} into a temp workspace."
             )
-            response.messages.append("Repository cloned into temp workspace.")
-        except Exception as exc:
-            response.warnings.append(
-                f"clone skipped/unavailable ({exc}); proceeding with preview only"
-            )
+        except WorkspaceError as exc:
+            response.status = "error"
+            response.warnings.append(str(exc))
 
     def _apply_patch(
         self, workspace: str, patch: str, response: RepairResponse

@@ -13,7 +13,7 @@ import React from "react";
 export default function PlanView({ plan, planStatus }) {
   if (!plan) return null;
 
-  const totals = { CREATE: 0, MODIFY: 0, DELETE: 0, INDEX: 0, READ: 0 };
+  const totals = { CREATE: 0, MODIFY: 0, DELETE: 0, INDEX: 0, READ: 0, EXECUTE: 0 };
   plan.steps.forEach((step) => {
     step.files.forEach((file) => {
       totals[file.action] = (totals[file.action] || 0) + 1;
@@ -80,6 +80,15 @@ export default function PlanView({ plan, planStatus }) {
             {totals.INDEX > 0 && (
               <span className="exec-total exec-total--index">
                 {totals.INDEX === 1 ? "1 setup" : `${totals.INDEX} setup`}
+              </span>
+            )}
+            {/* Fallback surface: an EXECUTE plan normally renders the green
+                ExecutionPlanCard instead. This shows up when the sandbox
+                builder declined the file (unknown extension), so the card is
+                absent but the step is still real. */}
+            {totals.EXECUTE > 0 && (
+              <span className="exec-total exec-total--index">
+                {totals.EXECUTE === 1 ? "1 run" : `${totals.EXECUTE} runs`}
               </span>
             )}
           </div>

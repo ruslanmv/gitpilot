@@ -809,11 +809,61 @@ def semantic_search(query: Any, k: Any = 8) -> str:
         return f"Error in semantic_search: {str(e)}"
 
 
+# ---------------------------------------------------------------------------
+# Plan-vocabulary aliases
+#
+# The planner's JSON schema uses an action vocabulary — CREATE, MODIFY, DELETE,
+# READ, INDEX, EXECUTE — and those words collide with the ReAct loop's own
+# `Action:` keyword. A small model, mid-plan, reliably emits
+#
+#     Action: READ
+#     Action Input: {"file_path": "new_file.py"}
+#
+# which CrewAI rejects with "Action 'READ' don't exist". The arguments are
+# correct; only the name is wrong, and the model then burns two or three turns
+# rediscovering the canonical name — sometimes giving up and returning a plan
+# whose only step is the read it never managed to do.
+#
+# Rejecting a semantically correct call over a naming detail is the defect, not
+# the model's mistake. These aliases make the collision resolve: the same
+# function, reachable by the word the planner was taught to write. Descriptions
+# are one terse line each so the prompt cost stays near zero, and the canonical
+# tools remain the ones the instructions point at.
+#
+# (The same class of failure was already worked around for EXECUTE with a
+# deterministic short-circuit — see the EXECUTE notes in agentic.py.)
+
+
+@tool("READ")
+def read_file_alias(file_path: Any) -> str:
+    """Alias for "Read file content". file_path: path relative to the repo root."""
+    return read_file.run(file_path=file_path)
+
+
+@tool("LIST")
+def list_files_alias() -> str:
+    """Alias for "List all files in repository"."""
+    return list_repository_files.run()
+
+
 REPOSITORY_TOOLS = [
     list_repository_files,
     get_directory_structure,
     read_file,
     get_repository_summary,
+]
+
+#: The planner's tools: the same read-only surface, plus the aliases.
+#:
+#: Scoped to the planner on purpose. It is the only agent taught the JSON action
+#: vocabulary, so it is the only one that confuses those words for tool names —
+#: and every other agent keeps the deliberately small explorer surface. Aliases
+#: last: the canonical names are what the instructions point at, and what a
+#: capable model picks; these only catch the collision.
+PLANNER_TOOLS = [
+    *REPOSITORY_TOOLS,
+    read_file_alias,
+    list_files_alias,
 ]
 WRITE_TOOLS = [
     edit_file,              # B8: surgical exact-string replacement

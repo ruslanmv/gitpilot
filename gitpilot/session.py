@@ -218,6 +218,50 @@ class SessionManager:
             raise FileNotFoundError(f"Session not found: {session_id}")
         return Session.from_dict(json.loads(path.read_text()))
 
+    @staticmethod
+    def _recency(data: dict[str, Any], path: Path) -> float:
+        """When a session was last worked on, as a POSIX timestamp.
+
+        ``updated_at`` is the truth — it moves on every message. ``created_at``
+        covers a session that has been created but not yet written to, which is
+        exactly the session the user just opened and is about to type into.
+        The file mtime is the last resort for a hand-edited or pre-historic
+        file, so a missing timestamp sinks to its real age instead of to 1970.
+        """
+        for key in ("updated_at", "created_at"):
+            stamp = data.get(key)
+            if not stamp:
+                continue
+            try:
+                parsed = datetime.fromisoformat(str(stamp))
+            except ValueError:
+                continue
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=UTC)
+            return parsed.timestamp()
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    @staticmethod
+    def _summarize(data: dict[str, Any]) -> dict[str, Any]:
+        """The list-row shape. One definition, so every caller agrees."""
+        return {
+            "id": data["id"],
+            "name": data.get("name"),
+            "repo": data.get("repo_full_name"),
+            "branch": data.get("branch"),
+            "message_count": len(data.get("messages", [])),
+            "status": data.get("status", "active"),
+            "created_at": data.get("created_at"),
+            "updated_at": data.get("updated_at"),
+            "mode": data.get("mode"),
+            "pr_number": data.get("pr_number"),
+            "repos": data.get("repos", []),
+            "active_repo": data.get("active_repo"),
+        }
+
     def _list_sessions_dir_fingerprint(self) -> tuple[float, int]:
         """Cheap fingerprint of the sessions directory — (mtime, file_count).
         If either changes, the cache is stale.
@@ -235,51 +279,65 @@ class SessionManager:
         except Exception:
             return (0.0, 0)
 
+    def _all_sessions_newest_first(self) -> list[dict[str, Any]]:
+        """Every session on disk, most recently worked on first.
+
+        Cached against a fingerprint of the sessions directory. The cache holds
+        the *whole* ordered list rather than one query's answer, so a sidebar
+        filtered to one repo and an admin view of everything share it instead
+        of evicting each other.
+        """
+        fingerprint = self._list_sessions_dir_fingerprint()
+        cached = self._list_cache.get("entry")
+        if cached is not None and cached[0] == fingerprint:
+            return cached[1]
+
+        rows: list[tuple[float, dict[str, Any]]] = []
+        for path in self.root.glob("*.json"):
+            try:
+                data = json.loads(path.read_text())
+                rows.append((self._recency(data, path), self._summarize(data)))
+            except Exception:
+                logger.debug("Failed to read session file %s", path, exc_info=True)
+                continue
+
+        rows.sort(key=lambda row: row[0], reverse=True)
+        sessions = [summary for _, summary in rows]
+        self._list_cache["entry"] = (fingerprint, sessions)
+        return sessions
+
     def list_sessions(
         self,
         repo_full_name: str | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
-        """List sessions with mtime-based in-memory cache.
+        """Sessions for the picker, newest first.
 
-        Cache key includes the filter args so different queries don't collide.
-        Cache is invalidated when the sessions directory mtime or file count
-        changes (i.e., any create/update/delete triggers a refresh).
+        Ordering is the contract, not a side effect: the session you just
+        created — or just sent a message to — is the one you are about to open,
+        so it belongs at the top. Filenames are random ids, so the previous
+        filename sort was effectively arbitrary, and because ``limit`` was
+        applied while scanning rather than after ordering, a new session could
+        be cut from the list entirely on a machine with a long history.
+
+        Filter and limit therefore both apply *after* ordering: the caller gets
+        the newest ``limit`` sessions matching the filter, never the newest
+        ``limit`` files thinned down to nothing.
         """
-        fingerprint = self._list_sessions_dir_fingerprint()
-        cache_key = (fingerprint, repo_full_name, limit)
-
-        cached = self._list_cache.get("entry")
-        if cached is not None and cached[0] == cache_key:
-            return cached[1]
-
-        sessions = []
-        for path in sorted(self.root.glob("*.json"), reverse=True):
-            try:
-                data = json.loads(path.read_text())
-                if repo_full_name and data.get("repo_full_name") != repo_full_name:
-                    continue
-                sessions.append({
-                    "id": data["id"],
-                    "name": data.get("name"),
-                    "repo": data.get("repo_full_name"),
-                    "branch": data.get("branch"),
-                    "message_count": len(data.get("messages", [])),
-                    "status": data.get("status", "active"),
-                    "updated_at": data.get("updated_at"),
-                    "pr_number": data.get("pr_number"),
-                    "repos": data.get("repos", []),
-                    "active_repo": data.get("active_repo"),
-                })
-                if len(sessions) >= limit:
-                    break
-            except Exception:
-                logger.debug("Failed to read session file %s", path, exc_info=True)
-                continue
-
-        # Store in cache
-        self._list_cache["entry"] = (cache_key, sessions)
+        sessions = self._all_sessions_newest_first()
+        if repo_full_name:
+            sessions = [s for s in sessions if s["repo"] == repo_full_name]
+        if limit is not None and limit >= 0:
+            sessions = sessions[:limit]
         return sessions
+
+    def summary(self, session: Session) -> dict[str, Any]:
+        """One session in the same shape :meth:`list_sessions` returns.
+
+        Lets a caller that just created a session show it immediately, in the
+        row format the list already uses, without a second round trip.
+        """
+        return self._summarize(session.to_dict())
 
     def invalidate_list_cache(self) -> None:
         """Explicitly invalidate the list_sessions cache.

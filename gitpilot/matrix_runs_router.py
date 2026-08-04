@@ -37,9 +37,10 @@ from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from gitpilot.a2a_adapter import _require_gateway_secret
+from gitpilot.inference.coder_registry import available_coders, default_provider
 from gitpilot.repair.pr_writer import DraftPRWriter, draft_pr_enabled
 from gitpilot.repair.schema import DEFAULT_FORBIDDEN_PATHS, RepairMode, RepairRequest
 from gitpilot.repair.service import run_repair
@@ -63,10 +64,26 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 class MatrixRunRequest(BaseModel):
-    """The Matrix run contract sent by Matrix Builder."""
+    """A controlled run request, in either supported dialect.
 
-    bundle_url: str
-    task_id: str
+    Two first-class callers speak to this facade:
+
+    * **Matrix Builder** sends a signed bundle: ``{bundle_url, task_id, prompt, …}``.
+    * **DayPilot** (native coding executor) sends a repo task:
+      ``{task, repo, mode, branch, baseBranch}`` — see DayPilot's
+      ``coding/gitpilot_adapter.py``.
+
+    Both map onto the same repair pipeline and inherit identical guardrails, so
+    neither dialect can bypass the Matrix control-file protection. ``bundle_url``
+    and ``task_id`` are therefore optional *individually*, but the validator
+    below fails closed unless one complete dialect is present.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    # --- Matrix Builder dialect ---
+    bundle_url: str = ""
+    task_id: str = ""
     prompt: str = ""
     project_name: str = ""
     allowed_files: list[str] = Field(default_factory=list)
@@ -74,6 +91,47 @@ class MatrixRunRequest(BaseModel):
     validation_commands: list[str] = Field(default_factory=list)
     # Free-form Matrix mode ("ask" / "plan" / "apply"…); mapped conservatively.
     mode: str = "ask"
+
+    # --- DayPilot dialect (aliases onto the same pipeline) ---
+    task: str = ""
+    repo: str = ""
+    branch: str | None = None
+    base_branch: str = Field(default="main", alias="baseBranch")
+
+    # --- Which AI coder implements the run (optional, per run) ---
+    # {"provider": "ollabridge" | "claude_code" | "codex" | <generic>,
+    #  "model": "..."}. Omitted => the deployment default. Selecting an agent
+    # changes only WHO writes the patch; every guardrail below is unchanged.
+    coder: dict[str, Any] | None = None
+
+    @property
+    def work_prompt(self) -> str:
+        """The instruction text, from whichever dialect supplied it."""
+        return (self.prompt or self.task).strip()
+
+    @property
+    def source_url(self) -> str:
+        """What the pipeline resolves into a workspace: bundle or repo."""
+        return (self.bundle_url or self.repo).strip()
+
+    @model_validator(mode="after")
+    def _require_one_dialect(self) -> "MatrixRunRequest":
+        """Fail closed unless one complete dialect is present.
+
+        A signed Matrix bundle is self-describing — it carries the work
+        specification, so ``prompt`` stays optional there. A DayPilot run has no
+        bundle, so it must name both the repository and the task; otherwise the
+        pipeline would be asked to guess what to change.
+        """
+        if self.bundle_url.strip():
+            return self
+        if not self.repo.strip():
+            raise ValueError(
+                "a run requires 'bundle_url' (Matrix dialect) or 'repo' (DayPilot dialect)"
+            )
+        if not self.work_prompt:
+            raise ValueError("a DayPilot run requires 'task' (or 'prompt') describing the work")
+        return self
 
 
 class MatrixRunResponse(BaseModel):
@@ -129,6 +187,10 @@ class MatrixRunStatus(BaseModel):
     logs_url: str | None = None
     test_status: str = "not_run"
     changed_files: list[str] = Field(default_factory=list)
+    # Echoed back so a polling client can render the run faithfully without
+    # having to remember what it submitted. Additive: Matrix Builder ignores it.
+    repo: str = ""
+    branch: str | None = None
 
 
 # In-memory run registry. Single-process only (HF Space / local). A durable
@@ -235,30 +297,42 @@ def merge_forbidden(caller_forbidden: list[str] | None) -> list[str]:
 
 
 def to_repair_request(run: MatrixRunRequest) -> RepairRequest:
-    """Map the Matrix run contract onto the existing repair pipeline request."""
+    """Map either supported run dialect onto the repair pipeline request.
+
+    Both dialects converge here, so the Matrix guardrails (control files always
+    forbidden, pipeline defaults merged) apply identically no matter who called.
+    """
+    prompt = run.work_prompt
+    task_id = run.task_id or uuid.uuid4().hex
     issues: list[dict[str, Any]] = []
-    if run.prompt.strip():
+    if prompt:
         issues.append(
             {
-                "id": run.task_id or "matrix-task",
+                "id": run.task_id or "coding-task",
                 "severity": "medium",
-                "description": run.prompt.strip(),
-                "recommended_action": run.prompt.strip(),
+                "description": prompt,
+                "recommended_action": prompt,
             }
         )
     return RepairRequest.from_json(
         {
-            "client_id": "matrix-builder",
-            "workspace_id": run.task_id or uuid.uuid4().hex,
-            "task_id": run.task_id or uuid.uuid4().hex,
-            # The signed Matrix Bundle URL is the source GitPilot fetches; later
-            # batches resolve it into a workspace before the pipeline runs.
-            "repo_url": run.bundle_url,
+            # Identify the caller by dialect so runs stay attributable.
+            "client_id": "matrix-builder" if run.bundle_url else "daypilot",
+            "workspace_id": task_id,
+            "task_id": task_id,
+            # The source GitPilot resolves into a workspace: a signed Matrix
+            # Bundle URL, or a repository for a native DayPilot coding run.
+            "repo_url": run.source_url,
+            # Work is based on the caller's base branch (DayPilot dialect);
+            # the Matrix dialect keeps the pipeline default.
+            "branch": run.base_branch or "main",
             "mode": _map_mode(run.mode).value,
             "issues": issues,
             "allowed_paths": list(run.allowed_files or []),
             "forbidden_paths": merge_forbidden(run.forbidden_files),
             "sandbox": {"provider": "matrixlab", "required": False},
+            # Per-run AI coder. Omitted => the pipeline's default CoderSpec.
+            **({"coder": run.coder} if run.coder else {}),
         }
     )
 
@@ -286,6 +360,16 @@ def _matrix_health() -> dict[str, Any]:
     }
 
 
+def _list_coders() -> dict[str, Any]:
+    """Which AI coders this deployment can actually run.
+
+    A control plane offering a coder picker needs the truth about this host —
+    whether the agent's CLI is installed and its credential is set — rather than
+    a hard-coded list that fails at run time.
+    """
+    return {"coders": available_coders(), "default": default_provider()}
+
+
 def _create_run(
     run: MatrixRunRequest, request: Request, background_tasks: BackgroundTasks
 ) -> MatrixRunResponse:
@@ -299,6 +383,8 @@ def _create_run(
             "status": "queued",
             "bundle_url": run.bundle_url,
             "task_id": run.task_id,
+            "repo": run.source_url,
+            "branch": run.branch or run.base_branch,
             "validation_commands": list(run.validation_commands or []),
             "repair_request": repair_request.model_dump(mode="json"),
             "summary": "",
@@ -333,6 +419,8 @@ def _get_run(run_id: str, request: Request) -> MatrixRunStatus:
         logs_url=f"{base}/api/v1/gitpilot/runs/{run_id}/logs" if rec.get("logs") else None,
         test_status=rec.get("test_status", "not_run"),
         changed_files=list(rec.get("changed_files", [])),
+        repo=rec.get("repo", ""),
+        branch=rec.get("branch"),
     )
 
 
@@ -433,6 +521,12 @@ def _get_run_logs(run_id: str) -> PlainTextResponse:
 def _register_routes(router: APIRouter) -> None:
     """Register the health + runs routes on *router* (shared by both prefixes)."""
     router.add_api_route("/health", _matrix_health, methods=["GET"])
+    router.add_api_route(
+        "/coders",
+        _list_coders,
+        methods=["GET"],
+        dependencies=[Depends(verify_a2a_secret)],
+    )
     router.add_api_route(
         "/runs",
         _create_run,

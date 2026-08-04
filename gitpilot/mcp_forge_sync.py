@@ -57,9 +57,18 @@ DEFAULT_LIST_PATHS: tuple[str, ...] = (
 
 
 def _settings() -> dict[str, str]:
+    """Where to sync from: the saved gateway profile first, then the env.
+
+    Configuring the gateway in Settings has to actually change where GitPilot
+    syncs, otherwise the screen is decorative. The profile wins; anything it
+    leaves blank falls back to the environment, then the default.
+    """
+    from .mcp_gateway_config import load_profile
+
+    profile = load_profile()
     return {
-        "url": os.environ.get(ENV_FORGE_URL, DEFAULT_FORGE_URL).rstrip("/"),
-        "token": os.environ.get(ENV_FORGE_TOKEN, ""),
+        "url": profile.resolved_url(),
+        "token": profile.resolved_api_token(),
         "list_path": os.environ.get(ENV_FORGE_LIST_PATH, ""),
     }
 

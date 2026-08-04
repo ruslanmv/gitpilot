@@ -1,7 +1,7 @@
 {
   "name": "gitpilot-vscode",
-  "displayName": "GitPilot — Multi-Agent AI Coding Assistant",
-  "description": "The first multi-agent AI pair programmer for VS Code. Four specialized agents (Explorer, Planner, Coder, Reviewer) collaborate on every task — you approve every change. Works with OpenAI, Claude, Ollama, Watsonx.",
+  "displayName": "GitPilot \u2014 Multi-Agent AI Coding Assistant",
+  "description": "The first multi-agent AI pair programmer for VS Code. Four specialized agents (Explorer, Planner, Coder, Reviewer) collaborate on every task \u2014 you approve every change. Works with OpenAI, Claude, Ollama, Watsonx.",
   "version": "0.2.7",
   "preview": false,
   "publisher": "ruslanmv",
@@ -97,13 +97,11 @@
         },
         {
           "id": "gitpilot.sessionsView",
-          "name": "Sessions",
-          "visibility": "collapsed"
+          "name": "Sessions"
         },
         {
           "id": "gitpilot.skillsView",
-          "name": "Skills & Plugins",
-          "visibility": "collapsed"
+          "name": "Skills & Plugins"
         }
       ]
     },
@@ -255,13 +253,13 @@
       },
       {
         "command": "gitpilot.openPhaseRunbooks",
-        "title": "Open Phase Runbook…",
+        "title": "Open Phase Runbook\u2026",
         "category": "GitPilot",
         "icon": "$(notebook)"
       },
       {
         "command": "gitpilot.showFeatureFlags",
-        "title": "Copy Feature Flag…",
+        "title": "Copy Feature Flag\u2026",
         "category": "GitPilot",
         "icon": "$(beaker)"
       },
@@ -450,6 +448,26 @@
         "title": "Security Scan",
         "category": "GitPilot",
         "icon": "$(shield)"
+      },
+      {
+        "command": "gitpilot.configureMcpGateway",
+        "title": "Configure MCP Gateway",
+        "category": "GitPilot"
+      },
+      {
+        "command": "gitpilot.testMcpGateway",
+        "title": "Test MCP Gateway Connection",
+        "category": "GitPilot"
+      },
+      {
+        "command": "gitpilot.syncMcpServers",
+        "title": "Sync MCP Servers",
+        "category": "GitPilot"
+      },
+      {
+        "command": "gitpilot.signOutMcpGateway",
+        "title": "Remove MCP Gateway Credentials",
+        "category": "GitPilot"
       }
     ],
     "keybindings": [
@@ -508,7 +526,7 @@
           "default": "normal",
           "enumDescriptions": [
             "Ask before risky operations (recommended)",
-            "Read-only mode — all writes blocked",
+            "Read-only mode \u2014 all writes blocked",
             "Allow all operations without confirmation"
           ],
           "description": "Agent permission mode",
@@ -553,6 +571,36 @@
           "default": false,
           "description": "Lite Mode: optimized for small LLMs (< 7B params). Uses simplified prompts and single-agent execution instead of multi-agent pipelines. Recommended for qwen2.5:1.5b, phi-3-mini, gemma-2b, tinyllama.",
           "order": 11
+        },
+        "gitpilot.mcp.gatewayUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "URL of the MCP Context Forge gateway whose servers become tools for your coding agents. Leave empty to use the GitPilot server's own setting (or `GITPILOT_MCP_FORGE_URL`). Run **GitPilot: Configure MCP Gateway** for a guided setup that also tests the connection.",
+          "order": 20
+        },
+        "gitpilot.mcp.authMode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "none",
+            "token",
+            "login"
+          ],
+          "enumDescriptions": [
+            "Detect what the gateway accepts (recommended)",
+            "Send no credential \u2014 for a gateway with authentication disabled",
+            "Send a Forge API token",
+            "Sign in with an admin email and password"
+          ],
+          "default": "auto",
+          "description": "How GitPilot authenticates with the MCP Context Forge gateway.",
+          "order": 21
+        },
+        "gitpilot.mcp.adminEmail": {
+          "type": "string",
+          "default": "",
+          "description": "Admin email used to sign in to the MCP gateway. The password is NOT a setting: run 'GitPilot: Configure MCP Gateway' to enter it \u2014 it is stored by the GitPilot server, never in VS Code.",
+          "order": 22
         }
       }
     },
@@ -728,24 +776,17 @@
     ]
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile && node scripts/remove-source-maps.js",
+    "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./ && node scripts/copy-webview-assets.js",
     "watch": "tsc -watch -p ./",
-    "lint": "node scripts/lint.js",
+    "lint": "eslint src --ext ts",
     "package": "vsce package",
-    "publish": "vsce publish",
-    "reinstall-vsix": "npm run package && node scripts/install-latest-vsix.js"
+    "publish": "vsce publish"
   },
   "devDependencies": {
     "@types/node": "^20.19.39",
     "@types/vscode": "^1.110.0",
     "@vscode/vsce": "^2.22.0",
     "typescript": "^5.9.3"
-  },
-  "capabilities": {
-    "untrustedWorkspaces": {
-      "supported": "limited",
-      "description": "GitPilot can inspect trusted-safe workspace metadata in restricted mode, but blocks file modifications, terminal execution, package/plugin installation, commits, pushes, and other generated tool execution until the workspace is trusted."
-    }
   }
 }

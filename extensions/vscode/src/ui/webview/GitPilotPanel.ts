@@ -20,7 +20,7 @@ export class GitPilotPanel
   constructor(
     private readonly _extensionUri: vscode.Uri,
     private readonly _stateStore: StateStore,
-    private readonly _onMessage: (msg: WebviewToExtensionMessage) => unknown | Promise<unknown>
+    private readonly _onMessage: (msg: WebviewToExtensionMessage) => void
   ) {
     this._output = vscode.window.createOutputChannel("GitPilot");
     this._disposables.push(this._output);
@@ -36,8 +36,10 @@ export class GitPilotPanel
     webviewView.webview.options = {
       enableScripts: true,
       localResourceRoots: [
+        this._extensionUri,
         vscode.Uri.joinPath(this._extensionUri, "out"),
         vscode.Uri.joinPath(this._extensionUri, "resources"),
+        vscode.Uri.joinPath(this._extensionUri, "src"),
       ],
     };
 
@@ -49,7 +51,6 @@ export class GitPilotPanel
           if (msg.type === "INIT") {
             this._log("Received INIT from webview");
             this._syncState();
-            await this._onMessage(msg);
             return;
           }
 
@@ -64,7 +65,7 @@ export class GitPilotPanel
           }
 
           this._log(`Received message from webview: ${msg.type}`);
-          await this._onMessage(msg);
+          this._onMessage(msg);
         } catch (error) {
           this._logError("Error while handling message from webview", error);
           void vscode.window.showErrorMessage(
@@ -160,7 +161,6 @@ export class GitPilotPanel
     this._log(`Loading webview template from: ${templateUri.toString()}`);
 
     const cssUri = await this._resolveCssUri(webview);
-    const scriptUri = await this._resolveScriptUri(webview);
 
     const templateBytes = await vscode.workspace.fs.readFile(templateUri);
     const template = new TextDecoder("utf-8").decode(templateBytes);
@@ -168,8 +168,7 @@ export class GitPilotPanel
     return template
       .replace(/__CSP__/g, this._escapeHtml(csp))
       .replace(/__NONCE__/g, nonce)
-      .replace(/__CSS_URI__/g, cssUri.toString())
-      .replace(/__SCRIPT_URI__/g, scriptUri.toString());
+      .replace(/__CSS_URI__/g, cssUri.toString());
   }
 
   private async _resolveTemplateUri(): Promise<vscode.Uri> {
@@ -236,40 +235,6 @@ export class GitPilotPanel
         "Expected one of:",
         ...candidates.map((uri) => ` - ${uri.fsPath}`),
         "Ensure gitpilotWorkspace.css is included in the packaged extension.",
-      ].join("\n")
-    );
-  }
-
-  private async _resolveScriptUri(webview: vscode.Webview): Promise<vscode.Uri> {
-    const candidates = [
-      vscode.Uri.joinPath(
-        this._extensionUri,
-        "out",
-        "ui",
-        "webview",
-        "gitpilotWorkspace.js"
-      ),
-      vscode.Uri.joinPath(
-        this._extensionUri,
-        "src",
-        "ui",
-        "webview",
-        "gitpilotWorkspace.js"
-      ),
-    ];
-
-    for (const candidate of candidates) {
-      if (await this._exists(candidate)) {
-        return webview.asWebviewUri(candidate);
-      }
-    }
-
-    throw new Error(
-      [
-        "GitPilot webview script was not found.",
-        "Expected one of:",
-        ...candidates.map((uri) => ` - ${uri.fsPath}`),
-        "Ensure gitpilotWorkspace.js is included in the packaged extension.",
       ].join("\n")
     );
   }

@@ -26,8 +26,7 @@ import {
   SandboxTab,
   AccountTab,
 } from "./components/AdminTabs";
-import { apiUrl, safeFetchJSON, fetchStatus, getAuthHeaders, clearSessionToken, getSessionToken, startSession } from "./utils/api.js";
-import { resolveBackendUrl } from "./utils/backend.js";
+import { apiUrl, safeFetchJSON, fetchStatus, getAuthHeaders, clearSessionToken, startSession } from "./utils/api.js";
 import { initApp } from "./utils/appInit.js";
 
 function makeRepoKey(repo) {
@@ -853,32 +852,23 @@ export default function App() {
         localStorage.removeItem("github_user");
       }
 
-      // No GitHub token — but a GitPilot account session may exist. Recognise
-      // it so email users stay signed in across reloads. On cross-origin
-      // deployments (Vercel frontend + HF backend), only check when we have the
-      // portable X-GitPilot-Session token to avoid an expected anonymous 401.
-      const backendUrl = resolveBackendUrl();
-      const backendIsCrossOrigin =
-        backendUrl &&
-        new URL(backendUrl, window.location.origin).origin !== window.location.origin;
-      const shouldCheckAccount = !backendIsCrossOrigin || Boolean(getSessionToken());
-
-      if (shouldCheckAccount) {
-        try {
-          const me = await safeFetchJSON(apiUrl("/api/account/me"), {
-            method: "GET",
-            headers: getAuthHeaders(),
-            timeout: 8000,
-          });
-          if (me && me.id) {
-            setIsAuthenticated(true);
-            setUserInfo({ login: me.email, name: me.name || me.email, email: me.email });
-            setIsLoading(false);
-            return;
-          }
-        } catch (err) {
-          /* no account session — fall through to sign-in */
+      // No GitHub token — but a GitPilot account session (HttpOnly cookie) may
+      // exist. Recognise it so email users stay signed in across reloads.
+      try {
+        const me = await safeFetchJSON(apiUrl("/api/account/me"), {
+          method: "GET",
+          credentials: "include",
+          headers: getAuthHeaders(), // X-GitPilot-Session survives cross-origin
+          timeout: 8000,
+        });
+        if (me && me.id) {
+          setIsAuthenticated(true);
+          setUserInfo({ login: me.email, name: me.name || me.email, email: me.email });
+          setIsLoading(false);
+          return;
         }
+      } catch (err) {
+        /* no account session — fall through to sign-in */
       }
 
       setStartupPhase("ready");
@@ -911,6 +901,7 @@ export default function App() {
     try {
       fetch(apiUrl("/api/account/logout"), {
         method: "POST",
+        credentials: "include",
         headers: getAuthHeaders(),
       }).catch(() => {});
     } catch { /* ignore */ }

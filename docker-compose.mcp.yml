@@ -62,13 +62,29 @@ services:
       HOST: 0.0.0.0
       PORT: "4444"
       AUTH_REQUIRED: "${MCP_FORGE_AUTH_REQUIRED:-false}"
-      JWT_SECRET_KEY: ${MCP_AUTH_TOKEN:?Run "make install-mcp" first or copy .env.template.mcp -> .mcp.env}
+      # The signing secret. It is NOT a bearer token — Forge rejects it as one
+      # (see docs/MCP_AUTH.md), so nothing ever sends it. MCP_AUTH_TOKEN stays
+      # as the fallback so existing .mcp.env files keep working.
+      JWT_SECRET_KEY: ${MCP_FORGE_JWT_SECRET:-${MCP_AUTH_TOKEN:?Run "make install-mcp" first or copy .env.template.mcp -> .mcp.env}}
       BASIC_AUTH_USER: ${MCP_FORGE_ADMIN_USER:-admin}
-      BASIC_AUTH_PASSWORD: ${MCP_AUTH_TOKEN}
+      BASIC_AUTH_PASSWORD: ${MCP_FORGE_ADMIN_PASSWORD:-${MCP_AUTH_TOKEN}}
+      # Email login is what the Admin UI and /auth/email/login use; these are
+      # the credentials `forge_login` exchanges for a JWT.
+      PLATFORM_ADMIN_EMAIL: ${MCP_FORGE_ADMIN_EMAIL:-admin@example.com}
+      PLATFORM_ADMIN_PASSWORD: ${MCP_FORGE_ADMIN_PASSWORD:-${MCP_AUTH_TOKEN}}
       MCPGATEWAY_UI_ENABLED: "true"
       MCPGATEWAY_ADMIN_API_ENABLED: "true"
-      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN}
+      # Forge marks its session cookie Secure when either of these says so, and
+      # a browser drops a Secure cookie sent over plain HTTP — which looks
+      # exactly like "login succeeds, then bounces back to the login page".
+      # Local dev is HTTP, so both are off here; a TLS deployment sets both.
+      ENVIRONMENT: ${MCP_FORGE_ENVIRONMENT:-development}
+      SECURE_COOKIES: "${MCP_FORGE_SECURE_COOKIES:-false}"
       LOG_LEVEL: ${MCP_FORGE_LOG_LEVEL:-INFO}
+    # Lets an adopted Forge (and ours) dial the host on native Linux, where
+    # host.docker.internal is not defined by default.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:4444/health || exit 1"]
       interval: 10s

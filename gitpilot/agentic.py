@@ -233,13 +233,14 @@ async def _execute_index_action(
 def _tools():
     """Return cached tool collections (lazy-loaded on first use)."""
     if not _tools_cache:
-        from .agent_tools import REPOSITORY_TOOLS, WRITE_TOOLS, set_repo_context, get_repository_context_summary
+        from .agent_tools import PLANNER_TOOLS, REPOSITORY_TOOLS, WRITE_TOOLS, set_repo_context, get_repository_context_summary
         from .issue_tools import ISSUE_TOOLS
         from .pr_tools import PR_TOOLS
         from .search_tools import SEARCH_TOOLS
         from .local_tools import LOCAL_TOOLS, LOCAL_FILE_TOOLS, LOCAL_GIT_TOOLS, LOCAL_SHELL_TOOLS
         _tools_cache.update(
             REPOSITORY_TOOLS=REPOSITORY_TOOLS,
+            PLANNER_TOOLS=PLANNER_TOOLS,
             WRITE_TOOLS=WRITE_TOOLS,
             set_repo_context=set_repo_context,
             get_repository_context_summary=get_repository_context_summary,
@@ -797,7 +798,10 @@ async def generate_plan(
         goal=_planner_goal,
         backstory=_planner_backstory,
         llm=llm,
-        tools=_tools()["REPOSITORY_TOOLS"],
+        # PLANNER_TOOLS, not REPOSITORY_TOOLS: the planner is the agent taught
+        # the JSON action vocabulary (CREATE/MODIFY/READ/...), so it is the one
+        # that emits "Action: READ" and needs that to resolve.
+        tools=_tools()["PLANNER_TOOLS"],
         verbose=True,
         allow_delegation=False,
     )

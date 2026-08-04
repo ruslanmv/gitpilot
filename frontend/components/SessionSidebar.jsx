@@ -9,6 +9,12 @@ import SessionItem from "./SessionItem.jsx";
  * timestamps, and a "New Session" button. Additive — does not modify
  * any existing component.
  */
+/** Most recently worked on first; a session with no timestamp sinks. */
+function sortNewestFirst(sessions) {
+  const at = (s) => Date.parse(s?.updated_at || s?.created_at || "") || 0;
+  return [...sessions].sort((a, b) => at(b) - at(a));
+}
+
 export default function SessionSidebar({
   repo,
   activeSessionId,
@@ -37,16 +43,22 @@ export default function SessionSidebar({
       try {
         const token = localStorage.getItem("github_token");
         const headers = token ? { Authorization: `Bearer ${token}` } : {};
-        const res = await fetch(apiUrl(`/api/sessions`), { headers, cache: "no-cache" });
+        // Filter server-side: the limit is applied after the filter there, so
+        // a long global history can't push this repo's sessions off the list.
+        const res = await fetch(
+          apiUrl(`/api/sessions?repo=${encodeURIComponent(repoFullName)}`),
+          { headers, cache: "no-cache" }
+        );
         if (!res.ok) return;
         const data = await res.json();
         if (cancelled) return;
 
-        // Filter to current repo
-        const filtered = (data.sessions || []).filter(
-          (s) => s.repo === repoFullName
+        // The server already returns newest-first; sorting again costs nothing
+        // and keeps the newest session on top against an older backend.
+        const rows = (data.sessions || []).filter(
+          (s) => !s.repo || s.repo === repoFullName
         );
-        setSessions(filtered);
+        setSessions(sortNewestFirst(rows));
       } catch (err) {
         console.warn("Failed to fetch sessions:", err);
       } finally {

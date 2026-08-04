@@ -112,9 +112,6 @@ Experience the application in action through our hosted demo environment:
 [![Live Demo Preview](assets/2026-04-07-16-17-56.png)](https://huggingface.co/spaces/ruslanmv/gitpilot)
 
 🔗 **Access the live demo:**  
-
-[https://gitpilot.ruslanmv.com](https://gitpilot.ruslanmv.com)
-or in Hugging Face
 [https://huggingface.co/spaces/ruslanmv/gitpilot](https://huggingface.co/spaces/ruslanmv/gitpilot)
 
 ### Option 3: Python CLI (fastest)
@@ -126,18 +123,19 @@ gitpilot serve
 
 Open [http://localhost:8000](http://localhost:8000) and you're done.
 
+If something else already holds :8000, GitPilot starts on the next free port and
+tells you which — no `make stop` first. A port you ask for yourself
+(`gitpilot serve --port 9000`, or `GITPILOT_PORT=9000`) is honoured strictly
+instead, because a proxy or container map may depend on that exact number; add
+`--no-strict-port` to let it drift anyway. See
+[docs/PORTS.md](docs/PORTS.md).
+
 > **Heads up:** the PyPI package is published as **`gitcopilot`** (the name `gitpilot` was already taken) but the command you run is `gitpilot`. Python **3.11** or **3.12** required.
 
 ---
 
 ## VS Code Extension
-
-[Open in Microsoft Market place](https://marketplace.visualstudio.com/items?itemName=ruslanmv.gitpilot-vscode)
-![assets/vs1.jpg](assets/vs1.jpg)
-
-
-
-
+![assets/2026-04-07-14-15-33.png](assets/2026-04-07-14-15-33.png)
 The sidebar panel gives you everything in one place:
 
 | Feature | What it does |
@@ -190,7 +188,6 @@ You send a request
 
 > **Note:** Simple questions (e.g. "explain this code") may return a direct answer without generating a multi-step plan. This is expected — the planner activates for tasks that require file changes or multi-step execution.
 
-![assets/vs2.jpg](assets/vs2.jpg)
 ### Code generation and Apply Patch
 
 When you ask GitPilot to create or edit files, the response includes structured `edits` — not just text. The **Apply Patch** button writes them directly to your workspace.
@@ -227,7 +224,6 @@ How it works under the hood:
 | **OpenAI** | Add your API key in settings | Paid |
 | **Claude** | Add your Anthropic API key | Paid |
 | **Watsonx** | Add IBM credentials | Paid |
-
 
 ---
 

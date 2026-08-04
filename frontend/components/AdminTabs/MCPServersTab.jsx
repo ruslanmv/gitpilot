@@ -5,7 +5,7 @@
 // UX layout (mirrors industry-standard plugin/extension managers):
 //
 //   ┌─ Header ─ gateway pill, totals, global "MCP enabled" toggle ─┐
-//   ├─ Sub-tabs: Installed · Catalog · Custom ────────────────────┤
+//   ├─ Sub-tabs: Installed · Catalog · Custom · Gateway ──────────┤
 //   ├─ ServerCard list (Installed)                                 │
 //   │     ▸ status / description / tags / tool count               │
 //   │     ▸ Test · Configure · Disable · Uninstall                 │
@@ -19,11 +19,13 @@ import ServerCard from "./mcp/ServerCard.jsx";
 import CatalogList from "./mcp/CatalogList.jsx";
 import CustomInstallForm from "./mcp/CustomInstallForm.jsx";
 import GatewayHeader from "./mcp/GatewayHeader.jsx";
+import GatewayForm from "./mcp/GatewayForm.jsx";
 import SyncReport from "./mcp/SyncReport.jsx";
 
 const TAB_INSTALLED = "installed";
 const TAB_CATALOG = "catalog";
 const TAB_CUSTOM = "custom";
+const TAB_GATEWAY = "gateway";
 
 export default function MCPServersTab({ showToast }) {
   const [activeSubTab, setActiveSubTab] = useState(TAB_INSTALLED);
@@ -217,6 +219,7 @@ export default function MCPServersTab({ showToast }) {
           { id: TAB_INSTALLED, label: `Installed (${installedCount})` },
           { id: TAB_CATALOG, label: `Catalog (${catalog.length})` },
           { id: TAB_CUSTOM, label: "Custom" },
+          { id: TAB_GATEWAY, label: "Gateway" },
         ].map((t) => (
           <button
             key={t.id}
@@ -296,6 +299,15 @@ export default function MCPServersTab({ showToast }) {
 
       {activeSubTab === TAB_CUSTOM && (
         <CustomInstallForm onSubmit={onInstallCustom} />
+      )}
+
+      {activeSubTab === TAB_GATEWAY && (
+        <GatewayForm
+          showToast={showToast}
+          // A new gateway means a different registry: reload so the Installed
+          // list describes the gateway you just pointed at, not the old one.
+          onSaved={refresh}
+        />
       )}
     </div>
   );

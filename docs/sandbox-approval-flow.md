@@ -196,6 +196,7 @@ plan response and the UI short-circuits the approval step.
 | `frontend/components/SandboxStatusWidget.jsx` | Sidebar health pill + one-click recovery |
 | `frontend/components/FileTree.jsx` | Sidebar ▶ Run button — dispatches `gitpilot:run-file` |
 | `frontend/components/ChatPanel.jsx` | Listens for `gitpilot:run-file`, routes through chat plan |
+| `frontend/utils/planKind.js` | Classifies a plan response as executable / informational / empty. `EXECUTE` and a bare `execution_plan` both count as executable — omitting them is what made every sandbox run report "The model returned an empty plan". |
 | `frontend/components/AssistantMessage.jsx` | Renders ExecutionPlanCard, ExecutionCard with Rerun, and next_actions |
 | `frontend/components/RunnableCodeBlock.jsx` | Code-block ▶ → plan → approve → run |
 | `frontend/components/SandboxCanvas.jsx` | Canvas split view, same approval flow |
@@ -208,5 +209,6 @@ plan response and the UI short-circuits the approval step.
 |------|----------|
 | `tests/test_sandbox_plan.py` | 23 tests — pure-Python builder + endpoint |
 | `tests/test_execute_short_circuit_plan.py` | 4 tests — plan attached for RUN_FILE intents |
+| `tests/test_plan_kind_classifier.py` | 9 tests — runs `planKind.js` under node against the real backend payload |
 | `tests/test_post_create_next_actions.py` | 7 tests — post-CREATE Run buttons |
 | `tests/test_sandbox_api.py`, `tests/test_sandbox.py` | Existing — no regressions allowed |

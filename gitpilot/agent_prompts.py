@@ -219,6 +219,7 @@ JSON rules:
 - "step_number" is a positive integer
 - "risks" is either a string or null (the JSON null literal)
 - The entire response is the JSON object — nothing before or after
+- These action words go INSIDE the JSON; the tool for reading is "Read file content"
 """
 
 # Footer = the facts block.  Last 200-300 chars of the prompt =

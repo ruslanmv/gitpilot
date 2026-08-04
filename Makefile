@@ -6,6 +6,10 @@
 UV      ?= uv
 PYTHON  ?= python3.11
 PORT    ?= 8000
+# GitPilot drifts to the next free port when PORT is taken; PORT_WINDOW is how
+# far it may drift, and therefore how far `make stop` has to look.
+PORT_WINDOW ?= 20
+PORT_LAST := $(shell expr $(PORT) + $(PORT_WINDOW) - 1)
 # Keep uv's cache beside the project so WSL /mnt/c checkouts do not copy
 # wheels from Linux home-dir cache across filesystems on every install.
 UV_CACHE_DIR ?= .uv-cache
@@ -28,7 +32,7 @@ DOCKER_COMPOSE := $(shell if command -v docker > /dev/null && docker compose ver
         mcp mcp-down mcp-logs gateway gateway-down gateway-logs gateway-register \
         install-mcp run-mcp run-all run-all-local stop-mcp logs-mcp sync-mcp uninstall-mcp \
         fix-line-endings install-mcp-workflows register-mcp-servers \
-        stop-soft stop-all smoke-mcp
+        stop-soft stop-all smoke-mcp status-mcp
 
 ## Show available targets
 help:
@@ -46,7 +50,7 @@ help:
 	@echo "  make dev              Alias for install-dev"
 	@echo "  make run              Run MCP stack + GitPilot backend/frontend"
 	@echo "  make run-bare         Run GitPilot backend + frontend WITHOUT MCP (no Docker required)"
-	@echo "  make stop             Stop all processes on ports 8000 and 5173"
+	@echo "  make stop             Stop all processes on ports $(PORT)-$(PORT_LAST) and 5173"
 	@echo "  make test             Run tests with pytest via uv"
 	@echo "  make benchmark        Run code generation benchmark (all tiers)"
 	@echo "  make benchmark-quick  Run quick benchmark (tier 1 smoke test)"
@@ -195,27 +199,35 @@ run: run-mcp run-bare
 ## any environment where Docker is unavailable.  The MCP Servers tab
 ## will show the gateway as Unreachable; clicking Sync is a no-op.
 run-bare:
-	@echo "🚀 Starting GitPilot on http://127.0.0.1:$(PORT)..."
-	@# 1. Already a healthy GitPilot? → skip backend boot, go straight to frontend.
+	@# 1. Already a healthy GitPilot on the preferred port? → reuse it, and point
+	@#    the frontend proxy at it rather than starting a second backend.
 	@if curl -sf http://127.0.0.1:$(PORT)/api/ping > /dev/null 2>&1; then \
 		echo "✅ GitPilot backend already running on :$(PORT) — skipping start."; \
 		echo "🎨 Starting frontend dev server on http://localhost:5173..."; \
-		cd frontend && exec npm run dev -- --open; \
+		GITPILOT_PORT=$(PORT) exec bash scripts/run-frontend.sh --open; \
 	fi
-	@# 2. Port held by something *else*? → stop and ask the user to clean up.
-	@if lsof -i:$(PORT) -sTCP:LISTEN > /dev/null 2>&1 || \
-	    nc -z 127.0.0.1 $(PORT) > /dev/null 2>&1; then \
-		echo "⚠️  Port $(PORT) is held by a non-GitPilot process. Run 'make stop' first."; \
-		exit 1; \
-	fi
-	@trap 'kill 0' EXIT; \
-	$(UV_ENV) $(UV) run --no-dev python -m gitpilot serve --host 127.0.0.1 --port $(PORT) --no-open & \
+	@# 2. Otherwise pick the port for real: the preferred one, or the next free.
+	@#    A port held by something else (another app, an old run) moves GitPilot
+	@#    instead of stopping it.  The server re-checks at bind time and writes
+	@#    the port it actually took, so a race can never leave us polling the
+	@#    wrong one.
+	@PORTFILE="$$(mktemp -t gitpilot-port.XXXXXX)"; \
+	RUNPORT=$$($(UV_ENV) $(UV) run --no-dev python -m gitpilot free-port --port $(PORT) 2>/dev/null || echo $(PORT)); \
+	if [ "$$RUNPORT" != "$(PORT)" ]; then \
+		echo "⚠️  Port $(PORT) is in use — starting GitPilot on $$RUNPORT instead."; \
+	fi; \
+	echo "🚀 Starting GitPilot on http://127.0.0.1:$$RUNPORT..."; \
+	trap 'kill 0; rm -f "$$PORTFILE"' EXIT; \
+	$(UV_ENV) $(UV) run --no-dev python -m gitpilot serve --host 127.0.0.1 \
+		--port $$RUNPORT --no-strict-port --port-file "$$PORTFILE" --no-open & \
 	BACKEND_PID=$$!; \
 	echo "⏳ Waiting for backend to be ready (up to 60s for WSL/first-start)..."; \
 	READY=0; \
 	for i in $$(seq 1 30); do \
-		if curl -sf http://127.0.0.1:$(PORT)/api/ping > /dev/null 2>&1; then \
-			echo "✅ Backend is ready after $$((i * 2))s"; \
+		BOUND=$$(cat "$$PORTFILE" 2>/dev/null | tr -d "[:space:]"); \
+		[ -n "$$BOUND" ] && RUNPORT=$$BOUND; \
+		if curl -sf http://127.0.0.1:$$RUNPORT/api/ping > /dev/null 2>&1; then \
+			echo "✅ Backend is ready after $$((i * 2))s on http://127.0.0.1:$$RUNPORT"; \
 			READY=1; \
 			break; \
 		fi; \
@@ -228,24 +240,27 @@ run-bare:
 		echo "⚠️  Backend took longer than 60s. Starting frontend anyway — the frontend"; \
 		echo "    will keep polling /api/ping and recover when the backend comes online."; \
 	fi; \
-	echo "🎨 Starting frontend dev server on http://localhost:5173..."; \
-	cd frontend && npm run dev -- --open
+	echo "🎨 Starting frontend dev server on http://localhost:5173 (API → :$$RUNPORT)..."; \
+	GITPILOT_PORT=$$RUNPORT bash scripts/run-frontend.sh --open
 
 ## Stop all running processes (ports 8000 and 5173) AND the MCP stack.
 ## Now that `make run` starts the MCP Context Forge stack by default, `make
 ## stop` is symmetric: it stops both GitPilot and Forge.  `stop-mcp` is
 ## idempotent — running it when nothing is up is a clean no-op.
 stop:
-	@echo "🛑 Attempting to stop processes on ports $(PORT) and 5173..."
+	@echo "🛑 Attempting to stop processes on ports $(PORT)-$(PORT_LAST) and 5173..."
 
-	@# Stop anything on backend port $(PORT)
-	@pids=$$(sudo lsof -t -i:$(PORT) -sTCP:LISTEN); \
-	if [ -n "$$pids" ]; then \
-		echo "Killing $$pids on port $(PORT)..."; \
-		sudo kill -9 $$pids; \
-	else \
-		echo "No process found on port $(PORT)."; \
-	fi
+	@# Stop GitPilot anywhere in the port window it may have drifted into.
+	@found=0; \
+	for port in $$(seq $(PORT) $(PORT_LAST)); do \
+		pids=$$(sudo lsof -t -i:$$port -sTCP:LISTEN 2>/dev/null); \
+		if [ -n "$$pids" ]; then \
+			echo "Killing $$pids on port $$port..."; \
+			sudo kill -9 $$pids; \
+			found=1; \
+		fi; \
+	done; \
+	[ $$found -eq 0 ] && echo "No process found on ports $(PORT)-$(PORT_LAST)." || true
 
 	@# Stop anything on frontend port 5173
 	@pids=$$(sudo lsof -t -i:5173 -sTCP:LISTEN); \
@@ -264,8 +279,8 @@ stop:
 ## owns; never prompts for a password. Suitable for `make run-all` to call
 ## as a pre-step so a stale backend can't hide newly-pulled code paths.
 stop-soft:
-	@echo "🛑 Stopping user-owned GitPilot processes on :$(PORT) and :5173..."
-	@for port in $(PORT) 5173; do \
+	@echo "🛑 Stopping user-owned GitPilot processes on :$(PORT)-$(PORT_LAST) and :5173..."
+	@for port in $$(seq $(PORT) $(PORT_LAST)) 5173; do \
 		pids=$$(lsof -t -i:$$port -sTCP:LISTEN 2>/dev/null || true); \
 		if [ -n "$$pids" ]; then \
 			for pid in $$pids; do \
@@ -764,31 +779,12 @@ run-mcp: install-mcp
 		echo "   Or run without MCP:  make run-bare"; \
 		exit 1; \
 	fi
-	@echo "🚀 Starting MCP Context Forge stack..."
-	docker compose --env-file .mcp.env -f docker-compose.mcp.yml --profile mcp up -d
-	@set -a; . ./.mcp.env; set +a; \
-	forge_port="$${MCP_FORGE_PORT:-4444}"; \
-	echo "⏳ Waiting for MCP Context Forge on http://localhost:$$forge_port/health..."; \
-	ready=0; \
-	for i in $$(seq 1 60); do \
-		if curl -fsS "http://localhost:$$forge_port/health" >/dev/null 2>&1; then \
-			echo "✅ MCP Context Forge reachable after $$((i * 2))s."; \
-			ready=1; \
-			break; \
-		fi; \
-		sleep 2; \
-	done; \
-	if [ $$ready -ne 1 ]; then \
-		echo "❌ MCP Context Forge did not become host-reachable on http://localhost:$$forge_port."; \
-		echo "   Tail logs with: make logs-mcp"; \
-		exit 1; \
-	fi
-	@set -a; . ./.mcp.env; set +a; \
-	echo "✅ Forge: http://localhost:$${MCP_FORGE_PORT:-4444}"; \
-	echo "   Postgre: http://localhost:$${MCP_POSTGRE_PORT:-8080}"; \
-	echo "   Inspector: http://localhost:$${MCP_INSPECTOR_PORT:-8081}"; \
-	echo "   Milvus (opt-in): docker compose --env-file .mcp.env -f docker-compose.mcp.yml --profile milvus up -d"
+	@bash scripts/mcp-stack.sh up
 	@bash scripts/register-mcp-servers.sh
+
+## Report which Forge is in use, who started it, and whether auth works.
+status-mcp:
+	@bash scripts/mcp-stack.sh status
 
 ## Register the 3 MCP servers with Forge (idempotent; called by run-mcp).
 register-mcp-servers:
@@ -821,8 +817,7 @@ run-all-local:
 
 ## Stop the MCP stack (volumes preserved)
 stop-mcp:
-	@docker compose --env-file .mcp.env -f docker-compose.mcp.yml --profile mcp down 2>/dev/null || true
-	@echo "🛑 MCP stack stopped (volumes kept). 'make uninstall-mcp' to remove data."
+	@bash scripts/mcp-stack.sh down
 
 ## Rotate the MCP_AUTH_TOKEN end-to-end and re-init Forge with the new
 ## token.  The escape hatch when `make run-mcp`'s auto-recovery isn't
