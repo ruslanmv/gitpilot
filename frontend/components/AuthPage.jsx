@@ -30,6 +30,7 @@ async function post(path, body) {
   const r = await fetch(api(path), {
     method: "POST",
     headers: { "content-type": "application/json", ...sessionHeaders() },
+    credentials: "include", // also send/receive the session cookie when same-origin
     body: JSON.stringify(body || {}),
   });
   let data = {};
@@ -39,6 +40,7 @@ async function post(path, body) {
 
 async function getJSON(path, opts = {}) {
   const r = await fetch(api(path), {
+    credentials: "include",
     ...opts,
     headers: { ...sessionHeaders(), ...(opts.headers || {}) },
   });

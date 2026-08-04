@@ -7,7 +7,6 @@
  */
 import * as vscode from 'vscode';
 import * as path from 'path';
-import * as fs from 'fs';
 import { execSync } from 'child_process';
 
 export interface WorkspaceContext {
@@ -65,7 +64,10 @@ export function getWorkspaceContext(): WorkspaceContext {
 
     let hasConfig = false;
     if (root) {
-        hasConfig = fs.existsSync(path.join(root, '.gitpilot'));
+        try {
+            const fs = require('fs');
+            hasConfig = fs.existsSync(path.join(root, '.gitpilot'));
+        } catch { /* ignore */ }
     }
 
     return { workspaceRoot: root, repoOwner: owner, repoName: name, branch, remoteUrl, isGitRepo, hasGitPilotConfig: hasConfig };

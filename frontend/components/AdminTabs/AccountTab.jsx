@@ -35,6 +35,7 @@ export default function AccountTab({ onLogout }) {
     setLoadError("");
     try {
       const res = await fetch(apiUrl("/api/account/me"), {
+        credentials: "include",
         headers: getAuthHeaders(),
       });
       if (res.status === 401) {
@@ -64,6 +65,7 @@ export default function AccountTab({ onLogout }) {
     try {
       const res = await fetch(apiUrl("/api/account/profile"), {
         method: "PATCH",
+        credentials: "include",
         headers: jsonHeaders(),
         body: JSON.stringify({ name: name.trim() || null }),
       });
@@ -93,6 +95,7 @@ export default function AccountTab({ onLogout }) {
     try {
       const res = await fetch(apiUrl("/api/account/password/change"), {
         method: "POST",
+        credentials: "include",
         headers: jsonHeaders(),
         body: JSON.stringify({ current_password: curPw, new_password: newPw }),
       });
@@ -113,6 +116,7 @@ export default function AccountTab({ onLogout }) {
     try {
       const res = await fetch(apiUrl("/api/account/delete"), {
         method: "POST",
+        credentials: "include",
         headers: jsonHeaders(),
         body: JSON.stringify({ password: delPw || null }),
       });

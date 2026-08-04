@@ -2,6 +2,13 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+// The backend does not always land on 8000: when that port is taken it starts on
+// the next free one and reports which via GITPILOT_PORT (`make run` sets it).
+// Hard-coding 8000 here would proxy the dev server at a backend that isn't
+// there, so the target follows the backend instead.
+const backendPort = process.env.GITPILOT_PORT || "8000";
+const backendUrl = process.env.GITPILOT_BACKEND_URL || `http://localhost:${backendPort}`;
+
 export default defineConfig({
   plugins: [react()],
   define: {
@@ -15,9 +22,9 @@ export default defineConfig({
     proxy: process.env.VERCEL
       ? undefined
       : {
-          "/api": "http://localhost:8000",
+          "/api": backendUrl,
           "/ws": {
-            target: "ws://localhost:8000",
+            target: backendUrl.replace(/^http/, "ws"),
             ws: true,
           },
         },

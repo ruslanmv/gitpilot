@@ -134,39 +134,19 @@ else:
 # CORS Configuration
 # ============================================================================
 # Enable CORS to allow frontend (local dev or Vercel) to connect to backend
-allowed_origins_str = os.getenv(
-    "CORS_ORIGINS",
-    "http://localhost:5173,https://gitpilot.ruslanmv.com",
-)
-allowed_origins = [
-    origin.strip().rstrip("/")
-    for origin in allowed_origins_str.split(",")
-    if origin.strip()
-]
+allowed_origins_str = os.getenv("CORS_ORIGINS", "http://localhost:5173")
+allowed_origins = [origin.strip() for origin in allowed_origins_str.split(",")]
 
-logger.info("CORS enabled for origins: %s", allowed_origins)
+logger.info(f"CORS enabled for origins: {allowed_origins}")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=[
-        "GET",
-        "HEAD",
-        "POST",
-        "PUT",
-        "PATCH",
-        "DELETE",
-        "OPTIONS",
-    ],
-    allow_headers=[
-        "Accept",
-        "Authorization",
-        "Content-Type",
-        "X-GitPilot-Session",
-    ],
-    max_age=600,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
+
 
 def get_github_token(authorization: Optional[str] = Header(None)) -> Optional[str]:
     """

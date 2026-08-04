@@ -16,10 +16,29 @@ from rich.table import Table
 from .version import __version__
 from .settings import get_settings, LLMProvider
 from .model_catalog import list_models_for_provider
+from .portutil import DEFAULT_ATTEMPTS, NoFreePortError, find_free_port, resolve_port
 
 
 cli = typer.Typer(add_completion=False, help="GitPilot - Agentic AI assistant for GitHub")
 console = Console()
+
+#: The port GitPilot serves on when nobody says otherwise.
+DEFAULT_PORT = 8000
+
+
+def _port_was_requested(ctx: typer.Context) -> bool:
+    """True when the port came from the user, not from our default.
+
+    A port someone typed (or set in the environment) is a promise to whatever
+    else is configured to reach it, so it is honoured strictly. Click records
+    where each parameter's value came from, which is exactly this question.
+    """
+    try:
+        source = ctx.get_parameter_source("port")
+    except Exception:  # pragma: no cover - older click, or no context
+        return False
+    name = getattr(source, "name", str(source))
+    return name in {"COMMANDLINE", "ENVIRONMENT", "PROMPT"}
 
 
 def _check_configuration():
@@ -225,8 +244,23 @@ def _maybe_bootstrap_workspace(workspace: Path) -> None:
 
 @cli.command()
 def serve(
+    ctx: typer.Context,
     host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind"),
-    port: int = typer.Option(8000, "--port", "-p", help="Port to bind"),
+    port: int = typer.Option(
+        DEFAULT_PORT, "--port", "-p", envvar="GITPILOT_PORT",
+        help="Port to bind. Taken? The next free one is used unless --strict-port.",
+    ),
+    strict_port: bool | None = typer.Option(
+        None, "--strict-port/--no-strict-port", envvar="GITPILOT_STRICT_PORT",
+        help=(
+            "Fail instead of moving to the next free port. Defaults to on when "
+            "you name a port yourself, off when you take the default."
+        ),
+    ),
+    port_file: Path | None = typer.Option(
+        None, "--port-file",
+        help="Write the port actually bound to this file (for scripts and wrappers).",
+    ),
     reload: bool = typer.Option(False, "--reload", help="Enable auto-reload"),
     open_browser: bool = typer.Option(True, "--open/--no-open", help="Open browser"),
     skip_init: bool = typer.Option(
@@ -243,22 +277,37 @@ def serve(
     user gets a two-command onboarding — ``pip install`` then
     ``gitpilot serve`` — without giving up the explicit-flag flow.
     Pass ``--skip-init`` to opt out.
+
+    A busy port does not stop the server: the default drifts to the next
+    free one and says so. A port you asked for is honoured strictly,
+    because something (a proxy, a container map, a bookmark) depends on
+    that exact number. ``--strict-port`` / ``--no-strict-port`` override
+    that in either direction.
     """
     if not skip_init:
         _maybe_bootstrap_workspace(Path.cwd())
 
-    # Check if port is already in use (prevent double-start)
-    import socket
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        if s.connect_ex((host, port)) == 0:
-            console.print(
-                f"[yellow]⚠[/yellow]  Port {port} is already in use. "
-                f"GitPilot may already be running."
-            )
-            console.print(
-                f"[dim]Run 'make stop' or kill the process on port {port} first.[/dim]"
-            )
-            sys.exit(1)
+    if strict_port is None:
+        strict_port = _port_was_requested(ctx)
+
+    try:
+        choice = resolve_port(host, port, strict=strict_port)
+    except NoFreePortError as exc:
+        console.print(f"[red]✗[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    if choice.moved:
+        console.print(
+            f"[yellow]⚠[/yellow]  Port {choice.requested} is in use — "
+            f"starting on [bold]{choice.port}[/bold] instead."
+        )
+    port = choice.port
+
+    if port_file is not None:
+        # Written before the server boots so a wrapper can start polling
+        # immediately; the file is the single source of truth for the port.
+        port_file.parent.mkdir(parents=True, exist_ok=True)
+        port_file.write_text(f"{port}\n", encoding="utf-8")
 
     # Display startup banner
     _display_startup_banner(host, port)
@@ -374,18 +423,21 @@ def doctor_command(
 def main():
     """Main entry point - run server by default."""
     if len(sys.argv) == 1:
-        # No arguments, run server with defaults
-        import socket
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(("127.0.0.1", 8000)) == 0:
-                console.print(
-                    "[yellow]⚠[/yellow]  Port 8000 is already in use. "
-                    "GitPilot may already be running."
-                )
-                sys.exit(1)
-        _display_startup_banner("127.0.0.1", 8000)
+        # No arguments, run server with defaults. Nobody named this port, so a
+        # busy one moves the server rather than stopping it.
         try:
-            _run_server("127.0.0.1", 8000, reload=False)
+            choice = resolve_port("127.0.0.1", DEFAULT_PORT, strict=False)
+        except NoFreePortError as exc:
+            console.print(f"[red]✗[/red] {exc}")
+            sys.exit(1)
+        if choice.moved:
+            console.print(
+                f"[yellow]⚠[/yellow]  Port {choice.requested} is in use — "
+                f"starting on [bold]{choice.port}[/bold] instead."
+            )
+        _display_startup_banner("127.0.0.1", choice.port)
+        try:
+            _run_server("127.0.0.1", choice.port, reload=False)
         except KeyboardInterrupt:
             console.print("\n[yellow]Shutting down GitPilot...[/yellow]")
             sys.exit(0)
@@ -397,12 +449,52 @@ def main():
 def serve_only():
     """Entry point for gitpilot-api command."""
     console.print("[cyan]GitPilot API Server[/cyan]")
-    console.print("[dim]Starting on http://127.0.0.1:8000[/dim]\n")
+    requested = int(os.getenv("GITPILOT_PORT", DEFAULT_PORT))
     try:
-        _run_server("127.0.0.1", 8000, reload=False)
+        # GITPILOT_PORT is a deliberate choice; the built-in default is not.
+        choice = resolve_port(
+            "127.0.0.1", requested, strict=bool(os.getenv("GITPILOT_PORT"))
+        )
+    except NoFreePortError as exc:
+        console.print(f"[red]✗[/red] {exc}")
+        sys.exit(1)
+    if choice.moved:
+        console.print(
+            f"[yellow]⚠[/yellow]  Port {choice.requested} is in use — "
+            f"using {choice.port} instead."
+        )
+    console.print(f"[dim]Starting on http://127.0.0.1:{choice.port}[/dim]\n")
+    try:
+        _run_server("127.0.0.1", choice.port, reload=False)
     except KeyboardInterrupt:
         console.print("\n[yellow]Shutting down...[/yellow]")
         sys.exit(0)
+
+
+@cli.command(name="free-port")
+def free_port(
+    host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host the server will bind"),
+    port: int = typer.Option(DEFAULT_PORT, "--port", "-p", help="Preferred port"),
+    attempts: int = typer.Option(
+        DEFAULT_ATTEMPTS, "--attempts", help="How many consecutive ports to try"
+    ),
+):
+    """Print the port GitPilot would bind — the preferred one, or the next free.
+
+    For scripts and Makefiles that need to know the port *before* the server
+    starts (health polling, a dev proxy, a printed URL). Prints only the number,
+    so it drops straight into a shell substitution:
+
+        PORT=$(gitpilot free-port --port 8000)
+    """
+    try:
+        chosen = find_free_port(host, port, attempts)
+    except (NoFreePortError, ValueError) as exc:
+        # Diagnostics go to stderr so a shell substitution never captures them.
+        Console(stderr=True).print(f"[red]✗[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    # stdout carries the number and nothing else.
+    print(chosen)
 @cli.command()
 def run(
     repo: str = typer.Option(..., "--repo", "-r", help="Repository as owner/repo"),

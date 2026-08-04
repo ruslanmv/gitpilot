@@ -13,6 +13,7 @@ import StreamingMessage from "./StreamingMessage.jsx";
 import SandboxCanvas from "./SandboxCanvas.jsx";
 import FilePreviewPanel from "./FilePreviewPanel.jsx";
 import { SessionWebSocket } from "../utils/ws.js";
+import { classifyPlan, planSummary } from "../utils/planKind.js";
 
 // Map a file extension to the canonical sandbox language tag.  Used
 // when "Open in Canvas" needs to seed SandboxCanvas with the right
@@ -544,54 +545,12 @@ export default function ChatPanel({
         throw new Error(detail || "Failed to generate plan");
       }
 
-      // Classify the plan into one of three kinds so we can render the
-      // right shape — not just "valid or banner":
-      //
-      // * executable    — at least one CREATE/MODIFY/DELETE → plan card
-      //                   with Approve & execute / Reject controls.
-      // * informational — every file is READ (or no files at all on a
-      //                   step that still has a meaningful description)
-      //                   AND the summary is a real answer, not the
-      //                   placeholder.  This is what happens when the
-      //                   user asks "what do you think about this
-      //                   project?" — the planner correctly READs the
-      //                   relevant files and the summary IS the answer.
-      //                   Render the summary as a normal assistant
-      //                   message; do not show plan controls.
-      // * empty         — no steps OR no actionable signal at all →
-      //                   honest failure banner.
-      //
-      // Before this classifier the second case was treated as the
-      // third, surfacing "I couldn't produce a plan" on perfectly
-      // valid READ-only plans.
-      const planSteps = Array.isArray(data?.steps)
-        ? data.steps
-        : Array.isArray(data?.plan?.steps)
-        ? data.plan.steps
-        : [];
-      const PLACEHOLDER_SUMMARY = "Here is the proposed plan for your request.";
-      const summary =
-        data.plan?.summary || data.summary || data.message || PLACEHOLDER_SUMMARY;
-      const hasExecutable = planSteps.some(
-        (s) =>
-          Array.isArray(s?.files) &&
-          s.files.some((f) => ["CREATE", "MODIFY", "DELETE"].includes(f?.action)),
-      );
-      const isReadOnly =
-        planSteps.length > 0 &&
-        !hasExecutable &&
-        planSteps.every(
-          (s) =>
-            !Array.isArray(s?.files) ||
-            s.files.length === 0 ||
-            s.files.every((f) => f?.action === "READ"),
-        );
-      const hasRealSummary = Boolean(summary) && summary !== PLACEHOLDER_SUMMARY;
-      const planKind = hasExecutable
-        ? "executable"
-        : isReadOnly && hasRealSummary
-        ? "informational"
-        : "empty";
+      // Classify the plan into one of three kinds so we can render the right
+      // shape — not just "valid or banner". See utils/planKind.js; it lives
+      // there so the rule can be tested directly instead of being re-derived
+      // from a component that needs a browser to run.
+      const summary = planSummary(data);
+      const planKind = classifyPlan(data);
 
       if (planKind === "executable") {
         setPlan(data);

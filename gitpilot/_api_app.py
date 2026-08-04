@@ -414,39 +414,19 @@ except Exception:  # noqa: BLE001
 # CORS Configuration
 # ============================================================================
 # Enable CORS to allow frontend (local dev or Vercel) to connect to backend
-allowed_origins_str = os.getenv(
-    "CORS_ORIGINS",
-    "http://localhost:5173,https://gitpilot.ruslanmv.com",
-)
-allowed_origins = [
-    origin.strip().rstrip("/")
-    for origin in allowed_origins_str.split(",")
-    if origin.strip()
-]
+allowed_origins_str = os.getenv("CORS_ORIGINS", "http://localhost:5173")
+allowed_origins = [origin.strip() for origin in allowed_origins_str.split(",")]
 
-logger.info("CORS enabled for origins: %s", allowed_origins)
+logger.info(f"CORS enabled for origins: {allowed_origins}")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=[
-        "GET",
-        "HEAD",
-        "POST",
-        "PUT",
-        "PATCH",
-        "DELETE",
-        "OPTIONS",
-    ],
-    allow_headers=[
-        "Accept",
-        "Authorization",
-        "Content-Type",
-        "X-GitPilot-Session",
-    ],
-    max_age=600,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
+
 
 # ──────────────────────────────────────────────────────────────────
 # Request timing middleware (logs slow startup requests for debugging)
@@ -2528,9 +2508,14 @@ async def api_check_repo_access(
 # ============================================================================
 
 @app.get("/api/sessions")
-async def api_list_sessions():
-    """List all saved sessions."""
-    return {"sessions": _session_mgr.list_sessions()}
+async def api_list_sessions(repo: str | None = None, limit: int = 50):
+    """Saved sessions, newest first.
+
+    ``repo`` filters before the limit is applied, so a sidebar scoped to one
+    repository sees that repository's newest sessions rather than whatever
+    survives a global cut.
+    """
+    return {"sessions": _session_mgr.list_sessions(repo_full_name=repo, limit=limit)}
 
 
 @app.post("/api/sessions")
@@ -2555,7 +2540,14 @@ async def api_create_session(payload: dict):
         session.active_repo = repo
 
     _session_mgr.save(session)
-    return {"session_id": session.id, "status": session.status}
+    # The full row, not just the id: the caller can show the new session at the
+    # top of its list straight away instead of waiting for a refetch to tell it
+    # something it already knows.
+    return {
+        "session_id": session.id,
+        "status": session.status,
+        "session": _session_mgr.summary(session),
+    }
 
 
 @app.get("/api/sessions/{session_id}")

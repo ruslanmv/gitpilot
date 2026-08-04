@@ -145,6 +145,8 @@ frontend/.vite/
 *.gpctx
 reports/
 .mcp.env
+# Cached Forge JWT (owner-only); re-minted on demand, never shared.
+.mcp/
 mcp-stack/
 
 # GitPilot dry-run/CLI output artifacts

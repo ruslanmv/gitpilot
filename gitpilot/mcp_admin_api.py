@@ -752,3 +752,102 @@ async def forget_orphan(server_id: str) -> dict[str, Any]:
     snapshot.servers.pop(server_id)
     store.save(snapshot)
     return {"ok": True, "forgotten": server_id}
+
+
+# ---------------------------------------------------------------------------
+# Gateway connection (which Forge, and how we authenticate with it)
+# ---------------------------------------------------------------------------
+# Pointing GitPilot at a different Context Forge -- a colleague's, a staging
+# one, or the one HomePilot already started -- used to mean editing environment
+# variables and restarting. These three endpoints make it a setting, and are
+# the single authority behind every surface: the desktop UI, the mobile UI and
+# the VS Code extension all read and write here.
+#
+# Secrets are write-only by design: reads report whether a credential exists,
+# never what it is.
+
+
+class GatewayConfigBody(BaseModel):
+    """A partial edit of the gateway connection.
+
+    Every field is optional and ``None`` means "not submitted". A settings form
+    always posts a blank password box, and that must never erase a stored
+    password -- so clearing is an explicit flag rather than an empty string.
+    """
+
+    url: str | None = Field(default=None, description="Base URL of the Context Forge gateway.")
+    authMode: str | None = Field(default=None, description="auto | none | token | login")
+    email: str | None = Field(default=None, description="Admin email used to sign in.")
+    password: str | None = Field(default=None, description="Admin password. Stored, never returned.")
+    apiToken: str | None = Field(default=None, description="Forge API token. Stored, never returned.")
+    label: str | None = Field(default=None, description="A name for this gateway, for humans.")
+    clearPassword: bool = Field(default=False, description="Explicitly remove the stored password.")
+    clearApiToken: bool = Field(default=False, description="Explicitly remove the stored API token.")
+
+
+@router.get("/gateway")
+async def get_gateway_config() -> dict[str, Any]:
+    """The current connection, with every secret redacted to a boolean."""
+    from .mcp_gateway_config import load_profile
+
+    return load_profile().public_dict()
+
+
+@router.put("/gateway")
+async def put_gateway_config(body: GatewayConfigBody) -> dict[str, Any]:
+    """Save the connection. Returns the same redacted view a read returns."""
+    from .mcp_gateway_config import GatewayUpdate, apply_update, load_profile, save_profile
+
+    try:
+        updated = apply_update(
+            load_profile(),
+            GatewayUpdate(
+                url=body.url,
+                auth_mode=body.authMode,
+                email=body.email,
+                password=body.password,
+                api_token=body.apiToken,
+                label=body.label,
+                clear_password=body.clearPassword,
+                clear_api_token=body.clearApiToken,
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    save_profile(updated)
+    return updated.public_dict()
+
+
+@router.post("/gateway/test")
+async def test_gateway_config(body: GatewayConfigBody | None = None) -> dict[str, Any]:
+    """Probe a gateway and report what it actually said.
+
+    Accepts an unsaved draft, so "Test connection" works before committing --
+    the credential is proved in the settings screen rather than discovered to
+    be wrong in the middle of a coding run. Values omitted from the draft fall
+    back to what is already stored.
+    """
+    from .mcp_gateway_config import GatewayUpdate, apply_update, load_profile, probe_gateway
+
+    profile = load_profile()
+    if body is not None:
+        try:
+            profile = apply_update(
+                profile,
+                GatewayUpdate(
+                    url=body.url,
+                    auth_mode=body.authMode,
+                    email=body.email,
+                    password=body.password,
+                    api_token=body.apiToken,
+                    label=body.label,
+                    clear_password=body.clearPassword,
+                    clear_api_token=body.clearApiToken,
+                ),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    result = await probe_gateway(profile)
+    return result.as_dict()
