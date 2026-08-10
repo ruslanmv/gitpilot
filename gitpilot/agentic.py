@@ -261,6 +261,26 @@ def _build_llm():
     return _build()
 
 
+def agent_verbose(default: bool = True) -> bool:
+    """Whether CrewAI should narrate what the agents are doing.
+
+    CrewAI's verbose output — the agent banners, the task status, the final
+    answer — goes to the server console and is the only view anyone has of a
+    multi-agent run in progress. Most of the crews here already ask for it;
+    the Lite paths did not, so the exact configuration a small local model
+    needs was also the one that ran silently.
+
+    ``GITPILOT_AGENT_VERBOSE=0`` turns it off for anyone who wants a quiet
+    log, without touching the code.
+    """
+    import os
+
+    raw = os.getenv("GITPILOT_AGENT_VERBOSE")
+    if raw is None:
+        return default
+    return raw.strip().lower() not in ("0", "false", "no", "off", "")
+
+
 class PlanFile(BaseModel):
     """Represents a file operation in a plan step.
 
@@ -1435,14 +1455,14 @@ async def execute_plan_lite(
                         role="Code Writer",
                         goal="Write file content",
                         backstory="You write clean, working code.",
-                        llm=llm, tools=[], verbose=False, allow_delegation=False,
+                        llm=llm, tools=[], verbose=agent_verbose(), allow_delegation=False,
                     )
                     task = _crewai()["Task"](
                         description=create_prompt,
                         expected_output=f"Content for {file.path}",
                         agent=lite_agent,
                     )
-                    crew = _crewai()["Crew"](agents=[lite_agent], tasks=[task], process=_crewai()["Process"].sequential, verbose=False)
+                    crew = _crewai()["Crew"](agents=[lite_agent], tasks=[task], process=_crewai()["Process"].sequential, verbose=agent_verbose())
 
                     def _create():
                         r = crew.kickoff()
@@ -1471,10 +1491,10 @@ async def execute_plan_lite(
                             role="Code Writer",
                             goal="Modify file content",
                             backstory="You write clean, working code.",
-                            llm=llm, tools=[], verbose=False, allow_delegation=False,
+                            llm=llm, tools=[], verbose=agent_verbose(), allow_delegation=False,
                         )
                         task = _crewai()["Task"](description=modify_prompt, expected_output=f"Modified {file.path}", agent=lite_agent)
-                        crew = _crewai()["Crew"](agents=[lite_agent], tasks=[task], process=_crewai()["Process"].sequential, verbose=False)
+                        crew = _crewai()["Crew"](agents=[lite_agent], tasks=[task], process=_crewai()["Process"].sequential, verbose=agent_verbose())
 
                         def _modify():
                             r = crew.kickoff()
@@ -1649,7 +1669,7 @@ async def execute_plan(
                             agents=[code_writer],
                             tasks=[create_task],
                             process=_crewai()["Process"].sequential,
-                            verbose=False,
+                            verbose=agent_verbose(),
                         )
                         result = crew.kickoff()
                         if hasattr(result, "raw"):
@@ -1702,7 +1722,7 @@ async def execute_plan(
                                 agents=[code_writer],
                                 tasks=[modify_task],
                                 process=_crewai()["Process"].sequential,
-                                verbose=False,
+                                verbose=agent_verbose(),
                             )
                             result = crew.kickoff()
                             if hasattr(result, "raw"):

@@ -12,7 +12,10 @@ from typing import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-from gitpilot import api as api_module
+# Import ``_api_app``, not ``gitpilot.api``: the latter is a package that
+# re-exports these names, so monkeypatching it rebinds a copy the endpoint
+# never reads and every stub below is silently ignored.
+from gitpilot import _api_app as api_module
 from gitpilot import flags
 from gitpilot.session import Task
 from gitpilot.task_recorder import (

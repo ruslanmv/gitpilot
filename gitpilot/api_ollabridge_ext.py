@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 
+from fastapi import HTTPException
 from pydantic import BaseModel
 
 from .settings import (
@@ -33,6 +34,8 @@ class SettingsResponseExt(BaseModel):
     watsonx: dict
     ollama: dict
     ollabridge: dict = {}
+    openwebui: dict = {}
+    custom: dict = {}
     ollabridge_connection_type: str | None = None
     langflow_url: str
     has_langflow_plan_flow: bool
@@ -44,6 +47,8 @@ ALL_PROVIDERS = [
     LLMProvider.claude,
     LLMProvider.watsonx,
     LLMProvider.ollama,
+    LLMProvider.openwebui,
+    LLMProvider.custom,
 ]
 
 
@@ -66,6 +71,8 @@ def _build_settings_response(s: AppSettings) -> SettingsResponseExt:
         watsonx=s.watsonx.model_dump(),
         ollama=s.ollama.model_dump(),
         ollabridge=s.ollabridge.model_dump(),
+        openwebui=s.openwebui.model_dump(),
+        custom=s.custom.model_dump(),
         ollabridge_connection_type=ollabridge_connection_type,
         langflow_url=s.langflow_url,
         has_langflow_plan_flow=bool(s.langflow_plan_flow_id),
@@ -100,7 +107,11 @@ def apply_ollabridge_extension(app):
 
     @app.put("/api/settings/llm", response_model=SettingsResponseExt)
     async def api_update_llm_settings_ext(updates: dict):
-        s = update_settings(updates)
+        try:
+            s = update_settings(updates)
+        except ValueError as exc:
+            # Rejected configuration is the caller's mistake, not a crash.
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _build_settings_response(s)
 
     logger.info("OllaBridge settings endpoints registered (overrides original)")

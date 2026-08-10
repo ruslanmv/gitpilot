@@ -1,0 +1,25 @@
+{
+  "name": "mcp-postgre-server",
+  "description": "Production PostgreSQL MCP server for schema discovery, safe SELECT queries, migration validation, EXPLAIN plans, and test fixture generation.",
+  "transport": "streamable-http",
+  "endpoint": "http://mcp-postgre-server:8080/mcp",
+  "enabled": true,
+  "tags": ["database", "postgresql", "code-generation", "testing", "gitpilot"],
+  "auth": {
+    "type": "bearer",
+    "env": "MCP_POSTGRE_SERVER_TOKEN"
+  },
+  "tool_policy": {
+    "default": "allow",
+    "deny": [
+      "postgres_unsafe_execute",
+      "postgres_execute_write"
+    ]
+  },
+  "metadata": {
+    "owner": "gitpilot",
+    "risk_level": "medium",
+    "read_only_default": true,
+    "upstream": "https://github.com/ruslanmv/mcp-postgre-server"
+  }
+}

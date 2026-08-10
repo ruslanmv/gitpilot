@@ -7,13 +7,32 @@ import {
   WebviewToExtensionMessage,
 } from "../../core/types";
 
-export class GitPilotPanel
-  implements vscode.WebviewViewProvider, vscode.Disposable
-{
-  public static readonly viewType = "gitpilot.chatView";
+/**
+ * GitPilot — the one place you talk to it.
+ *
+ * There used to be two: a full chat in the sidebar and a landing page in the
+ * editor, each with its own composer and its own quick actions. A user's first
+ * question was "which one am I supposed to use?", which is not a question a
+ * finished product asks of anyone.
+ *
+ * So there is a single editor tab. Empty, it is the landing page — brand,
+ * "What are we building?", one composer. Send the first message and the same
+ * tab is the conversation. The sidebar navigates and nothing more.
+ *
+ * A surface is still just a bound webview, because VS Code may restore the tab
+ * itself and a second binding must not fight the first.
+ */
+interface ChatSurface {
+  webview: vscode.Webview;
+  bridge: WebviewBridge;
+}
 
-  private _view?: vscode.WebviewView;
-  private _bridge?: WebviewBridge;
+export class GitPilotPanel implements vscode.Disposable {
+  /** The single editor tab. There is no sidebar chat any more. */
+  public static readonly viewType = "gitpilot.chatPanel";
+
+  private readonly _surfaces = new Set<ChatSurface>();
+  private _editorPanel?: vscode.WebviewPanel;
   private readonly _disposables: vscode.Disposable[] = [];
   private readonly _output: vscode.OutputChannel;
 
@@ -23,17 +42,66 @@ export class GitPilotPanel
     private readonly _onMessage: (msg: WebviewToExtensionMessage) => void
   ) {
     this._output = vscode.window.createOutputChannel("GitPilot");
-    this._disposables.push(this._output);
+
+    // Subscribed once for the panel's lifetime rather than per surface: two
+    // surfaces must not mean two syncs for every state change.
+    this._disposables.push(
+      this._output,
+      this._stateStore.onDidChangeState(() => this._syncState())
+    );
   }
 
-  public resolveWebviewView(
-    webviewView: vscode.WebviewView,
-    _context: vscode.WebviewViewResolveContext,
-    _token: vscode.CancellationToken
-  ): void {
-    this._view = webviewView;
+  /**
+   * Open GitPilot, or bring it forward if it is already open.
+   *
+   * One tab: the landing page and the conversation are the same surface at
+   * two moments, so opening "Home" and opening "Chat" land in the same place.
+   */
+  public openInEditor(column: vscode.ViewColumn = vscode.ViewColumn.One): void {
+    if (this._editorPanel) {
+      this._editorPanel.reveal(this._editorPanel.viewColumn ?? column, false);
+      return;
+    }
 
-    webviewView.webview.options = {
+    const panel = vscode.window.createWebviewPanel(
+      GitPilotPanel.viewType,
+      "GitPilot",
+      column,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [
+          vscode.Uri.joinPath(this._extensionUri, "out"),
+          vscode.Uri.joinPath(this._extensionUri, "resources"),
+          vscode.Uri.joinPath(this._extensionUri, "src"),
+        ],
+      }
+    );
+
+    panel.iconPath = vscode.Uri.joinPath(
+      this._extensionUri,
+      "resources",
+      "icon.png"
+    );
+
+    this._editorPanel = panel;
+    const surface = this._attach(panel.webview);
+
+    panel.onDidDispose(() => {
+      this._log("GitPilot tab closed");
+      this._surfaces.delete(surface);
+      this._editorPanel = undefined;
+    });
+  }
+
+  /** True when the conversation already has an editor tab. */
+  public get hasEditorTab(): boolean {
+    return this._editorPanel !== undefined;
+  }
+
+  /** Bind a webview: options, bridge, message handler, HTML, first sync. */
+  private _attach(webview: vscode.Webview): ChatSurface {
+    webview.options = {
       enableScripts: true,
       localResourceRoots: [
         this._extensionUri,
@@ -43,9 +111,10 @@ export class GitPilotPanel
       ],
     };
 
-    this._bridge = new WebviewBridge(webviewView.webview);
+    const surface: ChatSurface = { webview, bridge: new WebviewBridge(webview) };
+    this._surfaces.add(surface);
 
-    const onReceive = webviewView.webview.onDidReceiveMessage(
+    const onReceive = webview.onDidReceiveMessage(
       async (msg: WebviewToExtensionMessage) => {
         try {
           if (msg.type === "INIT") {
@@ -75,25 +144,19 @@ export class GitPilotPanel
       }
     );
 
-    const onStateChange = this._stateStore.onDidChangeState(() => {
-      this._syncState();
-    });
+    this._disposables.push(onReceive);
 
-    const onDispose = webviewView.onDidDispose(() => {
-      this._log("Webview disposed");
-      this.dispose();
-    });
-
-    this._disposables.push(onReceive, onStateChange, onDispose);
-
-    void this._initializeWebview(webviewView);
+    void this._initializeWebview(webview);
+    return surface;
   }
 
   public postMessage(msg: ExtensionToWebviewMessage): void {
-    try {
-      this._bridge?.postMessage(msg);
-    } catch (error) {
-      this._logError("Failed to post message to webview", error);
+    for (const surface of this._surfaces) {
+      try {
+        surface.bridge.postMessage(msg);
+      } catch (error) {
+        this._logError("Failed to post message to webview", error);
+      }
     }
   }
 
@@ -107,23 +170,19 @@ export class GitPilotPanel
       }
     }
 
-    this._bridge = undefined;
-    this._view = undefined;
+    this._surfaces.clear();
+    this._editorPanel?.dispose();
+    this._editorPanel = undefined;
   }
 
-  private async _initializeWebview(
-    webviewView: vscode.WebviewView
-  ): Promise<void> {
+  private async _initializeWebview(webview: vscode.Webview): Promise<void> {
     try {
-      webviewView.webview.html = await this._getHtml(webviewView.webview);
+      webview.html = await this._getHtml(webview);
       this._syncState();
       this._log("GitPilot webview initialized successfully");
     } catch (error) {
       this._logError("Failed to initialize GitPilot webview", error);
-      webviewView.webview.html = this._getFallbackHtml(
-        webviewView.webview,
-        error
-      );
+      webview.html = this._getFallbackHtml(webview, error);
 
       void vscode.window.showErrorMessage(
         "GitPilot Workspace could not be loaded. Open Output → GitPilot for details."
@@ -132,17 +191,15 @@ export class GitPilotPanel
   }
 
   private _syncState(): void {
-    if (!this._bridge) {
-      return;
-    }
-
-    try {
-      this._bridge.postMessage({
-        type: "STATE_SYNC",
-        payload: this._stateStore.state as GitPilotState,
-      });
-    } catch (error) {
-      this._logError("Failed to sync state to webview", error);
+    for (const surface of this._surfaces) {
+      try {
+        surface.bridge.postMessage({
+          type: "STATE_SYNC",
+          payload: this._stateStore.state as GitPilotState,
+        });
+      } catch (error) {
+        this._logError("Failed to sync state to webview", error);
+      }
     }
   }
 

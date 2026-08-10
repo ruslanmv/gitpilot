@@ -1,5 +1,7 @@
 .vscode/**
 .vscode-test/**
+# Test suites are for developing the extension, not for shipping to users.
+test/**
 src/**
 !src/**/*.d.ts
 !src/ui/webview/gitpilotWorkspaceTemplate.html

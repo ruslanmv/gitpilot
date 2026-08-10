@@ -9,12 +9,13 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shutil
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from .checkpoints import HISTORY_ROOT, CheckpointStore, ToolCallDescriptor
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,16 @@ class Checkpoint:
     timestamp: str = field(
         default_factory=lambda: datetime.now(UTC).isoformat(),
     )
+    #: The workspace this checkpoint belongs to. Older checkpoints stored a
+    #: path to a .tar.gz here instead; those simply have no store_id.
     snapshot_path: str | None = None
+    #: Identifier inside the workspace's CheckpointStore.
+    store_id: str | None = None
+    #: False when the workspace was too large to snapshot.
+    has_files: bool = True
+    #: The tool call this checkpoint was taken in front of.
+    tool_name: str = "manual"
+    target_path: str | None = None
 
 
 @dataclass
@@ -115,7 +125,11 @@ class Session:
     def from_dict(cls, data: dict[str, Any]) -> Session:
         data = dict(data)  # shallow copy
         data["messages"] = [Message(**m) for m in data.get("messages", [])]
-        data["checkpoints"] = [Checkpoint(**c) for c in data.get("checkpoints", [])]
+        _cp_fields = set(Checkpoint.__dataclass_fields__)
+        data["checkpoints"] = [
+            Checkpoint(**{k: v for k, v in c.items() if k in _cp_fields})
+            for c in data.get("checkpoints", [])
+        ]
         # Backwards-compatible: sessions saved before the tasks field
         # existed simply load with an empty list.
         data["tasks"] = [Task(**t) for t in data.get("tasks", [])]
@@ -142,9 +156,14 @@ class Session:
 class SessionManager:
     """Manage session lifecycle: create, save, load, list, fork, rewind."""
 
-    def __init__(self, root: Path | None = None):
+    def __init__(self, root: Path | None = None, history_root: Path | None = None):
         self.root = root or SESSION_ROOT
         self.root.mkdir(parents=True, exist_ok=True)
+        # Where workspace snapshots live. Kept alongside the sessions when a
+        # custom root is given, so a test never writes into the real ~/.gitpilot.
+        self.history_root = history_root or (
+            HISTORY_ROOT if root is None else self.root.parent / "history"
+        )
         # Per-instance cache for list_sessions() (see list_sessions() docstring)
         self._list_cache: dict[str, Any] = {}
 
@@ -376,17 +395,45 @@ class SessionManager:
         session: Session,
         workspace_path: Path | None = None,
         description: str = "",
+        tool_name: str = "manual",
+        target_path: str | None = None,
     ) -> Checkpoint:
+        """Snapshot the workspace and the conversation up to this point.
+
+        The files are delegated to :class:`CheckpointStore`, which keeps a
+        shadow git repository per workspace. That replaced a `.tar.gz` of the
+        whole tree per checkpoint: git stores one copy of an unchanged file no
+        matter how many checkpoints reference it, which is the difference
+        between snapshotting before every tool call and only doing it rarely.
+
+        The session keeps the message index, because rewinding a conversation
+        is not something a file store knows how to do.
+        """
         checkpoint = Checkpoint(
             message_index=len(session.messages),
             description=description or f"Checkpoint at message {len(session.messages)}",
         )
+
         if workspace_path and workspace_path.exists():
-            snap_dir = self.root / "snapshots" / session.id
-            snap_dir.mkdir(parents=True, exist_ok=True)
-            archive_base = str(snap_dir / checkpoint.id)
-            shutil.make_archive(archive_base, "gztar", root_dir=str(workspace_path))
-            checkpoint.snapshot_path = archive_base + ".tar.gz"
+            store = CheckpointStore(workspace_path, history_root=self.history_root)
+            try:
+                record = store.snapshot(
+                    ToolCallDescriptor(
+                        name=tool_name,
+                        target_path=target_path,
+                        note=checkpoint.description,
+                    ),
+                    transcript=[asdict(m) for m in session.messages],
+                )
+                checkpoint.snapshot_path = str(workspace_path)
+                checkpoint.store_id = record.id
+                checkpoint.has_files = record.has_files
+                checkpoint.tool_name = tool_name
+                checkpoint.target_path = target_path
+            except Exception as e:
+                # A checkpoint that cannot be taken must not take the tool call
+                # down with it; the conversation index is still worth keeping.
+                logger.warning("workspace snapshot failed: %s", e)
 
         session.checkpoints.append(checkpoint)
         self.save(session)
@@ -398,6 +445,12 @@ class SessionManager:
         checkpoint_id: str,
         workspace_path: Path | None = None,
     ) -> Session:
+        """Put the files and the conversation back as they were.
+
+        Both halves, or it is not a rewind: restoring files under a transcript
+        that still describes the work would leave the model reasoning about
+        edits that no longer exist.
+        """
         checkpoint = None
         for cp in session.checkpoints:
             if cp.id == checkpoint_id:
@@ -408,13 +461,21 @@ class SessionManager:
 
         session.messages = session.messages[: checkpoint.message_index]
 
-        if checkpoint.snapshot_path and workspace_path:
-            snap = Path(checkpoint.snapshot_path)
-            if snap.exists():
-                if workspace_path.exists():
-                    shutil.rmtree(workspace_path)
-                workspace_path.mkdir(parents=True, exist_ok=True)
-                shutil.unpack_archive(str(snap), str(workspace_path))
+        target = workspace_path or (
+            Path(checkpoint.snapshot_path) if checkpoint.snapshot_path else None
+        )
+        if checkpoint.store_id and target and target.exists():
+            store = CheckpointStore(target, history_root=self.history_root)
+            try:
+                store.restore(checkpoint.store_id)
+            except FileNotFoundError:
+                # The shadow repo was pruned or removed. The conversation
+                # rewind still stands; saying nothing would be worse.
+                logger.warning(
+                    "checkpoint %s has no stored snapshot; rewound the "
+                    "conversation only",
+                    checkpoint.store_id,
+                )
 
         idx = session.checkpoints.index(checkpoint)
         session.checkpoints = session.checkpoints[: idx + 1]

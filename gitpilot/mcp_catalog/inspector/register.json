@@ -1,0 +1,26 @@
+{
+  "name": "mcp-inspector-server",
+  "description": "MCP server for validating, invoking, debugging, and reporting on other allowlisted MCP servers.",
+  "transport": "streamable-http",
+  "endpoint": "http://mcp-inspector-server:8081/mcp",
+  "enabled": true,
+  "tags": ["mcp", "inspector", "debugging", "contract-tests", "gitpilot", "code-generation"],
+  "auth": {
+    "type": "bearer",
+    "env": "MCP_INSPECTOR_SERVER_TOKEN"
+  },
+  "tool_policy": {
+    "default": "allow",
+    "warn": ["inspector.invoke_tool_test"],
+    "deny": []
+  },
+  "healthcheck": {
+    "url": "http://mcp-inspector-server:8081/health",
+    "interval_seconds": 30
+  },
+  "metadata": {
+    "owner": "gitpilot",
+    "risk_level": "low",
+    "upstream": "https://github.com/ruslanmv/mcp-inspector-server"
+  }
+}

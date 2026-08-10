@@ -24,9 +24,12 @@ restarts. The shape is intentionally small:
       }
     }
 
-Catalog data lives in
-``gitpilot/extensions/mcp_plugins/<id>/register.json`` so a release
-artefact ships with the curated set.
+Catalogue data ships inside the wheel at
+``gitpilot/mcp_catalog/<slug>/register.json``, with the repo's
+``extensions/mcp_plugins/`` (also the Docker build context) as a
+developer fallback.  Servers beyond the curated set are discovered
+through :mod:`gitpilot.mcp_catalog_remote`, which searches a remote
+registry.
 """
 from __future__ import annotations
 
@@ -230,40 +233,66 @@ def _default_token_env(server_id: str) -> str:
 # ---------------------------------------------------------------------------
 # Catalog (read-only, packaged with GitPilot)
 # ---------------------------------------------------------------------------
+def _catalog_dirs() -> list[Path]:
+    """Where the bundled server manifests may live, best source first.
+
+    ``gitpilot/mcp_catalog/`` ships inside the wheel, so a ``pip install``
+    user has a catalogue. ``extensions/mcp_plugins/`` exists only in a repo
+    checkout — it is also the Docker build context — and is kept as a
+    fallback so a developer editing a manifest sees the change without
+    reinstalling.
+    """
+    here = Path(__file__).resolve().parent
+    return [
+        here / "mcp_catalog",
+        here.parent / "extensions" / "mcp_plugins",
+    ]
+
+
 def _catalog_dir() -> Path:
-    # gitpilot/mcp_admin_api.py  ->  gitpilot/  ->  <repo root>
-    here = Path(__file__).resolve().parent.parent
-    return here / "extensions" / "mcp_plugins"
+    """First catalogue directory that exists; the packaged one otherwise."""
+    for candidate in _catalog_dirs():
+        if candidate.exists():
+            return candidate
+    return _catalog_dirs()[0]
 
 
 def load_catalog() -> list[dict[str, Any]]:
+    """Bundled MCP servers, deduplicated across candidate directories."""
     items: list[dict[str, Any]] = []
-    base = _catalog_dir()
-    if not base.exists():
-        return items
-    for child in sorted(base.iterdir()):
-        if not child.is_dir():
+    seen: set[str] = set()
+
+    for base in _catalog_dirs():
+        if not base.exists():
             continue
-        manifest = child / "register.json"
-        if not manifest.exists():
-            continue
-        try:
-            with manifest.open() as fh:
-                payload = json.load(fh)
-        except (OSError, json.JSONDecodeError):
-            continue
-        items.append(
-            {
-                "id": payload.get("name") or child.name,
-                "slug": child.name,
-                "description": payload.get("description", ""),
-                "tags": payload.get("tags", []),
-                "endpoint": payload.get("endpoint", ""),
-                "auth": payload.get("auth", {}),
-                "metadata": payload.get("metadata", {}),
-                "tool_policy": payload.get("tool_policy", {}),
-            }
-        )
+        for child in sorted(base.iterdir()):
+            if not child.is_dir():
+                continue
+            manifest = child / "register.json"
+            if not manifest.exists():
+                continue
+            try:
+                with manifest.open() as fh:
+                    payload = json.load(fh)
+            except (OSError, json.JSONDecodeError):
+                continue
+            identifier = payload.get("name") or child.name
+            if identifier in seen:
+                continue
+            seen.add(identifier)
+            items.append(
+                {
+                    "id": identifier,
+                    "slug": child.name,
+                    "description": payload.get("description", ""),
+                    "tags": payload.get("tags", []),
+                    "endpoint": payload.get("endpoint", ""),
+                    "auth": payload.get("auth", {}),
+                    "metadata": payload.get("metadata", {}),
+                    "tool_policy": payload.get("tool_policy", {}),
+                    "source": "bundled",
+                }
+            )
     return items
 
 
@@ -355,6 +384,22 @@ class ToolToggleRequest(BaseModel):
     enabled: bool
 
 
+class RegistryInstallRequest(BaseModel):
+    """Install a server discovered in a remote registry.
+
+    The endpoint is looked up from the registry rather than trusted from the
+    caller, so a client cannot use this route to point a well-known server id
+    at an endpoint of its choosing. Supplying ``endpoint`` explicitly is still
+    allowed — that is the custom-install path — but it is then recorded as
+    such rather than as a registry entry.
+    """
+
+    entry_id: str = Field(..., description="Server id as listed by the registry")
+    registry_url: str | None = None
+    endpoint: str | None = None
+    auth_token_env: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Router
 # ---------------------------------------------------------------------------
@@ -429,6 +474,78 @@ async def list_catalog() -> dict[str, Any]:
             item["id"]
         ].installed
     return {"items": catalog}
+
+
+@router.get("/registry/search")
+async def search_remote_catalog(
+    q: str = "",
+    registry_url: str | None = None,
+) -> dict[str, Any]:
+    """Search a remote MCP registry (MatrixHub by default).
+
+    A registry that is down or unrecognisable yields an empty list and a
+    reason, never a 5xx — the settings page rendering this must survive a
+    registry outage.
+    """
+    from .mcp_catalog_remote import registry_url as default_registry
+    from .mcp_catalog_remote import search_registry
+
+    items, error = await search_registry(q, base_url=registry_url)
+
+    # Mark what is already installed so the UI does not offer it twice.
+    snapshot = _store().load()
+    for item in items:
+        state = snapshot.servers.get(item["id"])
+        item["installed"] = bool(state and state.installed)
+
+    return {
+        "items": items,
+        "error": error,
+        "registry_url": (registry_url or default_registry()),
+    }
+
+
+@router.post("/registry/install")
+async def install_from_registry(req: RegistryInstallRequest) -> dict[str, Any]:
+    """Install a server found in a remote registry."""
+    from .mcp_catalog_remote import fetch_manifest
+
+    endpoint = req.endpoint or ""
+    auth_env = req.auth_token_env or ""
+    description = ""
+    tags: list[str] = []
+
+    if not endpoint:
+        manifest, error = await fetch_manifest(req.entry_id, base_url=req.registry_url)
+        if manifest is None:
+            raise HTTPException(status_code=404, detail=error or "not found in registry")
+        endpoint = manifest.get("endpoint", "")
+        auth_env = auth_env or (manifest.get("auth") or {}).get("env", "")
+        description = manifest.get("description", "")
+        tags = list(manifest.get("tags") or [])
+
+    if not endpoint:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{req.entry_id!r} has no endpoint; supply one to install it",
+        )
+
+    snapshot = _store().load()
+    # Installed disabled: gaining a server must never silently widen what the
+    # agents can already do. Enabling is a separate, visible act.
+    server = ServerState(
+        id=req.entry_id,
+        installed=True,
+        enabled=False,
+        endpoint=endpoint,
+        auth_token_env=auth_env,
+        description=description,
+        tags=tags,
+        source="registry",
+    )
+    snapshot.servers[req.entry_id] = server
+    _store().save(snapshot)
+    return {"ok": True, "server": server.to_dict() | {"id": server.id}}
 
 
 @router.post("/servers/install")

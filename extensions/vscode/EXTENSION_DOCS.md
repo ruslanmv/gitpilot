@@ -33,7 +33,7 @@ GitPilot adds an AI-powered sidebar to VS Code. You can:
 - Run security scans across your workspace
 - Generate tests, fix bugs, and review code
 
-GitPilot works with 5 AI providers: OpenAI, Claude, Ollama, Watsonx, and OllaBridge. You can switch between them at any time.
+GitPilot works with seven AI providers: OllaBridge, Ollama, Open WebUI, OpenAI, Claude, IBM watsonx, and any OpenAI-compatible custom endpoint. You can switch between them at any time, from inside VS Code.
 
 ---
 
@@ -99,8 +99,8 @@ make compile
 After installing, you'll see a GitPilot icon in the left sidebar.
 
 1. **Click it** to open the GitPilot panel
-2. **Set up a provider** — click "Provider" in the panel header
-3. **Choose your AI** — Ollama (free, local) or OllaBridge (free, cloud) are the easiest
+2. **Set up a provider** — run `GitPilot: Settings` and open **AI Providers**
+3. **Choose your AI** — OllaBridge (free, cloud) or Ollama (free, local) are the easiest
 4. **Type a message** — try "Explain this project"
 5. **Press Enter** or click Send
 
@@ -239,20 +239,34 @@ Security findings appear in the VS Code **Problems** panel (`Ctrl+Shift+M`) with
 
 ### Switching providers
 
-1. Click "Provider" in the sidebar header
-2. Select a provider from the dropdown
-3. Enter your API key (if needed)
-4. The model is selected automatically
+Run `GitPilot: Settings` and open **AI Providers**. The overview shows the
+server connection, the active provider, and the rest; click one to open its
+configuration page, then press **Save and activate**.
+
+Only one provider's form is shown at a time, and **‹ Back to AI Providers**
+returns to the overview without leaving the settings tab.
 
 ### Provider comparison
 
 | Provider | Cost | Speed | Privacy | Best for |
 |---|---|---|---|---|
-| **Ollama** | Free | Fast | 100% local | Privacy-focused, offline work |
 | **OllaBridge** | Free | Medium | Cloud | Quick setup, no installation |
+| **Ollama** | Free | Fast | 100% local | Privacy-focused, offline work |
+| **Open WebUI** | Free | Varies | Self-hosted | Teams already running an instance |
 | **OpenAI** | Paid | Fast | Cloud | Best quality (GPT-4o) |
 | **Claude** | Paid | Fast | Cloud | Long context, reasoning |
-| **Watsonx** | Paid | Medium | Cloud | Enterprise, IBM ecosystem |
+| **IBM watsonx** | Paid | Medium | Cloud | Enterprise, IBM ecosystem |
+| **Custom endpoint** | Varies | Varies | Yours | Corporate gateways, self-hosted inference |
+
+### Where API keys live
+
+Keys are stored by the **GitPilot backend**, not in VS Code settings — so they
+are never written to `settings.json` and never picked up by Settings Sync.
+
+The settings page never receives a stored key. It is told only that one
+exists, plus its last four characters. An empty key field therefore means
+"keep the current key"; clearing one is the separate, confirmed **Remove API
+key** action.
 
 ### Ollama setup (recommended for free use)
 
@@ -263,9 +277,76 @@ curl -fsSL https://ollama.com/install.sh | sh
 # 2. Pull a model
 ollama pull llama3
 
-# 3. In VS Code, select Ollama as your provider
-# It connects to http://localhost:11434 automatically
+# 3. GitPilot: Settings -> AI Providers -> Ollama (Local)
+# Defaults to http://127.0.0.1:11434
 ```
+
+### Custom endpoint
+
+For any OpenAI-compatible gateway. Set the endpoint URL, the API key, the
+model id, and any **request headers** your gateway requires for attribution
+or routing — a full `/chat/completions` URL is accepted and trimmed to its
+root. GitPilot discovers models from a published catalogue at the endpoint's
+origin when one is served, and falls back to the `/models` listing.
+
+### When the server is not running
+
+The settings page still opens, and offers **Start local server**, **Reconnect**
+and **Change server URL** instead of a dead-end dialog. Starting a server runs
+`gitpilot serve --no-open` and follows the port it actually binds.
+
+See the [full provider guide](https://github.com/ruslanmv/gitpilot/blob/master/docs/vscode/ai-providers.md).
+
+---
+
+## Agents and Topologies
+
+GitPilot dispatches to **ten specialized agents**. A request router picks the
+ones that fit each request:
+
+| Agent | What it does |
+|---|---|
+| Repository Explorer | Maps structure, finds relevant files, identifies patterns and test conventions |
+| Repository Refactor Planner | Turns exploration into a step-by-step plan with a test strategy |
+| Expert Code Writer | Executes the plan, running tests between steps |
+| Code Review & Analysis Specialist | Audits for security, quality, coverage, performance |
+| GitHub Issue Management Specialist | Creates, updates and triages issues |
+| Pull Request Management Specialist | Branches, commits, pushes, opens PRs |
+| Search & Discovery Specialist | Searches code, repos, issues, users |
+| GitHub Learning & Guidance Specialist | Explains GitHub features and practices |
+| Local File Editor | Reads and writes files in your workspace |
+| Terminal & Shell Executor | Runs commands in the sandbox |
+
+### Which agents run
+
+The **default** plan-and-execute flow runs three of them:
+Explorer → Planner → Coder. There is no review stage in it. Other requests
+skip that chain entirely — a review request goes straight to the Code
+Reviewer.
+
+To make a stage mandatory, pin a **topology**:
+`GitPilot: Settings` → **Agent** → *Agent topology*, or
+`GitPilot: Select Topology`.
+
+| Topology | Sequence |
+|---|---|
+| **Automatic** (recommended) | Routed per request |
+| Feature Builder | Explorer → Planner → Coder → Reviewer → PR Manager |
+| Bug Hunter | Explorer → Coder → Reviewer → PR Manager |
+| Code Inspector | Explorer → Reviewer (read-only) |
+| Architect Mode | Explorer → Planner (read-only) |
+| Quick Fix | Coder → PR Manager |
+
+Plus routed system topologies: Default, GitPilot Code (ReAct + Subagents),
+Lite Mode (small LLMs), and an experimental Tool-Augmented ReAct.
+
+The preference is saved on the GitPilot backend — which is what actually
+routes work — so it applies to every client, not just this editor. Pipelines
+containing a write-capable agent create a working branch before touching
+anything.
+
+See the [topology guide](https://github.com/ruslanmv/gitpilot/blob/master/docs/vscode/agent-topologies.md)
+and the [agent architecture reference](https://github.com/ruslanmv/gitpilot/blob/master/docs/agents.md).
 
 ---
 
@@ -291,7 +372,7 @@ The extension can also run a **local agent** (in-process) using the built-in
 
 ## Commands Reference
 
-All 55 commands are available via `Ctrl+Shift+P`:
+All 64 commands are available via `Ctrl+Shift+P`:
 
 **Chat**: openChat, sendMessage, newSession, loadSession, deleteSession, refreshSessions
 
@@ -301,7 +382,7 @@ All 55 commands are available via `Ctrl+Shift+P`:
 
 **Git**: gitStatus, gitDiffAnalysis, smartCommit, createPR, branchManager, conflictResolver, stashManager, repoHealthCheck, commitSearch, impactAnalysis, naturalLanguageGit
 
-**Setup**: setServer, reconnect, showServerInfo, selectProvider, selectModel, openLlmSettings, setLlmApiKey, setLlmBaseUrl, setPermissionMode, setupWizard, toggleLiteMode
+**Setup**: openSettings, setServer, reconnect, showServerInfo, selectProvider, selectModel, openLlmSettings, setLlmApiKey, setLlmBaseUrl, setPermissionMode, setupWizard, toggleLiteMode
 
 **Advanced**: invokeSkill, installPlugin, uninstallPlugin, refreshSkills, showAgentFlow, selectTopology, runCommand
 

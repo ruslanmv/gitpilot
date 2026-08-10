@@ -6,7 +6,7 @@
 
 ### The first open-source multi-agent AI coding assistant.
 
-Multiple specialized agents — including Explorer, Planner, Coder, and Reviewer — collaborate seamlessly on every task. By default, GitPilot requests confirmation before executing high-impact actions. Switch to Auto or Plan mode at any time.
+Ten specialized agents — Explorer, Planner, Coder, Reviewer and six more — collaborate on every task, coordinated by a router that picks the right ones for the request. By default, GitPilot requests confirmation before executing high-impact actions. Switch to Auto or Plan mode at any time.
 
 [![PyPI](https://img.shields.io/pypi/v/gitcopilot?style=flat-square&color=D95C3D&labelColor=1C1C1F&label=pypi)](https://pypi.org/project/gitcopilot/)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-D95C3D?style=flat-square&labelColor=1C1C1F)](https://www.python.org/)
@@ -29,16 +29,30 @@ Multiple specialized agents — including Explorer, Planner, Coder, and Reviewer
 
 ## Why GitPilot?
 
-Most AI coding tools are a **single model behind a chat box**. GitPilot is fundamentally different: it deploys a **team of four specialized AI agents** that collaborate on every task — just like a real engineering team.
+Most AI coding tools are a **single model behind a chat box**. GitPilot is fundamentally different: a **request router** inspects each task and dispatches it to the specialists that fit — just like a real engineering team.
 
 > **Matrix‑native:** GitPilot is the worker for [Matrix Builder](https://github.com/agent-matrix/matrix-builder) — it runs a signed Matrix Bundle under contract via `POST /api/v1/gitpilot/runs` (A2A‑secured), returns a controlled diff, and never approves or commits its own work.
 
+### The agent roster
+
+Ten specialists. Which ones run depends on the request and the
+[topology](docs/agents.md) in force — a small change may use one, a feature
+build uses five.
+
 | Agent | Role | What it does |
 |---|---|---|
-| **Explorer** | Context | Reads your full repo, git log, test suite, and dependencies so the plan starts with real knowledge — not guesses |
+| **Explorer** | Context | Reads your repo, git log, test suite, and dependencies so the plan starts with real knowledge — not guesses |
 | **Planner** | Strategy | Drafts a safe, step-by-step plan with diffs and surfaces risks before any file is touched |
 | **Coder** | Execution | Writes code, runs your tests, and self-corrects on failure — iterating until the suite passes |
-| **Reviewer** | Quality | Validates the output, re-runs the suite, and drafts a commit message and PR summary |
+| **Reviewer** | Quality | Audits changes for security, quality, test coverage and performance, ranked by severity |
+| **Issue Manager** | GitHub | Creates, updates, triages and closes issues |
+| **PR Manager** | GitHub | Opens branches, commits, pushes, and drafts pull requests with a test plan |
+| **Search & Discovery** | GitHub | Searches code, repositories, issues and users |
+| **Learning & Guidance** | GitHub | Explains GitHub features and best practices |
+| **Local Editor** | Workspace | Reads and writes files directly in your local workspace |
+| **Terminal** | Workspace | Runs shell commands inside the sandbox |
+
+**Full details:** [Agent architecture and topologies](docs/agents.md).
 
 **You control how the agent runs.** Three execution modes — selectable per session from the VS Code compose bar or backend API:
 
@@ -151,20 +165,21 @@ The sidebar panel gives you everything in one place:
 | **Smart Commit** | AI-generated commit messages |
 | **Code Lens** | Inline "Explain / Review" hints on functions |
 | **Settings Tab** | Branded settings page (General, Provider, Agent, Editor) |
-| **New Chat** | One click to clear chat and start a fresh session |
+| **GitPilot Home** | Landing page in the editor — one composer, contextual to the file you have open |
+| **New Task** | One click from the sidebar to Home, ready for the next thing |
 
 ### Execution modes
 
-The compose bar includes a mode selector that controls how the multi-agent pipeline runs:
+The compose bar carries a mode picker that controls how the multi-agent pipeline runs:
 
 ```
-[ Auto | Ask | Plan ]    [ Send ]    [ New Chat ]
+[+] [@] [/]              Ask ⌄        [ ↑ ]
 ```
 
 | Mode | VS Code setting | Backend value | What happens |
 |---|---|---|---|
 | **Ask** (default) | `gitpilot.permissionMode: "normal"` | `"normal"` | Each dangerous tool (write, edit, run, commit) shows an approval card |
-| **Auto** | `gitpilot.permissionMode: "auto"` | `"auto"` | Tools execute automatically — no approval prompts |
+| **Agent** (shown as `Auto` in older builds) | `gitpilot.permissionMode: "auto"` | `"auto"` | Tools execute automatically — no approval prompts |
 | **Plan** | `gitpilot.permissionMode: "plan"` | `"plan"` | Plan is generated and displayed, all writes/commands blocked |
 
 Mode changes are persisted to VS Code settings and synced to the backend via `PUT /api/permissions/mode`.
@@ -182,8 +197,17 @@ You send a request
     → Ask mode: approval card shown (Allow / Allow for session / Deny)
     → Auto mode: executes immediately
     → Plan mode: blocked
-  → Tests run, Reviewer validates
+  → Tests run
   → Done — Apply Patch or Revert
+```
+
+The default flow stops at Coder. To add a review step — or a PR step — pick a
+topology that includes one (Settings → Agent → Agent topology, or
+`GitPilot: Select Topology`). **Feature Builder** runs the full
+Explorer → Planner → Coder → Reviewer → PR Manager sequence. See
+[Agent architecture and topologies](docs/agents.md).
+
+```
 ```
 
 > **Note:** Simple questions (e.g. "explain this code") may return a direct answer without generating a multi-step plan. This is expected — the planner activates for tasks that require file changes or multi-step execution.
@@ -213,17 +237,22 @@ How it works under the hood:
 - `PatchApplier` writes files via `vscode.workspace.fs.writeFile`
 - After apply, project context refreshes and the first file opens
 
-> **Note:** For folder-only sessions (no GitHub remote), code generation uses the LLM directly with structured output instructions. For GitHub-connected sessions, the full CrewAI multi-agent pipeline (Explorer → Planner → Coder → Reviewer) handles planning and execution.
+> **Note:** For folder-only sessions (no GitHub remote), code generation uses the LLM directly with structured output instructions. For GitHub-connected sessions, the CrewAI pipeline (Explorer → Planner → Coder) handles planning and execution. Review and PR stages are added by selecting a topology that includes them — see [Agent architecture and topologies](docs/agents.md).
 
 ### Supported AI Providers
 
+Configure any of these from **GitPilot: Settings → AI Providers** inside VS Code —
+no browser, no config files. See the [provider setup guide](docs/vscode/ai-providers.md).
+
 | Provider | Setup | Free? |
 |---|---|---|
+| **OllaBridge** | Works out of the box; sign in for more models | Yes |
 | **Ollama** | Install Ollama, run `ollama pull llama3` | Yes |
-| **OllaBridge** | Works out of the box (cloud Ollama) | Yes |
-| **OpenAI** | Add your API key in settings | Paid |
+| **Open WebUI** | Point GitPilot at your instance URL | Yes (self-hosted) |
+| **OpenAI** | Add your API key | Paid |
 | **Claude** | Add your Anthropic API key | Paid |
-| **Watsonx** | Add IBM credentials | Paid |
+| **Watsonx** | Add IBM API key and project ID | Paid |
+| **Custom endpoint** | Any OpenAI-compatible gateway — URL, key, headers | Depends |
 
 ---
 
@@ -267,12 +296,19 @@ The web interface includes:
   </picture>
 </p>
 
-GitPilot uses a multi-agent system powered by CrewAI:
+GitPilot uses a multi-agent system powered by CrewAI. A **request router**
+classifies each request and dispatches it to the specialists that fit; the
+default plan-and-execute flow is:
 
 1. **Explorer** reads your repo structure, git log, and key files
 2. **Planner** creates a safe step-by-step plan with diffs
-3. **Executor** writes code and runs tests, self-correcting on failure
-4. **Reviewer** validates the output and summarises what changed
+3. **Coder** writes code and runs tests, self-correcting on failure
+
+Other requests skip that chain entirely — a code-review request goes straight
+to the **Reviewer**, an issue request to the **Issue Manager**. Selecting a
+**topology** replaces the routing with a fixed sequence, which is how you add
+a review or PR stage to every task. Ten agents and nine topologies are
+documented in [Agent architecture and topologies](docs/agents.md).
 
 In **Ask** mode (default), you approve every change before it's applied. In **Auto** mode, tools execute without prompts. In **Plan** mode, only the plan is generated — no files are touched.
 

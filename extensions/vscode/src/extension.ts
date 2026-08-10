@@ -49,13 +49,19 @@ import { registerSetupCommands } from "./commands/setupCommands";
 import { registerProviderCommands } from "./commands/providerCommands";
 import { registerMcpGatewayCommands } from "./commands/mcpGatewayCommands";
 import { McpGatewayClient } from "./api/mcpGatewayClient";
+import { McpClient } from "./api/mcpClient";
+import { McpForgeInstaller } from "./services/mcp/McpForgeInstaller";
 import { registerSessionCommands } from "./commands/sessionCommands";
 import { registerChatCommandsV2 } from "./commands/chatCommands";
 import { registerPhase4Commands } from "./commands/phase4Commands";
 
 import { StateStore } from "./core/stateStore";
+import { Checkpoint, CheckpointClient } from "./api/checkpointClient";
+import { DiagnosticsService } from "./services/diagnostics/DiagnosticsService";
 import { GitPilotEvents } from "./core/events";
 
+import { GitPilotServerController } from "./services/server/GitPilotServerController";
+import { GitPilotNavView } from "./ui/webview/GitPilotNavView";
 import { WorkspaceResolver } from "./services/workspace/workspaceResolver";
 import { GitContextService } from "./services/workspace/gitContextService";
 import { ModeResolver } from "./services/workspace/modeResolver";
@@ -165,7 +171,63 @@ export function activate(context: vscode.ExtensionContext): void {
   const sessionClient = new SessionClient(client);
   const chatClientV2 = new ChatClient(client);
   const settingsClient = new SettingsClient(client);
+  // Checkpoints are what make Agent mode a choice rather than a one-way door.
+  const checkpointClient = new CheckpointClient(client);
+
+  /**
+   * The answer to "it says connected, so why did that not work?".
+   *
+   * Logs every request, notices a backend built from a different commit than
+   * the extension, and can print the whole picture on demand.
+   */
+  const diagnostics = new DiagnosticsService(
+    client,
+    output,
+    context.extension.packageJSON.version as string
+  );
+  context.subscriptions.push(diagnostics);
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gitpilot.diagnostics", async () => {
+    const report = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Window, title: "Collecting GitPilot diagnostics\u2026" },
+      () => diagnostics.report()
+    );
+
+    // A document, not the Output channel: it can be selected, copied into an
+    // issue, and read without scrolling past everything else logged today.
+    const doc = await vscode.workspace.openTextDocument({
+      content: report,
+      language: "markdown",
+    });
+      await vscode.window.showTextDocument(doc, { preview: false });
+    })
+  );
   const repoClient = new RepoClient(client);
+
+  // Owns the local `gitpilot serve` process so the settings page can recover
+  // from a stopped backend without sending the user to a terminal.
+  const serverController = new GitPilotServerController(client, output);
+
+  // MCP: attaching servers augments what the agents can do, and the installer
+  // brings up a Context Forge to attach them to.
+  const mcpClient = new McpClient(client);
+  const forgeInstaller = new McpForgeInstaller(output);
+
+  /** Open the branded settings tab, wired to the live backend clients. */
+  const openSettingsPanel = async (): Promise<void> => {
+    const { GitPilotSettingsPanel } = await import(
+      "./ui/webview/GitPilotSettingsPanel"
+    );
+    GitPilotSettingsPanel.open({
+      extensionUri: context.extensionUri,
+      client,
+      settingsClient,
+      serverController,
+      mcpClient,
+      forgeInstaller,
+    });
+  };
 
   const workspaceResolver = new WorkspaceResolver();
   const gitContextService = new GitContextService();
@@ -194,6 +256,8 @@ export function activate(context: vscode.ExtensionContext): void {
     stateStore,
     events,
     workspaceResolver,
+    serverController,
+    vscode.commands.registerCommand("gitpilot.openSettings", openSettingsPanel),
     {
       dispose: () => {
         try {
@@ -227,6 +291,76 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     gitpilotPanel.postMessage(message);
   };
+
+  /**
+   * Workspace files, for `@` completion and the attach picker.
+   *
+   * Cached for a few seconds: `@` filters on every keystroke, and re-globbing
+   * a large repository per character is the difference between a dropdown that
+   * feels instant and one that stutters.
+   */
+  const FILE_INDEX_TTL_MS = 15_000;
+  const FILE_INDEX_EXCLUDE =
+    "**/{node_modules,.git,dist,out,build,.venv,venv,__pycache__,.next,target,vendor}/**";
+  let fileIndexCache: { at: number; files: string[] } | undefined;
+
+  const listWorkspaceFiles = async (): Promise<string[]> => {
+    if (fileIndexCache && Date.now() - fileIndexCache.at < FILE_INDEX_TTL_MS) {
+      return fileIndexCache.files;
+    }
+
+    const uris = await vscode.workspace.findFiles("**/*", FILE_INDEX_EXCLUDE, 3000);
+    const files = uris
+      .map((uri) => vscode.workspace.asRelativePath(uri, false))
+      .sort((a, b) => a.localeCompare(b));
+
+    fileIndexCache = { at: Date.now(), files };
+    return files;
+  };
+
+  /**
+   * Mirror the editor selection into the composer.
+   *
+   * A single-line caret is not a selection worth attaching — pushing
+   * "user.ts:42" on every cursor move would make the chip flicker for no
+   * benefit — so only a real range counts. The body travels with it, capped,
+   * so the model sees the code rather than a coordinate.
+   */
+  const SELECTION_TEXT_LIMIT = 4000;
+
+  const publishEditorContext = (): void => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document.uri.scheme !== "file" || editor.selection.isEmpty) {
+      postMessageToPanel({ type: "EDITOR_CONTEXT", payload: undefined });
+      return;
+    }
+
+    const sel = editor.selection;
+    const start = sel.start.line + 1;
+    const end = sel.end.line + 1;
+    const text = editor.document.getText(sel);
+
+    postMessageToPanel({
+      type: "EDITOR_CONTEXT",
+      payload: {
+        file: vscode.workspace.asRelativePath(editor.document.uri, false),
+        range: start === end ? `${start}` : `${start}-${end}`,
+        text:
+          text.length > SELECTION_TEXT_LIMIT
+            ? `${text.slice(0, SELECTION_TEXT_LIMIT)}\n… (${text.length - SELECTION_TEXT_LIMIT} more characters)`
+            : text,
+      },
+    });
+  };
+
+  context.subscriptions.push(
+    vscode.window.onDidChangeTextEditorSelection(publishEditorContext),
+    vscode.window.onDidChangeActiveTextEditor(publishEditorContext),
+    // A saved file can change what is worth attaching, and the index is
+    // cheap to drop.
+    vscode.workspace.onDidCreateFiles(() => { fileIndexCache = undefined; }),
+    vscode.workspace.onDidDeleteFiles(() => { fileIndexCache = undefined; })
+  );
 
   const postErrorToPanel = (payload: {
     code: string;
@@ -1046,6 +1180,20 @@ export function activate(context: vscode.ExtensionContext): void {
     activeStreamAbort = new AbortController();
     const signal = activeStreamAbort.signal;
 
+    // Why this path gave up is the single most useful thing to know when a
+    // question produces no answer, and until now none of it was recorded:
+    // three different failures all returned a bare `null` and the log said
+    // only "streaming unavailable". Each one now names itself, with the
+    // event tally that distinguishes "server refused" from "server answered
+    // with nothing" — which are the same value here and completely
+    // different problems.
+    const startedAt = Date.now();
+    const seen: Record<string, number> = {};
+    const elapsed = () => `${((Date.now() - startedAt) / 1000).toFixed(1)}s`;
+    output.appendLine(
+      `[GitPilot] stream → POST /api/v2/chat/stream session=${sessionId} intent=${intent ?? "none"} chars=${message.length}`
+    );
+
     let res: Response;
     try {
       res = await fetch(`${serverUrl}/api/v2/chat/stream`, {
@@ -1058,12 +1206,18 @@ export function activate(context: vscode.ExtensionContext): void {
         }),
         signal,
       });
-    } catch {
+    } catch (err: unknown) {
       // Server doesn't support v2 or network error — fall back
+      output.appendLine(
+        `[GitPilot] stream ✗ unreachable after ${elapsed()} (${err instanceof Error ? err.message : String(err)}) → batch`
+      );
       return null;
     }
 
     if (!res.ok || !res.body) {
+      output.appendLine(
+        `[GitPilot] stream ✗ HTTP ${res.status}${res.body ? "" : " (no body)"} after ${elapsed()} → batch`
+      );
       return null;
     }
 
@@ -1091,6 +1245,7 @@ export function activate(context: vscode.ExtensionContext): void {
           }
 
           const type = String(event.type || "");
+          seen[type] = (seen[type] || 0) + 1;
 
           if (type === "text_delta") {
             fullText += String(event.text || "");
@@ -1222,7 +1377,28 @@ export function activate(context: vscode.ExtensionContext): void {
       activeStreamAbort = null;
     }
 
-    return fullText || null;
+    const tally = Object.entries(seen)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(" ") || "no events";
+
+    if (!fullText) {
+      // An empty stream is the backend's way of saying "this session is not
+      // one I can plan for — use the batch endpoint". It is a normal
+      // handover for folder-only sessions, not a fault, so it is logged as
+      // a route rather than an error. The tally is what tells the two apart
+      // when it is a fault: `done=1` alone is the handover, whereas a
+      // `status_change` run that produced no text is a real failure to
+      // generate.
+      output.appendLine(
+        `[GitPilot] stream → empty after ${elapsed()} (${tally}); backend handed off → batch`
+      );
+      return null;
+    }
+
+    output.appendLine(
+      `[GitPilot] stream ✓ ${fullText.length} chars in ${elapsed()} (${tally})`
+    );
+    return fullText;
   };
 
   const sendChatToBackend = async (rawText: string): Promise<void> => {
@@ -1318,14 +1494,17 @@ export function activate(context: vscode.ExtensionContext): void {
           `[GitPilot] Streamed response received (${streamedText.length} chars). intent=${intent} session=${sessionId}`
         );
       } else {
-        // Streaming unavailable — fall back to batch mode (original path)
-        output.appendLine(
-          "[GitPilot] SSE streaming unavailable, falling back to batch mode"
-        );
+        // Streaming produced nothing — the real answer comes from the batch
+        // endpoint. Keep the thinking state up for it: this call is the slow
+        // one, routinely 20-40s against a local model.
+        //
+        // The backend no longer reports "done" for a stream that did no
+        // work, so this is a continuation rather than the repair of a
+        // premature completion. It stays explicit because the stream may
+        // still have advanced the status to "planning" before handing off.
+        const batchStartedAt = Date.now();
+        output.appendLine("[GitPilot] batch → POST /api/chat/send");
 
-        // The v2 stream's cleanup already set task status to "done" and
-        // the webview cleared the thinking animation. Re-activate both
-        // so the user sees the thinking bubble during the 30s+ batch call.
         stateStore.updateActiveTask({
           ...(stateStore.state.activeTask || {}),
           status: "generating",
@@ -1381,7 +1560,10 @@ export function activate(context: vscode.ExtensionContext): void {
         });
 
         output.appendLine(
-          `[GitPilot] Chat response received. intent=${intent} session=${sessionId}`
+          `[GitPilot] batch ✓ ${(response.answer || "").length} chars in ` +
+            `${((Date.now() - batchStartedAt) / 1000).toFixed(1)}s ` +
+            `(plan=${normalizedPlan ? "yes" : "no"} edits=${responseEdits.length}) ` +
+            `intent=${intent} session=${sessionId}`
         );
       }
     } catch (error: unknown) {
@@ -1539,6 +1721,34 @@ export function activate(context: vscode.ExtensionContext): void {
             await sendChatToBackend(msg.payload.text);
             return;
 
+          case "REQUEST_FILE_INDEX":
+            postMessageToPanel({
+              type: "FILE_INDEX",
+              payload: { files: await listWorkspaceFiles() },
+            });
+            return;
+
+          case "PICK_CONTEXT_FILE": {
+            const files = await listWorkspaceFiles();
+            if (files.length === 0) {
+              void vscode.window.showInformationMessage(
+                "No files in this workspace to attach."
+              );
+              return;
+            }
+            const picked = await vscode.window.showQuickPick(files, {
+              title: "Attach a file to the context",
+              placeHolder: "Type to filter…",
+            });
+            if (picked) {
+              postMessageToPanel({
+                type: "ATTACH_CONTEXT_FILE",
+                payload: { path: picked },
+              });
+            }
+            return;
+          }
+
           case "RUN_QUICK_ACTION": {
             const prompt = await buildQuickActionPrompt(
               msg.payload.action as QuickActionId
@@ -1552,11 +1762,9 @@ export function activate(context: vscode.ExtensionContext): void {
             return;
           }
 
-          case "OPEN_SETTINGS": {
-            const { GitPilotSettingsPanel } = await import("./ui/webview/GitPilotSettingsPanel");
-            GitPilotSettingsPanel.open(context.extensionUri);
+          case "OPEN_SETTINGS":
+            await openSettingsPanel();
             return;
-          }
 
           case "OPEN_WORKSPACE":
             await vscode.commands.executeCommand(
@@ -1564,20 +1772,13 @@ export function activate(context: vscode.ExtensionContext): void {
             );
             return;
 
+          // Provider, model and admin entry points all land on the same
+          // integrated settings page. Nothing here opens a browser.
           case "OPEN_ADMIN_UI":
-            await vscode.commands.executeCommand("gitpilot.showServerInfo");
-            return;
-
           case "OPEN_PROVIDER_SETUP":
-            await vscode.commands.executeCommand("gitpilot.selectProviderV2");
-            return;
-
           case "OPEN_MODEL_SETUP":
-            await vscode.commands.executeCommand("gitpilot.selectModelV2");
-            return;
-
           case "OPEN_LLM_SETTINGS":
-            await vscode.commands.executeCommand("gitpilot.openLlmSettings");
+            await openSettingsPanel();
             return;
 
           case "SET_WORKFLOW_MODE": {
@@ -1672,6 +1873,10 @@ export function activate(context: vscode.ExtensionContext): void {
             await vscode.commands.executeCommand("gitpilot.revertProposedChanges");
             return;
 
+          case "REWIND":
+            await vscode.commands.executeCommand("gitpilot.rewind");
+            return;
+
           case "REVEAL_FILE": {
             const folderPath = currentWorkspaceRoot();
             if (!folderPath) {
@@ -1762,14 +1967,9 @@ export function activate(context: vscode.ExtensionContext): void {
                 ...(stateStore.state.activeTask || {}),
                 status: "generating",
               });
-              // Execute via the existing chat send path with plan context
-              try {
-                await vscode.commands.executeCommand("gitpilot.executeApprovedPlan");
-              } catch {
-                // If no dedicated command exists, fall through — the status
-                // change to "generating" will be picked up by the stream
-                output.appendLine("[GitPilot] Plan execution delegated to active stream");
-              }
+              // The approval is the trigger; there is no other stream to
+              // delegate to, which is what the old catch here assumed.
+              await vscode.commands.executeCommand("gitpilot.executeApprovedPlan");
             }
             return;
           }
@@ -1801,11 +2001,36 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   );
 
+  // The sidebar is navigation only; the workspace panel below it keeps every
+  // feature and animation it already had.
+  const navView = new GitPilotNavView({
+    extensionUri: context.extensionUri,
+    client,
+    sessionClient,
+    stateStore,
+    serverController,
+  });
+
+  /**
+   * The editor is the product surface, and there is exactly one of it.
+   *
+   * Empty, the tab is GitPilot Home — brand, "What are we building?", one
+   * composer. Send a message and the same tab is the conversation. Two
+   * surfaces each with their own composer only ever raised the question of
+   * which one was real.
+   */
+  const openChatTab = async (): Promise<void> => {
+    gitpilotPanel.openInEditor();
+  };
+
   context.subscriptions.push(
     gitpilotPanel,
+    vscode.commands.registerCommand("gitpilot.openChatTab", openChatTab),
+    // Home and Chat are the same tab at two moments, so they open the same way.
+    vscode.commands.registerCommand("gitpilot.openHome", openChatTab),
     vscode.window.registerWebviewViewProvider(
-      GitPilotPanel.viewType,
-      gitpilotPanel
+      GitPilotNavView.viewType,
+      navView
     )
   );
 
@@ -1832,7 +2057,25 @@ export function activate(context: vscode.ExtensionContext): void {
     )
   );
 
-  registerChatCommands(context, client, legacyChatProvider);
+  registerChatCommands(context, client, legacyChatProvider, {
+    stateStore,
+    sessionCoordinator,
+    modeResolver,
+    /**
+     * Start the new task from a genuinely clean panel.
+     *
+     * Aborting first matters: a run still streaming into the old conversation
+     * would carry on writing into the new one, because the panel starts a
+     * fresh streaming node the moment a chunk arrives with none open.
+     */
+    resetPanel: () => {
+      if (activeStreamAbort) {
+        activeStreamAbort.abort();
+        activeStreamAbort = null;
+      }
+      postMessageToPanel({ type: "SESSION_RESET" });
+    },
+  });
   registerReviewCommands(context, legacyChatProvider);
   registerSecurityCommands(context, securityProvider);
   registerSkillCommands(context, client, legacyChatProvider);
@@ -1880,7 +2123,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
 
     legacyChatProvider.sendMessageFromCommand(`Run this command: ${command}`);
-    await vscode.commands.executeCommand("gitpilot.chatView.focus");
+    await vscode.commands.executeCommand("gitpilot.openChatTab");
   });
 
   registerCommand("gitpilot.setupWizard", async () => {
@@ -1969,6 +2212,204 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
+  /**
+   * Put the workspace and the conversation back to a checkpoint.
+   *
+   * GitPilot snapshots before every mutating tool call, so this is the undo
+   * that makes Agent mode a choice rather than a one-way door. Both halves go
+   * back together — restoring files under a transcript that still describes
+   * the work would leave the model reasoning about edits that no longer exist.
+   */
+  const rewindToCheckpoint = async (checkpoint: Checkpoint): Promise<void> => {
+    const sessionId = stateStore.state.session.sessionId;
+    if (!sessionId) {
+      return;
+    }
+
+    const scope = checkpoint.has_files
+      ? "This restores your files and rewinds the conversation."
+      : "This workspace was too large to snapshot, so only the conversation rewinds. Your files are left alone.";
+
+    const confirm = await vscode.window.showWarningMessage(
+      `Rewind to "${checkpoint.description}"?`,
+      { modal: true, detail: `${scope}\n\nWork done after this point is discarded.` },
+      "Rewind"
+    );
+    if (confirm !== "Rewind") {
+      return;
+    }
+
+    try {
+      const result = await checkpointClient.rewind(sessionId, checkpoint.id);
+
+      stateStore.setChatMessages(
+        (result.messages || []).map((m, index) => ({
+          id: `${sessionId}-rewind-${index}`,
+          role: m.role === "user" || m.role === "assistant" ? m.role : "system",
+          content: m.content ?? "",
+          createdAt: m.timestamp || new Date().toISOString(),
+        }))
+      );
+      // The plan, diff and changed-file list all described work that has just
+      // been undone; leaving them on screen would be a lie.
+      stateStore.clearTaskState();
+
+      void vscode.commands.executeCommand("gitpilot.refreshProjectContext");
+      vscode.window.showInformationMessage(
+        checkpoint.has_files
+          ? `Rewound to "${checkpoint.description}".`
+          : `Rewound the conversation to "${checkpoint.description}". Files were not snapshotted.`
+      );
+    } catch (err) {
+      appendOutputError("[GitPilot] Rewind failed", err);
+      vscode.window.showErrorMessage(`Could not rewind: ${err}`);
+    }
+  };
+
+  /** "2:34 PM" today, otherwise a short date — same rule as the sidebar. */
+  const checkpointWhen = (iso: string): string => {
+    const then = new Date(iso);
+    if (Number.isNaN(then.getTime())) {
+      return "";
+    }
+    const sameDay = then.toDateString() === new Date().toDateString();
+    return sameDay
+      ? then.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+      : then.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  };
+
+  const pickCheckpoint = async (): Promise<Checkpoint | undefined> => {
+    const sessionId = stateStore.state.session.sessionId;
+    if (!sessionId) {
+      vscode.window.showInformationMessage(
+        "No active GitPilot session, so there is nothing to rewind."
+      );
+      return undefined;
+    }
+
+    let checkpoints: Checkpoint[];
+    try {
+      checkpoints = await checkpointClient.list(sessionId);
+    } catch (err) {
+      appendOutputError("[GitPilot] Could not list checkpoints", err);
+      vscode.window.showErrorMessage(`Could not load checkpoints: ${err}`);
+      return undefined;
+    }
+
+    if (checkpoints.length === 0) {
+      vscode.window.showInformationMessage(
+        "No checkpoints yet. GitPilot takes one before every change it makes."
+      );
+      return undefined;
+    }
+
+    const picked = await vscode.window.showQuickPick(
+      checkpoints.map((cp) => ({
+        label: cp.description || cp.tool_name,
+        description: checkpointWhen(cp.timestamp),
+        detail: cp.has_files
+          ? `Restores files · rewinds to message ${cp.message_index}`
+          : "Conversation only — the workspace was too large to snapshot",
+        checkpoint: cp,
+      })),
+      { title: "Rewind GitPilot", placeHolder: "Pick a point to go back to" }
+    );
+
+    return picked?.checkpoint;
+  };
+
+  registerCommand("gitpilot.rewind", async () => {
+    const checkpoint = await pickCheckpoint();
+    if (checkpoint) {
+      await rewindToCheckpoint(checkpoint);
+    }
+  });
+
+  /**
+   * Undo the last thing GitPilot changed.
+   *
+   * The Revert button has been in the chat panel all along, wired to a command
+   * that was never registered — so it silently did nothing. With checkpoints
+   * it has an honest meaning: go back to the snapshot taken before the most
+   * recent change.
+   */
+  registerCommand("gitpilot.revertProposedChanges", async () => {
+    const task = stateStore.state.activeTask;
+
+    // Changes that were only ever proposed are still just a pending edit list;
+    // dropping it is the whole revert, and no checkpoint is needed.
+    if ((task?.edits || []).length > 0 && task?.status !== "applying") {
+      stateStore.updateActiveTask({
+        ...(stateStore.state.activeTask || {}),
+        edits: [],
+        changedFiles: [],
+        status: "idle",
+        summary: "Proposed changes discarded.",
+      });
+      vscode.window.showInformationMessage("Discarded the proposed changes.");
+      return;
+    }
+
+    const sessionId = stateStore.state.session.sessionId;
+    if (!sessionId) {
+      vscode.window.showInformationMessage("Nothing to revert.");
+      return;
+    }
+
+    let checkpoints: Checkpoint[];
+    try {
+      checkpoints = await checkpointClient.list(sessionId);
+    } catch (err) {
+      appendOutputError("[GitPilot] Could not list checkpoints", err);
+      vscode.window.showErrorMessage(`Could not load checkpoints: ${err}`);
+      return;
+    }
+
+    const latest = checkpoints.find((cp) => cp.has_files) || checkpoints[0];
+    if (!latest) {
+      vscode.window.showInformationMessage(
+        "No checkpoint to revert to — GitPilot has not changed anything in this session."
+      );
+      return;
+    }
+
+    await rewindToCheckpoint(latest);
+  });
+
+  /**
+   * Run the plan the user just approved.
+   *
+   * "Approve & Execute" dispatched this command, which nobody had registered.
+   * The `catch` around the dispatch logged "delegated to active stream" and
+   * moved on — so the task sat at `generating` while nothing executed. There
+   * is no other stream to delegate to; the approval *is* the trigger.
+   */
+  registerCommand("gitpilot.executeApprovedPlan", async () => {
+    const plan = stateStore.state.activeTask?.plan;
+    const steps = plan?.steps || [];
+
+    if (steps.length === 0) {
+      vscode.window.showInformationMessage("No approved plan to execute.");
+      stateStore.setTaskStatus("idle");
+      return;
+    }
+
+    const numbered = steps
+      .map((step, index) => {
+        const detail =
+          typeof step === "string"
+            ? step
+            : step.title || step.description || step.action || "";
+        return `${index + 1}. ${detail}`;
+      })
+      .filter((line) => line.trim().length > 3)
+      .join("\n");
+
+    await sendChatToBackend(
+      `[Execute approved plan] The plan below was approved. Carry it out step by step.\n\n${numbered}`
+    );
+  });
+
   registerCommand("gitpilot.regenerateTaskPlan", async () => {
     const task = stateStore.state.activeTask;
     if (!task?.title && !task?.summary) {
@@ -2037,17 +2478,47 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   if (config.autoConnect) {
+    // Connecting once and giving up was the whole procedure. Now a server
+    // that is merely slow to start gets waited for, and one that is not
+    // running yet is watched for — so starting `gitpilot serve` in a terminal
+    // is enough on its own, with no trip back here to click Reconnect.
+    // The listener is registered before connect() resolves, so it would also
+    // see the first success. One bootstrap per arrival, not two.
+    let bootstrapped = false;
+    const bootstrapOnce = (reason: string): void => {
+      if (bootstrapped) {
+        return;
+      }
+      bootstrapped = true;
+      void refreshStatusAndBootstrap(reason);
+    };
+
+    context.subscriptions.push(
+      client.onStateChange((state) => {
+        if (state === "connected") {
+          bootstrapOnce("reconnected");
+        } else if (state === "disconnected") {
+          // Ready to bootstrap again when it comes back.
+          bootstrapped = false;
+        }
+      })
+    );
+
     void client.connect().then((connected) => {
       if (connected) {
         output.appendLine(
           `[GitPilot] Connected to server at ${config.serverUrl}`
         );
-        void refreshStatusAndBootstrap("auto-connect");
-      } else {
-        output.appendLine(
-          `[GitPilot] Auto-connect failed for ${config.serverUrl}`
-        );
+        bootstrapOnce("auto-connect");
+        return;
       }
+
+      const probe = client.lastProbe;
+      output.appendLine(
+        `[GitPilot] Auto-connect failed for ${config.serverUrl}` +
+          (probe ? ` (${probe.outcome} after ${probe.elapsedMs}ms)` : "")
+      );
+      client.startAutoReconnect();
     });
   }
 
@@ -2126,6 +2597,24 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   void logCommandAvailability();
+
+  /*
+   * Open GitPilot only into an empty editor area.
+   *
+   * The landing page is the product's front door, but a front door that opens
+   * on top of the file someone was reading is an interruption. So it appears
+   * on a fresh window and stays out of the way otherwise — the sidebar's
+   * New Task and the command palette are always there.
+   */
+  const editorIsEmpty = vscode.window.tabGroups.all.every(
+    (group) => group.tabs.length === 0
+  );
+  if (
+    editorIsEmpty &&
+    vscode.workspace.getConfiguration("gitpilot").get<boolean>("showHomeOnStartup", true)
+  ) {
+    void openChatTab();
+  }
 
   output.appendLine("[GitPilot] Extension activated.");
 }

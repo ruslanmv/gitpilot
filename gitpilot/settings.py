@@ -4,6 +4,7 @@ import contextlib
 import enum
 import json
 import logging
+import threading
 import os
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,93 @@ CONFIG_FILE = CONFIG_DIR / "settings.json"
 
 logger = logging.getLogger(__name__)
 
+#: Port GitPilot's own backend binds by default.  Mirrors ``cli.DEFAULT_PORT``;
+#: duplicated here so ``settings`` stays free of a CLI import.
+GITPILOT_DEFAULT_SERVER_PORT = 8000
+
+#: Where an OllaBridge gateway listens by default.  This is deliberately *not*
+#: port 8000: that is GitPilot's own backend, and pointing OllaBridge at it
+#: makes model discovery query GitPilot about itself.  See
+#: :func:`points_at_gitpilot_server`.
+OLLABRIDGE_DEFAULT_BASE_URL = "http://localhost:11435"
+
+#: Where an Open WebUI instance listens by default.
+OPENWEBUI_DEFAULT_BASE_URL = "http://localhost:3000"
+
+#: Open WebUI serves its OpenAI-compatible surface under ``/api``, not ``/v1``.
+OPENWEBUI_API_SUFFIX = "/api"
+
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0", ""})
+
+#: Suffixes that already identify an OpenAI-compatible API root.
+_API_ROOT_SUFFIXES = ("/v1", "/api/v1", "/api", "/openai/v1")
+
+
+def openai_compatible_api_base(url: str, suffix: str = "/v1") -> str:
+    """Normalise a user-entered URL into an OpenAI-compatible API root.
+
+    People paste whatever their gateway's documentation showed them — an
+    instance root, an API root, or the full chat-completions path copied from
+    a VS Code custom-endpoint config. All three mean the same endpoint, so
+    they are reduced to one form rather than failing on the two that were not
+    anticipated.
+
+    >>> openai_compatible_api_base("https://x.example.com")
+    'https://x.example.com/v1'
+    >>> openai_compatible_api_base("https://x.example.com/v1/chat/completions")
+    'https://x.example.com/v1'
+    >>> openai_compatible_api_base("http://localhost:3000", "/api")
+    'http://localhost:3000/api'
+    """
+    base = (url or "").strip().rstrip("/")
+    if not base:
+        return ""
+
+    # Drop a pasted operation path — the API root is its parent.
+    for tail in ("/chat/completions", "/completions", "/models"):
+        if base.endswith(tail):
+            base = base[: -len(tail)]
+            break
+
+    if base.endswith(_API_ROOT_SUFFIXES):
+        return base
+    return f"{base}{suffix}"
+
+
+def gitpilot_server_port() -> int:
+    """Port GitPilot's own backend is (or would be) serving on."""
+    raw = (os.getenv("GITPILOT_SERVER_PORT") or os.getenv("GITPILOT_PORT") or "").strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return GITPILOT_DEFAULT_SERVER_PORT
+
+
+def points_at_gitpilot_server(url: str) -> bool:
+    """True when ``url`` resolves back to GitPilot's own backend.
+
+    A provider base URL that loops back to GitPilot is never what the user
+    meant — it turns "list the models" into GitPilot interrogating itself and
+    produces a confusing 404 rather than a configuration error.
+    """
+    from urllib.parse import urlparse
+
+    if not url:
+        return False
+    try:
+        parsed = urlparse(url if "//" in url else f"//{url}", scheme="http")
+    except ValueError:
+        return False
+
+    host = (parsed.hostname or "").lower()
+    if host not in _LOOPBACK_HOSTS:
+        return False
+
+    port = parsed.port
+    if port is None:
+        port = 443 if parsed.scheme == "https" else 80
+    return port == gitpilot_server_port()
+
 
 class LLMProvider(enum.StrEnum):
     openai = "openai"
@@ -32,6 +120,8 @@ class LLMProvider(enum.StrEnum):
     watsonx = "watsonx"
     ollama = "ollama"
     ollabridge = "ollabridge"
+    openwebui = "openwebui"
+    custom = "custom"
 
 
 class OpenAIConfig(BaseModel):
@@ -59,9 +149,41 @@ class OllamaConfig(BaseModel):
 
 
 class OllaBridgeConfig(BaseModel):
-    base_url: str = Field(default="http://localhost:8000")
+    base_url: str = Field(default=OLLABRIDGE_DEFAULT_BASE_URL)
     model: str = Field(default="qwen2.5:1.5b")
     api_key: str = Field(default="")  # Optional: for authenticated endpoints
+
+
+class OpenWebUIConfig(BaseModel):
+    """An Open WebUI instance, used through its OpenAI-compatible API.
+
+    Open WebUI serves ``/api/`` for its own UI and an OpenAI-compatible
+    surface at ``/api/v1`` (and, on recent builds, ``/v1``). GitPilot talks to
+    the OpenAI-compatible surface, so only the instance root is configured
+    here; the suffix is appended when the request is made. The API key is the
+    one minted under Settings → Account → API keys.
+    """
+
+    base_url: str = Field(default="http://localhost:3000")
+    model: str = Field(default="")
+    api_key: str = Field(default="")
+
+
+class CustomEndpointConfig(BaseModel):
+    """Any OpenAI-compatible chat-completions endpoint.
+
+    This is the escape hatch for gateways GitPilot has no dedicated entry for:
+    self-hosted inference, a corporate model gateway, a proxy in front of
+    several vendors. It mirrors the shape VS Code's own custom-endpoint
+    support uses — a base URL, a key, a model id, and arbitrary request
+    headers, which gateways routinely require for user attribution or routing.
+    """
+
+    base_url: str = Field(default="")
+    model: str = Field(default="")
+    api_key: str = Field(default="")
+    #: Extra headers sent with every request, e.g. {"x-user": "me@example.com"}.
+    headers: dict[str, str] = Field(default_factory=dict)
 
 
 class SandboxSettings(BaseModel):
@@ -100,6 +222,8 @@ class AppSettings(BaseModel):
     watsonx: WatsonxConfig = Field(default_factory=WatsonxConfig)
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
     ollabridge: OllaBridgeConfig = Field(default_factory=OllaBridgeConfig)
+    openwebui: OpenWebUIConfig = Field(default_factory=OpenWebUIConfig)
+    custom: CustomEndpointConfig = Field(default_factory=CustomEndpointConfig)
 
     # Sandbox runtime for "Run code" actions in the chat UI.  Defaults to a
     # local subprocess so trying simple snippets works out of the box; switch
@@ -175,6 +299,32 @@ class AppSettings(BaseModel):
             settings.ollabridge.base_url = os.getenv("OLLABRIDGE_BASE_URL", "")
         if os.getenv("OLLABRIDGE_API_KEY"):
             settings.ollabridge.api_key = os.getenv("OLLABRIDGE_API_KEY", "")
+
+        # Open WebUI
+        if os.getenv("OPENWEBUI_BASE_URL"):
+            settings.openwebui.base_url = os.getenv("OPENWEBUI_BASE_URL", "")
+        if os.getenv("OPENWEBUI_API_KEY"):
+            settings.openwebui.api_key = os.getenv("OPENWEBUI_API_KEY", "")
+
+        # Custom OpenAI-compatible endpoint
+        if os.getenv("GITPILOT_CUSTOM_BASE_URL"):
+            settings.custom.base_url = os.getenv("GITPILOT_CUSTOM_BASE_URL", "")
+        if os.getenv("GITPILOT_CUSTOM_API_KEY"):
+            settings.custom.api_key = os.getenv("GITPILOT_CUSTOM_API_KEY", "")
+        if os.getenv("GITPILOT_CUSTOM_MODEL"):
+            settings.custom.model = os.getenv("GITPILOT_CUSTOM_MODEL", "")
+
+        # Installs created before the default moved off port 8000 carry a
+        # base URL that loops straight back to GitPilot's own backend.  Repair
+        # it once, here, rather than letting every model lookup fail.
+        if points_at_gitpilot_server(settings.ollabridge.base_url):
+            logger.warning(
+                "OllaBridge base URL %s points at GitPilot's own server; "
+                "resetting it to %s.",
+                settings.ollabridge.base_url,
+                OLLABRIDGE_DEFAULT_BASE_URL,
+            )
+            settings.ollabridge.base_url = OLLABRIDGE_DEFAULT_BASE_URL
 
         # LangFlow (optional)
         if os.getenv("GITPILOT_LANGFLOW_URL"):
@@ -267,6 +417,14 @@ class AppSettings(BaseModel):
             return True
         if p == LLMProvider.ollabridge:
             return True
+        if p == LLMProvider.openwebui:
+            # Open WebUI can be open to the local network without auth, so a
+            # reachable URL is the only hard requirement.
+            return bool(self.openwebui.base_url)
+        if p == LLMProvider.custom:
+            # A custom endpoint is only meaningful once it has somewhere to go
+            # and something to ask for.
+            return bool(self.custom.base_url and self.custom.model)
         return False
 
     def get_effective_model(self) -> str | None:
@@ -282,6 +440,10 @@ class AppSettings(BaseModel):
             return self.ollama.model or None
         if p == LLMProvider.ollabridge:
             return self.ollabridge.model or None
+        if p == LLMProvider.openwebui:
+            return self.openwebui.model or None
+        if p == LLMProvider.custom:
+            return self.custom.model or None
         return None
 
     def get_provider_summary(self) -> ProviderSummary:
@@ -299,6 +461,8 @@ class AppSettings(BaseModel):
             LLMProvider.watsonx: "WATSONX_API_KEY",
             LLMProvider.ollama: "OLLAMA_BASE_URL",
             LLMProvider.ollabridge: "OLLABRIDGE_BASE_URL",
+            LLMProvider.openwebui: "OPENWEBUI_BASE_URL",
+            LLMProvider.custom: "GITPILOT_CUSTOM_BASE_URL",
         }
 
         source: str = (
@@ -332,6 +496,16 @@ class AppSettings(BaseModel):
             base_url = self.ollabridge.base_url or None
             conn = ProviderConnectionType.local
             has_key = bool(self.ollabridge.api_key)
+        elif p == LLMProvider.openwebui:
+            model = self.openwebui.model
+            base_url = self.openwebui.base_url or None
+            conn = ProviderConnectionType.api_key
+            has_key = bool(self.openwebui.api_key)
+        elif p == LLMProvider.custom:
+            model = self.custom.model
+            base_url = self.custom.base_url or None
+            conn = ProviderConnectionType.api_key
+            has_key = bool(self.custom.api_key)
         else:
             model = None
             base_url = None
@@ -400,31 +574,71 @@ def reload_settings() -> AppSettings:
 
 _AUTOCONFIG_LAST_RUN_TS: float = 0.0
 _AUTOCONFIG_TTL_SECONDS: float = 20.0
+_AUTOCONFIG_LOCK = threading.Lock()
+_AUTOCONFIG_REFRESHING = False
 
 
 def autoconfigure_local_provider(force: bool = False) -> AppSettings:
     """
     Prefer a zero-config local provider when it is available.
 
-    Performance improvements:
-    - Uses a TTL so repeated calls do not re-probe local providers constantly.
-    - Supports force=True for explicit bootstrap actions.
-    - Keeps cloud-provider user choices intact.
-    - Only switches among local providers when appropriate.
+    Never blocks the caller on the network.
+    ---------------------------------------
+    This probes Ollama *and* OllaBridge, each with its own socket timeout. On a
+    machine where one of them is not listening and the connection hangs rather
+    than being refused — WSL2 is the common case — that is ten seconds. It used
+    to be spent inline, inside `async def` request handlers, which meant it
+    blocked the event loop: every concurrent request to /api/health,
+    /api/status and /api/settings finished in the same ~10s, and it happened
+    again every time the TTL expired.
 
-    Rules:
-    - Never override an explicitly configured cloud provider.
-    - If the active provider is ollama or ollabridge, pick a valid default model.
-    - If the app is still on the local default provider but has no model, prefer Ollama first.
+    So a stale cache now refreshes in a background thread and the caller gets
+    the last known settings straight away. `force=True` still probes inline,
+    for explicit bootstrap paths that genuinely need a fresh answer.
     """
+    global _settings  # noqa: PLW0602
+    global _AUTOCONFIG_LAST_RUN_TS  # noqa: PLW0603
+    global _AUTOCONFIG_REFRESHING  # noqa: PLW0603
+
+    import time
+
+    now = time.time()
+    if not force and (now - _AUTOCONFIG_LAST_RUN_TS) < _AUTOCONFIG_TTL_SECONDS:
+        return _settings
+
+    if not force:
+        # Stale: refresh behind the request rather than in front of it.
+        with _AUTOCONFIG_LOCK:
+            if _AUTOCONFIG_REFRESHING:
+                return _settings
+            _AUTOCONFIG_REFRESHING = True
+
+        def _refresh() -> None:
+            global _AUTOCONFIG_REFRESHING  # noqa: PLW0603
+            try:
+                _autoconfigure_now()
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug("Background provider autoconfiguration failed: %s", exc)
+            finally:
+                with _AUTOCONFIG_LOCK:
+                    _AUTOCONFIG_REFRESHING = False
+
+        threading.Thread(
+            target=_refresh, name="gitpilot-autoconfig", daemon=True
+        ).start()
+        return _settings
+
+    return _autoconfigure_now()
+
+
+def _autoconfigure_now() -> AppSettings:
+    """The probe itself. Blocking; call it off the event loop."""
     global _settings  # noqa: PLW0602
     global _AUTOCONFIG_LAST_RUN_TS  # noqa: PLW0603
 
     import time
 
     now = time.time()
-    if not force and (now - _AUTOCONFIG_LAST_RUN_TS) < _AUTOCONFIG_TTL_SECONDS:
-      return _settings
 
     try:
         from gitpilot.model_catalog import list_models_for_provider
@@ -539,7 +753,21 @@ def update_settings(updates: dict[str, Any]) -> AppSettings:
 
     if "ollabridge" in updates:
         merged = _merge_model_config(_settings.ollabridge, updates["ollabridge"])
+        if points_at_gitpilot_server(merged.get("base_url", "")):
+            raise ValueError(
+                f"OllaBridge base URL {merged.get('base_url')!r} is GitPilot's own "
+                f"server address. Point it at your OllaBridge gateway instead "
+                f"(default: {OLLABRIDGE_DEFAULT_BASE_URL})."
+            )
         _settings.ollabridge = OllaBridgeConfig(**merged)
+
+    if "openwebui" in updates:
+        merged = _merge_model_config(_settings.openwebui, updates["openwebui"])
+        _settings.openwebui = OpenWebUIConfig(**merged)
+
+    if "custom" in updates:
+        merged = _merge_model_config(_settings.custom, updates["custom"])
+        _settings.custom = CustomEndpointConfig(**merged)
 
     if "sandbox" in updates:
         merged = _merge_model_config(_settings.sandbox, updates["sandbox"])

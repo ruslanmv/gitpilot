@@ -21,7 +21,7 @@ export function registerReviewCommands(
             const fileName = vscode.workspace.asRelativePath(editor.document.uri);
             const content = editor.document.getText();
             chatProvider.sendCodeContext(content, 'review');
-            vscode.commands.executeCommand('gitpilot.chatView.focus');
+            vscode.commands.executeCommand('gitpilot.openChatTab');
             vscode.window.showInformationMessage(`Reviewing ${fileName}...`);
         }),
 
@@ -29,28 +29,28 @@ export function registerReviewCommands(
             const code = getSelectedText();
             if (!code) { return; }
             chatProvider.sendCodeContext(code, 'explain');
-            vscode.commands.executeCommand('gitpilot.chatView.focus');
+            vscode.commands.executeCommand('gitpilot.openChatTab');
         }),
 
         vscode.commands.registerCommand('gitpilot.reviewSelection', () => {
             const code = getSelectedText();
             if (!code) { return; }
             chatProvider.sendCodeContext(code, 'review');
-            vscode.commands.executeCommand('gitpilot.chatView.focus');
+            vscode.commands.executeCommand('gitpilot.openChatTab');
         }),
 
         vscode.commands.registerCommand('gitpilot.fixSelection', () => {
             const code = getSelectedText();
             if (!code) { return; }
             chatProvider.sendCodeContext(code, 'fix');
-            vscode.commands.executeCommand('gitpilot.chatView.focus');
+            vscode.commands.executeCommand('gitpilot.openChatTab');
         }),
 
         vscode.commands.registerCommand('gitpilot.testSelection', () => {
             const code = getSelectedText();
             if (!code) { return; }
             chatProvider.sendCodeContext(code, 'test');
-            vscode.commands.executeCommand('gitpilot.chatView.focus');
+            vscode.commands.executeCommand('gitpilot.openChatTab');
         }),
 
         // CodeLens commands for symbols
@@ -62,7 +62,7 @@ export function registerReviewCommands(
                 const bodyRange = new vscode.Range(range.start.line, 0, endLine, 0);
                 const code = doc.getText(bodyRange);
                 chatProvider.sendCodeContext(code, 'explain');
-                vscode.commands.executeCommand('gitpilot.chatView.focus');
+                vscode.commands.executeCommand('gitpilot.openChatTab');
             },
         ),
 
@@ -73,7 +73,7 @@ export function registerReviewCommands(
                 const bodyRange = new vscode.Range(range.start.line, 0, endLine, 0);
                 const code = doc.getText(bodyRange);
                 chatProvider.sendCodeContext(code, 'review');
-                vscode.commands.executeCommand('gitpilot.chatView.focus');
+                vscode.commands.executeCommand('gitpilot.openChatTab');
             },
         ),
     );

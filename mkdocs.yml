@@ -46,6 +46,14 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Quickstart: quickstart.md
+  - Agents & topologies: agents.md
+  - VS Code:
+      - The interface: vscode/interface.md
+      - AI provider setup: vscode/ai-providers.md
+      - Agent topologies: vscode/agent-topologies.md
+      - MCP servers: vscode/mcp-servers.md
+      - Testing locally: vscode/local-testing.md
+      - Troubleshooting: vscode/troubleshooting.md
   - Upgrade catalogue: UPGRADES.md
   - API stability: API_STABILITY.md
   - Deploy:

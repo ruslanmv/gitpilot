@@ -28,6 +28,7 @@ from .github_api import (
 )
 from .github_app import check_repo_write_access
 from .settings import AppSettings, get_settings, set_provider, update_settings, autoconfigure_local_provider, LLMProvider
+from .settings import CONFIG_DIR as _CONFIG_DIR
 from .agentic import (
     generate_plan,
     execute_plan,
@@ -806,6 +807,8 @@ class SettingsResponse(BaseModel):
     watsonx: dict
     ollama: dict
     ollabridge: dict
+    openwebui: dict = Field(default_factory=dict)
+    custom: dict = Field(default_factory=dict)
     langflow_url: str
     has_langflow_plan_flow: bool
     # Sandbox runtime selection — populated by settings_response_from.  The
@@ -1180,12 +1183,16 @@ def settings_response_from(s: AppSettings) -> SettingsResponse:
             LLMProvider.watsonx,
             LLMProvider.ollama,
             LLMProvider.ollabridge,
+            LLMProvider.openwebui,
+            LLMProvider.custom,
         ],
         openai=s.openai.model_dump(),
         claude=s.claude.model_dump(),
         watsonx=s.watsonx.model_dump(),
         ollama=s.ollama.model_dump(),
         ollabridge=s.ollabridge.model_dump(),
+        openwebui=s.openwebui.model_dump(),
+        custom=s.custom.model_dump(),
         langflow_url=s.langflow_url,
         has_langflow_plan_flow=bool(s.langflow_plan_flow_id),
         sandbox=sandbox_payload,
@@ -1259,7 +1266,12 @@ async def api_update_llm_settings(updates: dict):
     - Do NOT auto-probe providers here on every save.
     - Saving should be fast and deterministic.
     """
-    s = update_settings(updates)
+    try:
+        s = update_settings(updates)
+    except ValueError as exc:
+        # Rejected configuration (e.g. a provider URL that loops back to
+        # GitPilot itself) is the caller's mistake, not a server fault.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return settings_response_from(s)
 
     """Update full LLM settings including provider-specific configs."""
@@ -1627,6 +1639,20 @@ async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Hea
         except Exception as exc:
             error_msg = str(exc)
 
+            # ── The agent runtime could not be built ────────
+            #
+            # Planning runs through CrewAI, so an incomplete agent stack fails
+            # here rather than anywhere the user can interpret. Left alone it
+            # is a 500 with a traceback in the server log and
+            # "Error: Fallback to LiteLLM is not available" in the UI — a
+            # sentence naming neither the provider nor the missing package.
+            if isinstance(exc, ImportError) or "LiteLLM" in error_msg:
+                logger.warning("[GitPilot] agent runtime unavailable: %s", error_msg)
+                raise HTTPException(
+                    status_code=503,
+                    detail=_agent_runtime_hint(exc),
+                ) from exc
+
             # ── Quota / rate-limit detection ────────────────
             _quota_keywords = [
                 "insufficient_quota", "exceeded your current quota",
@@ -1903,9 +1929,16 @@ async def api_get_topology_pref():
 
 @app.post("/api/settings/topology")
 async def api_set_topology_pref(req: TopologyPrefRequest):
-    """Save the user's preferred topology."""
-    save_topology_preference(req.topology)
-    return {"status": "ok", "topology": req.topology}
+    """Save the user's preferred topology.
+
+    Pass ``"auto"`` (or an empty string) to clear the preference and let
+    GitPilot route each request on intent.
+    """
+    try:
+        save_topology_preference(req.topology)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "ok", "topology": get_saved_topology_preference()}
 
 
 # ============================================================================
@@ -2628,15 +2661,140 @@ async def api_update_session_context(session_id: str, payload: dict):
     }
 
 
-@app.post("/api/sessions/{session_id}/checkpoint")
-async def api_create_checkpoint(session_id: str, payload: dict):
-    """Create a checkpoint for a session."""
-    session = _session_mgr.load(session_id)
+from dataclasses import asdict as _asdict_cp
+
+
+def _auto_checkpoint_hook(session):
+    """A callback that snapshots before each mutating tool call.
+
+    Returns ``None`` when the session has no local workspace, which turns the
+    whole mechanism off rather than recording checkpoints that could never be
+    restored.
+    """
+    if session is None or _session_workspace(session) is None:
+        return None
+
+    def hook(tool_name: str, tool_args: dict) -> None:
+        target = (
+            tool_args.get("path")
+            or tool_args.get("file_path")
+            or tool_args.get("filename")
+        )
+        # Reloaded each time: the conversation has moved on since the gate was
+        # built, and a checkpoint's whole value is the transcript it carries.
+        try:
+            current = _session_mgr.load(session.id) or session
+        except FileNotFoundError:
+            current = session
+        _session_mgr.create_checkpoint(
+            current,
+            workspace_path=_session_workspace(current),
+            description=f"Before {tool_name}" + (f" \u00b7 {target}" if target else ""),
+            tool_name=tool_name,
+            target_path=str(target) if target else None,
+        )
+
+    return hook
+
+
+def _load_session_or_404(session_id: str):
+    """Load a session, or answer 404.
+
+    SessionManager.load raises FileNotFoundError rather than returning None,
+    so the usual ``if not session`` guard never fires and an unknown id came
+    back as a 500.
+    """
+    try:
+        session = _session_mgr.load(session_id)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail="Session not found") from e
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    label = payload.get("label", "checkpoint")
-    cp = _session_mgr.create_checkpoint(session, label=label)
-    return {"checkpoint_id": cp.id, "label": cp.label, "created_at": cp.created_at}
+    return session
+
+
+def _session_workspace(session) -> Path | None:
+    """The directory a session's checkpoints cover, if it has one.
+
+    A GitHub-mode session has no local tree, so it checkpoints the
+    conversation and nothing else rather than guessing at a path.
+    """
+    raw = session.repo_root or session.folder_path
+    if not raw:
+        return None
+    path = Path(raw)
+    return path if path.exists() else None
+
+
+def _checkpoint_dict(cp) -> dict:
+    """One checkpoint, in the shape every client renders."""
+    return {
+        "id": cp.id,
+        "description": cp.description,
+        "timestamp": cp.timestamp,
+        "message_index": cp.message_index,
+        "tool_name": cp.tool_name,
+        "target_path": cp.target_path,
+        # A client must not offer "restore files" for a checkpoint that has
+        # none — a workspace over the size limit stores the transcript only.
+        "has_files": cp.has_files and bool(cp.store_id),
+    }
+
+
+@app.post("/api/sessions/{session_id}/checkpoint")
+async def api_create_checkpoint(session_id: str, payload: dict):
+    """Take a checkpoint of the session's workspace and conversation."""
+    session = _load_session_or_404(session_id)
+
+    cp = _session_mgr.create_checkpoint(
+        session,
+        workspace_path=_session_workspace(session),
+        description=payload.get("description") or payload.get("label") or "",
+        tool_name=payload.get("tool_name", "manual"),
+        target_path=payload.get("target_path"),
+    )
+    return _checkpoint_dict(cp)
+
+
+@app.get("/api/sessions/{session_id}/checkpoints")
+async def api_list_checkpoints(session_id: str):
+    """Every point this session can be rewound to, newest first."""
+    session = _load_session_or_404(session_id)
+
+    return {
+        "checkpoints": [
+            _checkpoint_dict(cp) for cp in reversed(session.checkpoints)
+        ],
+        "message_count": len(session.messages),
+    }
+
+
+@app.post("/api/sessions/{session_id}/rewind")
+async def api_rewind_session(session_id: str, payload: dict):
+    """Put the files and the conversation back to a checkpoint.
+
+    Both halves together: restoring files under a transcript that still
+    describes the work would leave the model reasoning about edits that no
+    longer exist.
+    """
+    session = _load_session_or_404(session_id)
+
+    checkpoint_id = payload.get("checkpoint_id")
+    if not checkpoint_id:
+        raise HTTPException(status_code=400, detail="checkpoint_id is required")
+
+    try:
+        session = _session_mgr.rewind_to_checkpoint(
+            session, checkpoint_id, workspace_path=_session_workspace(session),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+    return {
+        "session_id": session.id,
+        "messages": [_asdict_cp(m) for m in session.messages],
+        "checkpoints": [_checkpoint_dict(cp) for cp in reversed(session.checkpoints)],
+    }
 
 
 # ============================================================================
@@ -3367,7 +3525,15 @@ async def api_list_branches(
 # ============================================================================
 
 import json as _json
-_ENV_ROOT = Path.home() / ".gitpilot" / "environments"
+
+# Environments live under the configured GitPilot home, not an assumed one.
+# This used to hardcode ``Path.home() / ".gitpilot"``, which ignored
+# GITPILOT_CONFIG_DIR — the documented way to relocate GitPilot's config, and
+# the isolation `make test` relies on. The visible cost was the test suite
+# writing environment files into the developer's real ~/.gitpilot and
+# accumulating them run over run; the cost for anyone who actually sets the
+# variable was environments saved somewhere they never asked for.
+_ENV_ROOT = _CONFIG_DIR / "environments"
 
 
 class EnvironmentConfig(BaseModel):
@@ -3870,6 +4036,24 @@ async def api_providers_test(req: _ProviderTestRequest):
         if req.ollabridge.api_key:
             test_settings.ollabridge.api_key = req.ollabridge.api_key
         test_settings.provider = test_settings.provider.__class__("ollabridge")
+    elif provider == ProviderName.openwebui and req.openwebui:
+        if req.openwebui.base_url:
+            test_settings.openwebui.base_url = req.openwebui.base_url
+        if req.openwebui.model:
+            test_settings.openwebui.model = req.openwebui.model
+        if req.openwebui.api_key:
+            test_settings.openwebui.api_key = req.openwebui.api_key
+        test_settings.provider = test_settings.provider.__class__("openwebui")
+    elif provider == ProviderName.custom and req.custom:
+        if req.custom.base_url:
+            test_settings.custom.base_url = req.custom.base_url
+        if req.custom.model:
+            test_settings.custom.model = req.custom.model
+        if req.custom.api_key:
+            test_settings.custom.api_key = req.custom.api_key
+        if req.custom.headers is not None:
+            test_settings.custom.headers = dict(req.custom.headers)
+        test_settings.provider = test_settings.provider.__class__("custom")
 
     summary = await test_provider_connection(test_settings)
     return ProviderTestResponse(
@@ -3924,20 +4108,115 @@ async def api_session_start(req: _StartSessionRequest):
     )
 
 
+#: Errors from the direct provider path that are already written for a person.
+from gitpilot.direct_chat import ProviderNotReachable as _ProviderNotReachable
+
+direct_chat_errors = (_ProviderNotReachable,)
+
+
+#: Providers GitPilot drives through CrewAI's native OpenAI adapter, which
+#: needs no LiteLLM. Naming them keeps the advice below honest: telling
+#: someone already on Ollama to "switch to Ollama" is worse than saying
+#: nothing, and that is what the untargeted version of this message did.
+_LITELLM_FREE_PROVIDERS = ("ollama", "ollabridge", "openwebui", "openai", "custom")
+
+
+def _active_provider_name() -> str:
+    """The configured provider, or "" when it cannot be read."""
+    try:
+        from gitpilot.settings import get_settings
+
+        return str(get_settings().provider.value)
+    except Exception:  # pragma: no cover - defensive
+        return ""
+
+
+def _agent_runtime_hint(err: Exception) -> str:
+    """Turn an agent-runtime import failure into something actionable.
+
+    Two different problems arrive here wearing the same clothes. CrewAI
+    missing entirely is one. CrewAI present with LiteLLM absent is the other,
+    and it surfaces as CrewAI's own "Fallback to LiteLLM is not available" —
+    a sentence that names neither the provider nor the package to install.
+
+    Which advice is right depends on the provider in force, so it is read
+    rather than assumed. An endpoint that speaks the OpenAI chat API should
+    never have reached CrewAI's LiteLLM fallback at all; if it did, the
+    install is too old to route it natively, and the fix is an upgrade — not
+    the LiteLLM install that a Claude or watsonx user needs.
+    """
+    detail = str(err)
+    provider = _active_provider_name()
+
+    if "litellm" in detail.lower():
+        if provider in _LITELLM_FREE_PROVIDERS:
+            return (
+                f"GitPilot could not reach {provider} through the agent "
+                "runtime. This endpoint speaks the OpenAI chat API and needs "
+                "no LiteLLM, so the installed CrewAI is too old to route it "
+                "natively. Upgrade with: pip install -U 'crewai>=1.6' "
+                "gitcopilot — or install the fallback it is asking for: "
+                "pip install litellm. Another provider can be selected in "
+                "Settings → AI Providers in the meantime."
+            )
+        return (
+            "The agent runtime is installed but incomplete: CrewAI is present "
+            "and LiteLLM is not, and this provider needs LiteLLM to route "
+            "through. Install it with: pip install litellm \u2014 or switch to "
+            "Ollama, OllaBridge, Open WebUI, OpenAI or a custom endpoint in "
+            "Settings, none of which need it."
+        )
+    return (
+        "This provider needs GitPilot's agent runtime, which is not "
+        "installed. Install it with: pip install 'gitcopilot[agents]' \u2014 "
+        "or switch to Ollama, OllaBridge, Open WebUI, OpenAI or a custom "
+        "endpoint in Settings, none of which need it."
+    )
+
+
+async def _chat_via_agent_runtime(messages: list) -> str:
+    """Chat through CrewAI, for the providers that need it.
+
+    Claude and watsonx do not speak the OpenAI chat shape, so they go through
+    build_llm(). When the agent runtime is not installed this used to surface
+    as a bare ModuleNotFoundError inside "Error processing message:", which
+    told the user nothing they could act on.
+
+    Catches ImportError, not just ModuleNotFoundError. A half-installed agent
+    stack — CrewAI present, LiteLLM absent — raises a plain ImportError from
+    inside CrewAI, and ModuleNotFoundError does not catch it: the subclassing
+    goes the other way.
+    """
+    try:
+        from gitpilot.llm_provider import build_llm
+    except ImportError as e:
+        raise _ProviderNotReachable(_agent_runtime_hint(e)) from e
+
+    import asyncio as _aio
+
+    def _call() -> str:
+        try:
+            llm = build_llm()
+        except ImportError as e:
+            raise _ProviderNotReachable(_agent_runtime_hint(e)) from e
+        return llm.call(messages)
+
+    # build_llm() imports ~180 packages on first call and llm.call() blocks;
+    # neither belongs on the event loop.
+    return await _aio.to_thread(_call)
+
+
 @app.post("/api/chat/send")
 async def api_chat_message_v2(req: _ChatMessageRequest):
     """Normalized chat message endpoint for the redesigned extension."""
     from gitpilot.models import ChatMessageRequest, ChatMessageResponse
-    from gitpilot.session import SessionManager
     import uuid
 
-    mgr = SessionManager()
-
-    # Load session
-    try:
-        session = mgr.load(req.session_id)
-    except Exception:
-        raise HTTPException(status_code=404, detail=f"Session {req.session_id} not found")
+    # The module-level manager, not a fresh one. A second instance over the
+    # same files means the checkpoint hook and this handler hold different
+    # copies of the session, and whichever saves last wins.
+    mgr = _session_mgr
+    session = _load_session_or_404(req.session_id)
 
     # Use the canonical dispatcher for chat
     answer = ""
@@ -3947,6 +4226,20 @@ async def api_chat_message_v2(req: _ChatMessageRequest):
     repo_full = session.repo_full_name or ""
     try:
         if repo_full:
+            # Say which pipeline is running before it runs.
+            #
+            # These two branches look identical from a client and log
+            # completely differently: the agent path prints CrewAI's whole
+            # verbose trace to this console, the folder path prints nothing
+            # because no agent is involved. Someone comparing the web app
+            # (which plans against a repo) with VS Code (which often has
+            # only a folder) sees rich output in one and silence in the
+            # other, and reasonably concludes the logs are being hidden.
+            # They are not — the second pipeline has no agent to log.
+            logger.info(
+                "[chat] session=%s repo=%s → agent pipeline (CrewAI; verbose trace follows)",
+                req.session_id, repo_full,
+            )
             result = await dispatch_request(
                 user_request=req.message,
                 repo_full_name=repo_full,
@@ -3965,13 +4258,43 @@ async def api_chat_message_v2(req: _ChatMessageRequest):
             else:
                 answer = str(result)
         else:
-            # Folder-mode: use LLM directly for simple chat
-            from gitpilot.llm_provider import build_llm
-            llm = build_llm()
+            # Folder-mode: talk to the provider directly.
+            #
+            # This used to go through build_llm(), which lazy-imports CrewAI
+            # and therefore LiteLLM. That is the right machinery for a
+            # multi-agent run against a GitHub repo and the wrong machinery
+            # for answering a question about a local folder — it meant a
+            # reachable, correctly configured Ollama could not answer at all
+            # unless the whole agent stack happened to be installed.
+            from gitpilot import direct_chat
+
             local_prompt = _build_local_repo_aware_prompt(req, session)
-            answer = llm.call(
-                [{"role": "user", "content": local_prompt}]
-            )
+            messages = [{"role": "user", "content": local_prompt}]
+
+            import time as _time
+
+            endpoint = direct_chat.resolve_endpoint()
+            if endpoint is not None:
+                logger.info(
+                    "[chat] session=%s folder-only → direct %s call, model=%s "
+                    "(single completion, no agents — CrewAI is not involved, "
+                    "so no agent trace will be printed)",
+                    req.session_id, endpoint.provider, endpoint.model,
+                )
+                _t0 = _time.monotonic()
+                answer = await direct_chat.chat(messages, endpoint)
+                logger.info(
+                    "[chat] session=%s direct call returned %d chars in %.1fs",
+                    req.session_id, len(answer or ""), _time.monotonic() - _t0,
+                )
+            else:
+                # Claude and watsonx have their own wire formats, so they
+                # still need the agent runtime.
+                answer = await _chat_via_agent_runtime(messages)
+    except direct_chat_errors as e:
+        # Already phrased for a person; passing it through beats wrapping it
+        # in "Error processing message:".
+        answer = str(e)
     except Exception as e:
         err_str = str(e)
         _q_kw = ["insufficient_quota", "exceeded your current quota", "rate_limit_exceeded", "429"]
@@ -4047,10 +4370,89 @@ async def ping():
     return {"ok": True, "service": "gitpilot", "version": __version__}
 
 
+@app.get("/api/diagnostics")
+async def api_diagnostics():
+    """Everything needed to explain a failure, in one call.
+
+    Written for the question that kept coming up — "it says it is connected,
+    so why did that not work?" — which previously took a terminal, a log and
+    several guesses to answer. Each field is something that has actually been
+    the cause of a report:
+
+    * ``version``        a client older or newer than this backend
+    * ``chat.path``      whether chat needs the agent runtime, and has it
+    * ``chat.ready``     configured is not the same as able to answer
+    * ``provider``       which endpoint and model a message will really go to
+    * ``python``         a stale interpreter behind a fresh checkout
+
+    Never raises: a diagnostics endpoint that fails when things are broken is
+    the one thing it must not do.
+    """
+    import platform
+    import sys
+
+    report: dict[str, Any] = {
+        "version": __version__,
+        "service": "gitpilot-backend",
+        "python": {
+            "version": platform.python_version(),
+            "executable": sys.executable,
+        },
+        "package_path": str(Path(__file__).resolve().parent),
+    }
+
+    try:
+        from gitpilot.direct_chat import describe_runtime, resolve_endpoint
+
+        settings = get_settings()
+        runtime = describe_runtime()
+        endpoint = resolve_endpoint(settings)
+
+        report["chat"] = {
+            "path": runtime["path"],
+            "ready": runtime["ready"],
+            "detail": runtime["detail"],
+        }
+        report["provider"] = {
+            "name": str(settings.provider),
+            "model": endpoint.model if endpoint else settings.get_effective_model(),
+            "endpoint": endpoint.base_url if endpoint else "",
+            "configured": settings.is_provider_configured(),
+        }
+    except Exception as e:  # pragma: no cover - defensive
+        report["chat"] = {"path": "unknown", "ready": False, "detail": str(e)}
+
+    try:
+        import importlib.util
+
+        report["runtimes"] = {
+            name: importlib.util.find_spec(name) is not None
+            for name in ("crewai", "litellm", "httpx")
+        }
+    except Exception:  # pragma: no cover - defensive
+        report["runtimes"] = {}
+
+    return report
+
+
 @app.get("/api/health")
 async def health_check():
-    """Lightweight health check — always fast, used by HF Spaces HEALTHCHECK."""
-    return {"status": "healthy", "service": "gitpilot-backend"}
+    """Lightweight health check — always fast, used by HF Spaces HEALTHCHECK.
+
+    Carries the version because this is the one endpoint every client calls on
+    every connect, and a client talking to a backend older than itself is the
+    failure that costs the most time: everything looks connected, and then one
+    feature misbehaves for reasons nothing on screen explains. Answering it
+    here means a mismatch is detectable without a second round trip.
+
+    Stays free of provider probes and imports so it cannot become the slow
+    endpoint it is used to detect slowness with.
+    """
+    return {
+        "status": "healthy",
+        "service": "gitpilot-backend",
+        "version": __version__,
+    }
 
 
 @app.get("/api/health/deep")
@@ -4168,7 +4570,9 @@ async def v2_chat_stream(request: _Request):
             return JSONResponse({"error": "Session not found"}, status_code=404)
 
     bus = _get_bus(session_id or "ephemeral")
-    gate = _ApprovalGate(bus, mode=permission_mode)
+    gate = _ApprovalGate(
+        bus, mode=permission_mode, on_checkpoint=_auto_checkpoint_hook(session)
+    )
 
     # Resolve workspace (if session has a local workspace)
     workspace = None
@@ -4316,7 +4720,7 @@ async def v2_session_websocket(websocket: WebSocket, session_id: str):
         return
 
     bus = _get_bus(session_id)
-    gate = _ApprovalGate(bus)
+    gate = _ApprovalGate(bus, on_checkpoint=_auto_checkpoint_hook(session))
     sub_id, _queue = bus.subscribe()
 
     # Forward bus events -> WebSocket

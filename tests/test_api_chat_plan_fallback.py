@@ -4,7 +4,10 @@ from contextlib import contextmanager
 
 import pytest
 
-from gitpilot import api
+# Import ``_api_app``, not ``gitpilot.api``: the latter is a package that
+# re-exports these names, so monkeypatching it rebinds a copy the endpoint
+# never reads and every stub below is silently ignored.
+from gitpilot import _api_app as api
 
 
 @contextmanager

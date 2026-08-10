@@ -15,7 +15,13 @@ if TYPE_CHECKING:
 
 from gitpilot.models import ProviderHealth, ProviderSummary
 
-from .settings import LLMProvider, get_settings
+from .settings import (
+    LLMProvider,
+    OPENWEBUI_API_SUFFIX,
+    OPENWEBUI_DEFAULT_BASE_URL,
+    get_settings,
+    openai_compatible_api_base,
+)
 from .reasoning_normalizer import wrap_if_reasoning_model
 
 logger = logging.getLogger(__name__)
@@ -34,6 +40,84 @@ def _wrap_llm(llm: Any, model: str) -> Any:
     "Invalid response from LLM call - None or empty" error.
     """
     return wrap_if_reasoning_model(llm, model)
+
+
+def _crewai_native_providers() -> tuple[str, ...]:
+    """The providers this CrewAI can reach without LiteLLM.
+
+    CrewAI grew native adapters over several releases, and which providers
+    are in the list decides whether a call is routed directly or handed to
+    the optional LiteLLM fallback. Reading the list is a capability check;
+    guessing from the version number is not, because the list changed
+    within the 1.x line.
+
+    An empty tuple means this CrewAI predates native adapters entirely — in
+    which case LiteLLM is a hard dependency of CrewAI itself and is present.
+    """
+    try:
+        from crewai.llm import SUPPORTED_NATIVE_PROVIDERS  # type: ignore
+    except Exception:  # pragma: no cover - very old or patched CrewAI
+        return ()
+    try:
+        return tuple(SUPPORTED_NATIVE_PROVIDERS)
+    except TypeError:  # pragma: no cover - defensive
+        return ()
+
+
+def _build_openai_compatible_llm(
+    LLM: Any,
+    *,
+    model: str,
+    api_base: str,
+    api_key: str,
+    **extra: Any,
+) -> Any:
+    """Build a CrewAI LLM for any endpoint that speaks the OpenAI chat API.
+
+    Ollama, OllaBridge, Open WebUI and user-supplied gateways all serve the
+    OpenAI chat-completions shape, so CrewAI's native OpenAI adapter can
+    drive every one of them. Getting to that adapter is the hard part.
+
+    Naming the endpoint's own provider does not do it. ``provider="ollama"``
+    is honest and, on CrewAI releases where Ollama is not yet a native
+    adapter, useless: the provider is not in the native list, so the call
+    falls through to the optional LiteLLM fallback and dies as "Fallback to
+    LiteLLM is not available" — an error naming neither the provider nor the
+    model that was rejected.
+
+    Prefixing the model does not do it either. ``LLM(model="openai/qwen2.5")``
+    looks unambiguous and is not: CrewAI maps the prefix to a canonical
+    provider and then validates the model part against its own constants and
+    naming patterns. Every model these endpoints serve fails that check,
+    because none of them are OpenAI models — so this route also lands in the
+    LiteLLM fallback.
+
+    ``provider="openai"`` is the one form that skips both the inference and
+    the validation, and "openai" has been in the native list for as long as
+    the list has existed. The model name is passed through untouched, which
+    is what a local or self-hosted endpoint needs.
+
+    ``model`` must be the bare model id, with no provider prefix; callers
+    strip theirs. Slashes inside a model id are meaningful to Ollama
+    (``hf.co/user/model``) and are left alone.
+    """
+    if "openai" in _crewai_native_providers():
+        return LLM(
+            model=model,
+            provider="openai",
+            base_url=api_base,
+            api_key=api_key,
+            **extra,
+        )
+
+    # A CrewAI with no native adapters at all. LiteLLM is a hard dependency
+    # of those releases, so the prefixed form is both available and correct.
+    logger.debug(
+        "CrewAI exposes no native providers; routing %s through the "
+        "prefixed model name",
+        model,
+    )
+    return LLM(model=f"openai/{model}", base_url=api_base, api_key=api_key, **extra)
 
 
 def build_llm() -> Any:
@@ -182,16 +266,42 @@ def build_llm() -> Any:
                 "Configure it in Admin / LLM Settings or set OLLAMA_BASE_URL environment variable."
             )
 
-        # Ensure model has provider prefix for CrewAI
-        if not model.startswith("ollama/"):
-            model = f"ollama/{model}"
+        # Ollama serves an OpenAI-compatible API at /v1, so it is driven
+        # through the same native adapter as every other endpoint of that
+        # shape. See _build_openai_compatible_llm for why the obvious
+        # spellings — provider="ollama", or an "ollama/" model prefix — both
+        # end up in CrewAI's LiteLLM fallback instead of talking to Ollama.
+        model_name = model.removeprefix("ollama/")
+        api_base = openai_compatible_api_base(base_url)
 
-        return _wrap_llm(LLM(model=model, base_url=base_url), model)
+        # Deliberately no OPENAI_API_* environment writes here. The adapter
+        # is given the base URL and key directly, and those variables are
+        # process-wide and outlive the request: seeding OPENAI_API_KEY with
+        # the placeholder "ollama" makes a later switch to OpenAI look
+        # configured when it is not, so instead of "OpenAI API key is
+        # required" the user gets a 401 from api.openai.com for a key that
+        # was never theirs. direct_chat.resolve_endpoint reads exactly that
+        # variable to decide whether a key is present.
+
+        return _wrap_llm(
+            _build_openai_compatible_llm(
+                LLM,
+                model=model_name,
+                api_base=api_base,
+                # Ollama ignores it; the OpenAI-shaped client insists on one.
+                api_key="ollama",
+            ),
+            f"ollama/{model_name}",
+        )
 
     if provider == LLMProvider.ollabridge:
         # OllaBridge / OllaBridge Cloud - OpenAI-compatible API
         model = settings.ollabridge.model or os.getenv("GITPILOT_OLLABRIDGE_MODEL", "qwen2.5:1.5b")
-        base_url = settings.ollabridge.base_url or os.getenv("OLLABRIDGE_BASE_URL", "http://localhost:8000")
+        from .settings import OLLABRIDGE_DEFAULT_BASE_URL
+
+        base_url = settings.ollabridge.base_url or os.getenv(
+            "OLLABRIDGE_BASE_URL", OLLABRIDGE_DEFAULT_BASE_URL
+        )
         api_key = settings.ollabridge.api_key or os.getenv("OLLABRIDGE_API_KEY", "")
 
         # Validate required configuration
@@ -202,11 +312,12 @@ def build_llm() -> Any:
                 "OLLABRIDGE_BASE_URL environment variable."
             )
 
-        # OllaBridge exposes an OpenAI-compatible API at /v1/
-        # Use the openai/ prefix so CrewAI routes through the OpenAI adapter
-        if not model.startswith("openai/"):
-            model = f"openai/{model}"
-
+        # OllaBridge exposes an OpenAI-compatible API at /v1/, so it goes
+        # through CrewAI's native OpenAI adapter. The model id is the one
+        # OllaBridge serves (qwen2.5:1.5b and friends), which is why the
+        # provider is named rather than prefixed onto the model — see
+        # _build_openai_compatible_llm.
+        model_name = model.removeprefix("openai/")
         ollabridge_api_base = f"{base_url.rstrip('/')}/v1"
         ollabridge_key = api_key or "ollabridge"
 
@@ -218,12 +329,88 @@ def build_llm() -> Any:
         os.environ["OPENAI_API_BASE"] = ollabridge_api_base
 
         return _wrap_llm(
-            LLM(
-                model=model,
+            _build_openai_compatible_llm(
+                LLM,
+                model=model_name,
+                api_base=ollabridge_api_base,
                 api_key=ollabridge_key,
-                base_url=ollabridge_api_base,
             ),
-            model,
+            f"openai/{model_name}",
+        )
+
+    if provider == LLMProvider.openwebui:
+        # Open WebUI speaks the OpenAI chat-completions API. Route it through
+        # the OpenAI adapter with the instance's own base URL.
+        model = settings.openwebui.model or os.getenv("GITPILOT_OPENWEBUI_MODEL", "")
+        base_url = settings.openwebui.base_url or os.getenv(
+            "OPENWEBUI_BASE_URL", OPENWEBUI_DEFAULT_BASE_URL
+        )
+        api_key = settings.openwebui.api_key or os.getenv("OPENWEBUI_API_KEY", "")
+
+        if not base_url:
+            raise ValueError(
+                "Open WebUI base URL is required. "
+                "Configure it in Settings → AI Providers or set the "
+                "OPENWEBUI_BASE_URL environment variable."
+            )
+        if not model:
+            raise ValueError(
+                "Open WebUI model is required. Pick one in Settings → AI Providers."
+            )
+
+        api_base = openai_compatible_api_base(base_url, OPENWEBUI_API_SUFFIX)
+        # Open WebUI accepts an unauthenticated call only when the instance is
+        # open; litellm still wants a non-empty key, so send a placeholder.
+        key = api_key or "openwebui"
+        model_name = model.removeprefix("openai/")
+
+        os.environ["OPENAI_API_KEY"] = key
+        os.environ["OPENAI_API_BASE"] = api_base
+
+        return _wrap_llm(
+            _build_openai_compatible_llm(
+                LLM, model=model_name, api_base=api_base, api_key=key
+            ),
+            f"openai/{model_name}",
+        )
+
+    if provider == LLMProvider.custom:
+        # A user-supplied OpenAI-compatible endpoint. Everything is explicit
+        # here — there is no vendor default to fall back on.
+        model = settings.custom.model or os.getenv("GITPILOT_CUSTOM_MODEL", "")
+        base_url = settings.custom.base_url or os.getenv("GITPILOT_CUSTOM_BASE_URL", "")
+        api_key = settings.custom.api_key or os.getenv("GITPILOT_CUSTOM_API_KEY", "")
+        headers = dict(settings.custom.headers or {})
+
+        if not base_url:
+            raise ValueError(
+                "Custom endpoint base URL is required. "
+                "Configure it in Settings → AI Providers."
+            )
+        if not model:
+            raise ValueError(
+                "Custom endpoint model is required. "
+                "Enter the model id your endpoint expects."
+            )
+
+        api_base = openai_compatible_api_base(base_url)
+        key = api_key or "custom"
+        model_name = model.removeprefix("openai/")
+
+        os.environ["OPENAI_API_KEY"] = key
+        os.environ["OPENAI_API_BASE"] = api_base
+
+        # Gateways commonly require extra headers for attribution or routing;
+        # pass them through untouched.
+        extra: dict[str, Any] = {}
+        if headers:
+            extra["extra_headers"] = headers
+
+        return _wrap_llm(
+            _build_openai_compatible_llm(
+                LLM, model=model_name, api_base=api_base, api_key=key, **extra
+            ),
+            f"openai/{model_name}",
         )
 
     raise ValueError(f"Unsupported provider: {provider}")
@@ -356,8 +543,42 @@ async def test_provider_connection(settings) -> ProviderSummary:
                 resp = await client.get(f"{base}/api/tags")
                 _apply_health(summary, resp.status_code)
 
+            elif provider == LLMProvider.openwebui:
+                base = openai_compatible_api_base(
+                    settings.openwebui.base_url or OPENWEBUI_DEFAULT_BASE_URL,
+                    OPENWEBUI_API_SUFFIX,
+                )
+                headers = {}
+                if settings.openwebui.api_key:
+                    headers["Authorization"] = f"Bearer {settings.openwebui.api_key}"
+                resp = await client.get(f"{base}/models", headers=headers)
+                _apply_health(summary, resp.status_code)
+
+            elif provider == LLMProvider.custom:
+                if not settings.custom.base_url:
+                    summary.health = ProviderHealth.error
+                    summary.warning = "No endpoint URL configured"
+                    return summary
+                base = openai_compatible_api_base(settings.custom.base_url)
+                headers = dict(settings.custom.headers or {})
+                if settings.custom.api_key:
+                    headers["Authorization"] = f"Bearer {settings.custom.api_key}"
+                resp = await client.get(f"{base}/models", headers=headers)
+                # A gateway may expose chat-completions without a model
+                # listing; that is a working endpoint, not a failure.
+                if resp.status_code in (404, 405):
+                    summary.health = ProviderHealth.ok
+                    summary.warning = (
+                        "Endpoint reachable, but it does not list models. "
+                        "Enter the model id manually."
+                    )
+                else:
+                    _apply_health(summary, resp.status_code)
+
             elif provider == LLMProvider.ollabridge:
-                base = settings.ollabridge.base_url or "http://127.0.0.1:8000"
+                from .settings import OLLABRIDGE_DEFAULT_BASE_URL
+
+                base = settings.ollabridge.base_url or OLLABRIDGE_DEFAULT_BASE_URL
                 base = base.rstrip("/")
                 if base.endswith("/v1"):
                     base = base[:-3]

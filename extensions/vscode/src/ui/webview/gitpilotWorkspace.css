@@ -154,11 +154,61 @@ textarea {
   line-height: 1.55;
 }
 
+/*
+ * The composer is the one framed object on the page.
+ *
+ * Everything else — the transcript, the landing copy, the suggestions — sits
+ * on the editor background, so the box you type into is unmistakably the
+ * thing to do next. The frame lives on the wrapper rather than the textarea
+ * so the chips and the button row sit inside it.
+ */
+.chat-compose {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 60%, transparent);
+  padding: 12px 12px 10px;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.chat-compose:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.chat-compose textarea {
+  min-height: 74px;
+  border: none;
+  background: none;
+  padding: 2px 2px 0;
+  border-radius: 0;
+  resize: none;
+}
+
+.chat-compose textarea:focus-visible { outline: none; }
+
+/* The panel is one column on a flat ground; only the composer is framed. */
+#chat-section.surface {
+  background: none;
+  border: none;
+  box-shadow: none;
+  overflow: visible;
+}
+
+/*
+ * A measured column, not the full width of a monitor.
+ *
+ * This is an editor tab now, so on a wide screen the composer would otherwise
+ * stretch to 2000px and the conversation would read like a spreadsheet. The
+ * column stays the width a person can actually read.
+ */
 .app {
   display: grid;
   gap: 10px;
   min-height: calc(100vh - 20px);
   align-content: start;
+  width: 100%;
+  max-width: 940px;
+  margin: 0 auto;
 }
 
 .surface {
@@ -180,21 +230,43 @@ textarea {
   gap: 12px;
 }
 
+/*
+ * A thin action bar.
+ *
+ * It used to be a status card carrying provider, connection, model, repo and
+ * branch — all of which the sidebar and the landing page already say — with a
+ * Disconnected pill beside a Ready pill. Restraint here is what lets the
+ * conversation be the thing you look at.
+ */
 .header {
-  padding: 16px;
+  padding: 8px 10px;
   display: grid;
-  gap: 12px;
-  background:
-    radial-gradient(circle at top right, color-mix(in srgb, var(--accent) 12%, transparent), transparent 32%),
-    linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 72%, transparent), color-mix(in srgb, var(--surface) 100%, transparent));
+  gap: 0;
+  background: none;
+  border: none;
+  box-shadow: none;
 }
 
 .header-top {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
+  min-height: 28px;
 }
+
+/* Named only once there is a task to name. */
+.header-title {
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  animation: messageIn .18s ease both;
+}
+
+.header-title.hidden { display: none; }
 
 .eyebrow {
   display: inline-flex;
@@ -396,6 +468,16 @@ details.disclosure summary::-webkit-details-marker { display: none; }
   gap: 8px;
 }
 
+/* The shape of a diff, stated in the header so the rows stay optional. */
+.summary-stat {
+  margin-left: auto;
+  margin-right: 8px;
+  color: var(--muted);
+  font-size: var(--font-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .chevron {
   color: var(--muted);
   transition: transform var(--transition-fast);
@@ -540,6 +622,132 @@ details[open] .chevron {
   gap: 8px;
 }
 
+/* ─── Context chips ───
+ *
+ * What GitPilot will look at, stated before you send. Selecting code attaches
+ * one on its own, because naming the file you mean is the most tedious step
+ * of an AI coding workflow. Every chip is removable: context you cannot see
+ * or take back is context you cannot trust.
+ */
+.context-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.context-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 4px 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  color: var(--muted);
+  font-size: var(--font-xs);
+  animation: messageIn .16s ease both;
+}
+
+.context-chip .chip-icon { color: var(--accent); flex-shrink: 0; }
+
+.context-chip .chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 240px;
+}
+
+.context-chip .chip-remove {
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 4px;
+  border-radius: 999px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.context-chip .chip-remove:hover {
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+  color: var(--fg);
+}
+
+/* ─── Inline completion for @ and / ───
+ *
+ * A dropdown anchored to the composer rather than a modal quick pick: the
+ * sentence you are part-way through writing stays on screen while you choose.
+ */
+.compose-field { position: relative; }
+
+.compose-popup {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 30;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.30);
+  animation: activityFadeIn .12s ease both;
+}
+
+.popup-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 11px;
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+
+.popup-row.active { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.popup-row:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
+
+.popup-label {
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.popup-detail {
+  color: var(--muted);
+  font-size: var(--font-xs);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+/* The + that opens a file picker. Neutral: the send button is the one action
+   on this row that deserves the accent. */
+.compose-chip {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.compose-chip:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--fg);
+}
+
 .chat-shell {
   display: grid;
   gap: 10px;
@@ -551,24 +759,42 @@ details[open] .chevron {
   padding: 0;
   display: grid;
   gap: 8px;
-  max-height: 380px;
+  /* A fixed cap wastes a tall panel and cramps a short one. Bounded by the
+     viewport so the composer below stays reachable without a long scroll. */
+  max-height: min(62vh, 760px);
   overflow: auto;
   scroll-behavior: smooth;
 }
 
+/*
+ * A message is text, not a card.
+ *
+ * Boxing every turn makes a long conversation visually exhausting — card,
+ * then card, then card. Cards are reserved for things you can act on: a
+ * suggested change, an approval, a tool-activity group. The role is carried
+ * by a 2px rule instead of a border-and-fill, which reads at a glance without
+ * competing with the interactive blocks below it.
+ */
 .chat-item {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  border-left: 3px solid transparent;
-  padding: 11px 12px;
+  background: transparent;
+  border: none;
+  border-left: 2px solid transparent;
+  border-radius: 0;
+  padding: 4px 0 4px 11px;
   opacity: 0;
   transform: translateY(8px);
   animation: messageIn .18s ease forwards;
 }
 
-.chat-item.user { border-left-color: var(--accent); }
-.chat-item.assistant { border-left-color: var(--success); }
+/* The user's own turn is the one worth setting apart; a faint fill does it
+   without the weight of a full card. */
+.chat-item.user {
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  padding-right: 11px;
+}
+.chat-item.assistant { border-left-color: transparent; padding-left: 13px; }
 .chat-item.system { border-left-color: var(--warning); }
 
 .chat-role-row {
@@ -587,11 +813,21 @@ details[open] .chevron {
   letter-spacing: .08em;
 }
 
+/*
+ * The timestamp is reference material, not part of reading the conversation.
+ * A column of times down the right-hand edge of every turn is visual noise
+ * you scan past; on hover it is exactly as available as before.
+ */
 .chat-time {
   color: var(--muted);
   font-size: var(--font-xs);
   white-space: nowrap;
+  opacity: 0;
+  transition: opacity 120ms ease;
 }
+
+.chat-item:hover .chat-time,
+.chat-item:focus-within .chat-time { opacity: 1; }
 
 .chat-content {
   font-size: var(--font-md);
@@ -696,44 +932,101 @@ details[open] .chevron {
   align-items: center;
 }
 
-/* ─── Execution mode selector (Auto / Ask / Plan) ─── */
-.mode-selector {
+/* ─── The composer row ───
+ *
+ * Left: what acts on the message you are writing. Right: how it will be run,
+ * and one accent-coloured button to run it. A three-segment permission
+ * control ate the width the composer needed, so it became a menu that still
+ * names every mode — and now says what each one will and will not do, which
+ * the segments only managed in a tooltip.
+ */
+.row-spacer { flex: 1; }
+
+.mode-picker { position: relative; flex-shrink: 0; }
+
+.mode-trigger {
   display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
   border-radius: 8px;
   border: 1px solid var(--border);
-  overflow: hidden;
-  flex-shrink: 0;
-}
-.mode-btn {
+  background: none;
+  color: var(--fg);
   font-family: inherit;
   font-size: var(--font-xs);
   font-weight: 600;
-  padding: 5px 10px;
-  color: var(--muted);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  transition: background 100ms ease, color 100ms ease;
   line-height: 1;
-}
-.mode-btn:not(:last-child) {
-  border-right: 1px solid var(--border);
-}
-.mode-btn:hover {
-  color: var(--fg);
-  background: rgba(255, 255, 255, 0.04);
-}
-.mode-btn.active {
-  color: var(--accent-bright, #ff7a3c);
-  background: rgba(255, 122, 60, 0.1);
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
 }
 
+.mode-trigger:hover { background: color-mix(in srgb, var(--fg) 7%, transparent); }
+.mode-trigger .caret { color: var(--muted); font-size: 10px; }
+
+.mode-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 40;
+  min-width: 268px;
+  display: grid;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.34);
+  animation: activityFadeIn .12s ease both;
+}
+
+.mode-btn {
+  display: grid;
+  gap: 2px;
+  justify-items: start;
+  text-align: left;
+  font-family: inherit;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  color: var(--fg);
+  background: none;
+  cursor: pointer;
+  transition: background 100ms ease;
+}
+
+.mode-btn:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
+
+.mode-name { font-size: var(--font-sm); font-weight: 600; }
+
+.mode-detail {
+  font-size: var(--font-xs);
+  color: var(--muted);
+  line-height: 1.4;
+  font-weight: 400;
+}
+
+.mode-btn.active .mode-name { color: var(--accent-bright, #ff7a3c); }
+.mode-btn.active { background: rgba(255, 122, 60, 0.1); }
+
+/*
+ * One accent-coloured control on the page, and it is small.
+ *
+ * A full-width Send bar shouted louder than the question above it; the arrow
+ * is unmistakable, and Enter is what people actually press.
+ */
 .primary-row #send-btn {
-  flex: 1;
-}
-.primary-row #new-chat-btn {
+  width: 34px;
+  height: 30px;
   flex-shrink: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
 }
+
+.primary-row #send-btn svg { width: 15px; height: 15px; }
+.primary-row #send-btn:active { transform: scale(0.94); }
 
 .secondary-row {
   display: flex;
@@ -955,6 +1248,7 @@ details[open] .chevron {
 
 /* ─── Stop button (replaces Send during generation) ─── */
 
+/* Stopping is a different act, so it looks like one. */
 #send-btn.stop-mode {
   background: var(--danger-soft);
   color: var(--danger);
@@ -1012,68 +1306,160 @@ details[open] .chevron {
 
 /* ─── Empty state ─── */
 
+/* ─── The landing page ───
+ *
+ * This is the empty state of the one GitPilot tab, so the landing page and
+ * the conversation are the same surface at two moments. It is generous
+ * because it is the first thing anyone sees, and it disappears entirely the
+ * moment there is a transcript to read instead.
+ */
 .chat-empty-state {
   display: grid;
   gap: 14px;
   justify-items: center;
-  padding: 28px 16px 20px;
+  padding: clamp(24px, 7vh, 72px) 16px 24px;
   text-align: center;
+  animation: homeIn .26s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-.empty-icon {
-  width: 44px;
-  height: 44px;
-  border-radius: 999px;
-  background: var(--accent-soft);
-  color: var(--accent);
+@keyframes homeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+.home-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.home-mark {
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  background: var(--accent);
+  color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: var(--font-sm);
+  font-size: 15px;
   font-weight: 800;
-  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
-  box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 6%, transparent);
+  letter-spacing: -0.4px;
 }
 
-.empty-heading {
-  font-size: var(--font-lg);
+.home-name {
+  font-size: clamp(20px, 2.4vw, 27px);
   font-weight: 700;
+  letter-spacing: -0.6px;
   color: var(--fg);
 }
 
-.empty-subtext {
-  font-size: var(--font-sm);
+.home-headline {
+  margin: 0;
+  font-size: clamp(24px, 4vw, 38px);
+  font-weight: 700;
+  letter-spacing: -1.1px;
+  line-height: 1.15;
+  color: var(--fg);
+}
+
+.home-subhead {
+  margin: 0;
+  font-size: var(--font-md);
   color: var(--muted);
   line-height: 1.5;
-  max-width: 280px;
+  max-width: 46ch;
 }
+
+/* Stated once, quietly, and only while the landing page is on screen. */
+.home-trust {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 18px;
+  font-size: var(--font-xs);
+  color: var(--muted);
+}
+
+.home-trust .trust-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.home-trust .trust-sep { opacity: 0.45; }
+
+.home-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex-shrink: 0;
+}
+
+.home-dot.ok { background: var(--success); }
+.home-dot.bad { background: var(--danger); }
+.home-dot.pending {
+  background: var(--warning);
+  animation: thinkingPulse 1.4s ease-in-out infinite;
+}
+
+/* ─── The landing page's shortcuts, below the composer ─── */
+.home-actions {
+  display: grid;
+  gap: 0;
+  justify-items: center;
+  animation: homeIn .26s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.home-actions.hidden { display: none; }
 
 .empty-suggestions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   justify-content: center;
-  margin-top: 2px;
+  margin-top: 10px;
 }
 
+/*
+ * Neutral outlines, not accent pills. Four coloured buttons compete with the
+ * send button and turn a landing page into a toolbar; the composer has to
+ * stay the one obvious thing to do.
+ */
 .suggestion-chip {
-  padding: 6px 12px;
-  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 9px;
   font-size: var(--font-sm);
-  font-weight: 600;
-  background: var(--secondary);
-  color: var(--secondary-fg);
+  font-weight: 500;
+  background: none;
+  color: var(--muted);
   border: 1px solid var(--border);
   cursor: pointer;
   transition:
     border-color var(--transition-fast),
     background var(--transition-fast),
+    color var(--transition-fast),
     transform var(--transition-fast);
 }
 
+.suggestion-chip svg {
+  width: 14px;
+  height: 14px;
+  opacity: 0.8;
+  flex-shrink: 0;
+}
+
 .suggestion-chip:hover {
-  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
-  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--fg) 22%, transparent);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  color: var(--fg);
   transform: translateY(-1px);
 }
 
@@ -1146,18 +1532,81 @@ details[open] .chevron {
   flex-wrap: wrap;
 }
 
-/* ─── Tool activity feed ─── */
+/* ─── Tool activity, inline in the transcript ───
+ *
+ * The work GitPilot did is part of the conversation, so it lives in the flow
+ * and stays there once the task is over. Collapsed, it is one quiet line —
+ * "Investigated 4 steps" — because a transcript that reads as prose is worth
+ * more than one that reads as a log. Expanded, every call is still there.
+ */
+.activity-block {
+  padding: 2px 0 2px 13px;
+}
 
-.tool-activity-feed {
-  padding: 6px 0;
+.activity-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 4px 6px;
+  margin-left: -6px;
+  border: none;
+  border-radius: var(--radius-sm, 8px);
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--font-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.activity-summary:hover {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  color: var(--fg);
+}
+
+.activity-caret {
+  font-size: 9px;
+  width: 10px;
+  flex-shrink: 0;
+  transition: transform 140ms ease;
+}
+
+.activity-glyph {
+  font-size: var(--font-xs);
+  width: 13px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.activity-block.running .activity-glyph {
+  color: var(--accent);
+  animation: thinkingPulse 1.3s ease-in-out infinite;
+}
+.activity-block.failed .activity-glyph { color: var(--danger); }
+.activity-block:not(.running):not(.failed) .activity-glyph { color: var(--success); }
+
+.activity-summary-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Collapsed by default: the summary is the answer, the calls are the detail. */
+.activity-block > .activity-list { display: none; }
+.activity-block.open > .activity-list {
+  display: grid;
+  animation: activityFadeIn .16s ease both;
 }
 
 .activity-list {
   list-style: none;
-  margin: 0;
-  padding: 0;
+  margin: 3px 0 4px;
+  padding: 0 0 0 17px;
   display: grid;
   gap: 4px;
+  border-left: 1px solid var(--border);
 }
 
 .activity-item {

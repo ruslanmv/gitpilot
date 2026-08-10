@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="__CSP__" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GitPilot</title>
+  <style nonce="__NONCE__">
+    /*
+     * GitPilot navigation sidebar.
+     *
+     * One job: answer "where do I want to go?". The conversation lives in the
+     * GitPilot Chat tab and the code lives in the editor, so nothing here
+     * duplicates either — no message list, no composer, no provider form.
+     *
+     * Everything is a row. Cards were tried and made a short list look heavy;
+     * rows let ten sessions read as a list rather than ten boxes.
+     */
+    :root {
+      --fg: var(--vscode-sideBar-foreground, var(--vscode-foreground));
+      --muted: color-mix(in srgb, var(--fg) 58%, transparent);
+      --faint: color-mix(in srgb, var(--fg) 38%, transparent);
+      --border: var(--vscode-panel-border, rgba(128,128,128,0.25));
+      --accent: #D95C3D;
+      --accent-bright: #ff7a3c;
+      --hover: var(--vscode-list-hoverBackground, rgba(255,255,255,0.05));
+      --active: var(--vscode-list-activeSelectionBackground, rgba(217,92,61,0.14));
+      --ok: var(--vscode-testing-iconPassed, #4ade80);
+      --bad: var(--vscode-testing-iconFailed, #f87171);
+      --warn: var(--vscode-testing-iconQueued, #fbbf24);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--vscode-font-family);
+      font-size: 13px;
+      color: var(--fg);
+      background: var(--vscode-sideBar-background);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* VS Code draws the view's name above this webview, so there is no brand
+       row of our own — one used to put GITPILOT on screen twice. */
+    .icon-btn {
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      padding: 4px;
+      border-radius: 4px;
+      display: inline-flex;
+      align-items: center;
+      /* Kept deliberately quick: a sidebar control should feel instant. */
+      transition: background 120ms ease, color 120ms ease, transform 120ms ease;
+    }
+    .icon-btn:hover { background: var(--hover); color: var(--fg); }
+    .icon-btn:active { transform: scale(0.92); }
+    .icon-btn svg { width: 15px; height: 15px; }
+
+    /* ── Status: one line, not a card ── */
+    /* First thing on the page now that the brand row has gone. */
+    .status-block { padding: 10px 12px; flex-shrink: 0; }
+    .status-block + .status-block { padding-top: 0; }
+    .status-line {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12px;
+      margin-bottom: 3px;
+      min-width: 0;
+    }
+    .dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--faint);
+      flex-shrink: 0;
+      transition: background 200ms ease;
+    }
+    .dot.ok { background: var(--ok); }
+    .dot.bad { background: var(--bad); }
+    .dot.warn { background: var(--warn); }
+    /* Connecting is the only state worth animating — it is the only one
+       that is expected to change on its own. */
+    .dot.pending { background: var(--warn); animation: pulse 1.4s ease-in-out infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+    #status-text { flex-shrink: 0; font-weight: 600; }
+
+    /*
+     * The reason, one line, only when there is one worth giving.
+     *
+     * This replaced a second bordered card that restated the status the line
+     * above it had already given.
+     */
+    .status-reason {
+      font-size: 11.5px;
+      color: var(--muted);
+      line-height: 1.45;
+      margin-bottom: 3px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      animation: fadeIn 160ms ease both;
+    }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+    .recovery {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-top: 9px;
+      animation: fadeIn 160ms ease both;
+    }
+
+    .retrying {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-top: 8px;
+      font-size: 11.5px;
+      color: var(--faint);
+      animation: fadeIn 160ms ease both;
+    }
+
+    .retry-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--warn);
+      flex-shrink: 0;
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+
+    .model-btn {
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-family: inherit;
+      font-size: 12px;
+      cursor: pointer;
+      padding: 1px 5px;
+      border-radius: 4px;
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      min-width: 0;
+      transition: background 120ms ease, color 120ms ease;
+    }
+    .model-btn:hover { background: var(--hover); color: var(--fg); }
+    .model-btn .name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .model-btn .caret { opacity: 0.6; font-size: 9px; flex-shrink: 0; }
+
+    .repo-line {
+      font-size: 11.5px;
+      color: var(--faint);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* ── Primary action ── */
+    .new-chat {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      padding: 7px 12px;
+      margin: 0 0 4px;
+      font-family: inherit;
+      font-size: 12.5px;
+      font-weight: 600;
+      color: #fff;
+      background: var(--accent);
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 120ms ease, transform 90ms ease;
+    }
+    .new-chat:hover { background: #C44F32; }
+    .new-chat:active { transform: scale(0.985); }
+    .new-chat svg { width: 13px; height: 13px; }
+
+    /* ── Scrolling body ── */
+    .nav-body { flex: 1; overflow-y: auto; padding: 6px 0 12px; }
+
+    .group-label {
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      color: var(--faint);
+      padding: 12px 12px 5px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .group-label .link {
+      font-size: 10.5px;
+      letter-spacing: 0;
+      text-transform: none;
+      color: var(--accent-bright);
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .group-label .link:hover { text-decoration: underline; }
+
+    /*
+     * A row, not a card. The 2px accent bar on the left marks the session the
+     * chat tab is currently showing — the same signal VS Code uses for the
+     * active editor, so it needs no legend.
+     */
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      width: 100%;
+      padding: 6px 10px 6px 12px;
+      background: none;
+      border: none;
+      border-left: 2px solid transparent;
+      color: var(--fg);
+      font-family: inherit;
+      text-align: left;
+      cursor: pointer;
+      position: relative;
+      transition: background 100ms ease;
+    }
+    .row:hover { background: var(--hover); }
+    .row.current { background: var(--active); border-left-color: var(--accent-bright); }
+    .row-text { flex: 1; min-width: 0; }
+    .row-title {
+      font-size: 12.5px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .row.current .row-title { font-weight: 600; }
+    .row-sub {
+      font-size: 11px;
+      color: var(--faint);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      margin-top: 1px;
+    }
+    .row-icon {
+      color: var(--muted);
+      display: inline-flex;
+      flex-shrink: 0;
+      width: 16px;
+      justify-content: center;
+    }
+    .row-icon svg { width: 14px; height: 14px; }
+    .row.current .row-icon { color: var(--accent-bright); }
+
+    /*
+     * The overflow menu stays hidden until the row is hovered or focused.
+     * Permanently visible controls on every row is what makes a list look
+     * cluttered; keyboard users still reach it via focus-within.
+     */
+    .row-more {
+      opacity: 0;
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      padding: 2px 4px;
+      border-radius: 4px;
+      flex-shrink: 0;
+      font-size: 13px;
+      line-height: 1;
+      transition: opacity 120ms ease, background 120ms ease;
+    }
+    .row:hover .row-more,
+    .row:focus-within .row-more { opacity: 1; }
+    .row-more:hover { background: var(--hover); color: var(--fg); }
+    .row-more:focus-visible { opacity: 1; outline: 1px solid var(--accent); }
+
+    .empty {
+      padding: 10px 12px 14px;
+      font-size: 11.5px;
+      color: var(--faint);
+      line-height: 1.55;
+    }
+
+    /* ── Recovery buttons ── */
+    .btn-sm {
+      font-family: inherit;
+      font-size: 11.5px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 5px;
+      border: 1px solid var(--border);
+      background: none;
+      color: var(--fg);
+      cursor: pointer;
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+    .btn-sm:hover { background: var(--hover); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+    .btn-sm.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn-sm.primary:hover { background: #C44F32; }
+
+    /* ── Footer ── */
+    .nav-footer {
+      flex-shrink: 0;
+      border-top: 1px solid var(--border);
+      padding: 6px 6px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .footer-btn {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-family: inherit;
+      font-size: 12px;
+      cursor: pointer;
+      padding: 5px 7px;
+      border-radius: 5px;
+      transition: background 120ms ease, color 120ms ease;
+    }
+    .footer-btn:hover { background: var(--hover); color: var(--fg); }
+    .footer-btn svg { width: 14px; height: 14px; }
+
+    .hidden { display: none !important; }
+
+    /* Respect the platform preference rather than animating regardless. */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <!--
+    One status, stated once.
+
+    "Disconnected" beside "Ready" beside "Provider not set" beside "No model"
+    was four status concepts contradicting each other. There is now a single
+    primary state — Ready, Connecting, Needs setup, Offline — and the reason
+    underneath it only when there is one worth giving.
+  -->
+  <div class="status-block">
+    <div class="status-line">
+      <span class="dot pending" id="status-dot"></span>
+      <span id="status-text">Connecting…</span>
+      <button class="model-btn hidden" id="btn-model" type="button" title="Change model">
+        <span class="name" id="model-name">—</span>
+        <span class="caret">▾</span>
+      </button>
+    </div>
+    <div class="status-reason hidden" id="status-reason"></div>
+    <div class="repo-line" id="repo-line">No folder open</div>
+
+    <!-- Recovery sits under the reason it belongs to, not in a second card. -->
+    <div class="recovery hidden" id="recovery">
+      <button class="btn-sm primary" id="btn-start-server" type="button">Start server</button>
+      <button class="btn-sm" id="btn-reconnect" type="button">Reconnect</button>
+    </div>
+
+    <!--
+      Say that we are still trying.
+      A dead-looking panel with two buttons made "click Reconnect" feel like
+      the only way forward, when the extension is already retrying on its own
+      and will connect the moment the server answers.
+    -->
+    <div class="retrying hidden" id="retrying">
+      <span class="retry-dot"></span>
+      <span>Retrying automatically&hellip;</span>
+    </div>
+  </div>
+
+  <div class="status-block" style="padding-bottom: 4px;">
+    <button class="new-chat" id="btn-new-chat" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      New Task
+    </button>
+  </div>
+
+  <!--
+    Recent tasks and nothing else.
+
+    Quick Actions lived here and on the landing page, which is the same
+    duplication as the two composers. They are ways to *start* work, so they
+    belong on the page you start work from; the sidebar picks up work already
+    underway.
+  -->
+  <div class="nav-body">
+    <div class="group-label">
+      <span>Recent Tasks</span>
+      <span class="link hidden" id="link-all-sessions">View all</span>
+    </div>
+    <div id="session-list"></div>
+    <div class="empty hidden" id="session-empty">
+      No tasks yet. Start one with <strong>New Task</strong>.
+    </div>
+
+    <div class="group-label"><span>Quick Actions</span></div>
+    <div id="quick-actions"></div>
+  </div>
+
+  <div class="nav-footer">
+    <button class="footer-btn" id="btn-settings-footer" type="button" title="GitPilot Settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      Settings
+    </button>
+    <button class="icon-btn" id="btn-docs" type="button" title="Documentation">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+    </button>
+  </div>
+
+  <script nonce="__NONCE__">
+    const vscode = acquireVsCodeApi();
+    const post = (msg) => vscode.postMessage(msg);
+    const byId = (id) => document.getElementById(id);
+
+    /** Icons kept inline so the sidebar needs no external resources. */
+    const ICONS = {
+      explain: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+      review: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
+      fix: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>',
+      tests: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6v6l4 9a2 2 0 0 1-1.8 3H6.8A2 2 0 0 1 5 18l4-9z"/></svg>',
+      bugs: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
+      chat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+    };
+
+    /**
+     * Quick actions are shortcuts, so they are few and fixed. A longer list
+     * belongs in the command palette, which already exists.
+     */
+    const QUICK_ACTIONS = [
+      { id: "explain_project", label: "Explain project", icon: "explain" },
+      { id: "review_file", label: "Review current file", icon: "review" },
+      { id: "fix_selection", label: "Fix selection", icon: "fix" },
+      { id: "generate_tests", label: "Write tests", icon: "tests" },
+      { id: "security_scan", label: "Security scan", icon: "bugs" },
+    ];
+
+    let state = null;
+
+    const el = (tag, props = {}, children = []) => {
+      const node = document.createElement(tag);
+      for (const [key, value] of Object.entries(props)) {
+        if (key === "class") node.className = value;
+        else if (key === "text") node.textContent = value;
+        else if (key === "html") node.innerHTML = value;
+        else if (key.startsWith("on")) node.addEventListener(key.slice(2).toLowerCase(), value);
+        else if (value !== undefined && value !== null) node.setAttribute(key, value);
+      }
+      for (const child of [].concat(children)) if (child) node.appendChild(child);
+      return node;
+    };
+
+    // ── Header and footer actions ──
+    byId("btn-model").addEventListener("click", () => post({ type: "SELECT_MODEL" }));
+    byId("btn-new-chat").addEventListener("click", () => post({ type: "NEW_TASK" }));
+    byId("btn-settings-footer").addEventListener("click", () => post({ type: "OPEN_SETTINGS" }));
+    byId("btn-docs").addEventListener("click", () => post({ type: "OPEN_DOCS" }));
+    byId("btn-start-server").addEventListener("click", () => post({ type: "START_SERVER" }));
+    byId("btn-reconnect").addEventListener("click", () => post({ type: "RECONNECT" }));
+    byId("link-all-sessions").addEventListener("click", () => post({ type: "VIEW_ALL_SESSIONS" }));
+
+    function renderQuickActions() {
+      const list = byId("quick-actions");
+      list.replaceChildren();
+      for (const action of QUICK_ACTIONS) {
+        const row = el("button", { class: "row", type: "button", title: action.label }, [
+          el("span", { class: "row-icon", html: ICONS[action.icon] }),
+          el("span", { class: "row-text" }, [el("span", { class: "row-title", text: action.label })]),
+        ]);
+        row.addEventListener("click", () => post({ type: "QUICK_ACTION", action: action.id }));
+        list.appendChild(row);
+      }
+    }
+
+    /** "2:34 PM" today, "Yesterday", otherwise a short date. */
+    function whenLabel(iso) {
+      if (!iso) return "";
+      const then = new Date(iso);
+      if (Number.isNaN(then.getTime())) return "";
+      const now = new Date();
+      const sameDay = then.toDateString() === now.toDateString();
+      if (sameDay) {
+        return then.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+      }
+      const yesterday = new Date(now);
+      yesterday.setDate(now.getDate() - 1);
+      if (then.toDateString() === yesterday.toDateString()) return "Yesterday";
+      return then.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    }
+
+    function renderSessions() {
+      const list = byId("session-list");
+      const empty = byId("session-empty");
+      list.replaceChildren();
+
+      const sessions = (state && state.sessions) || [];
+      empty.classList.toggle("hidden", sessions.length > 0);
+      byId("link-all-sessions").classList.toggle("hidden", sessions.length < 6);
+
+      for (const session of sessions.slice(0, 8)) {
+        const current = state && state.activeSessionId === session.id;
+
+        const more = el("button", {
+          class: "row-more", type: "button", title: "More actions", text: "⋯",
+        });
+        more.addEventListener("click", (event) => {
+          // Without this the row's own click would also fire and switch
+          // session, which is not what reaching for the menu means.
+          event.stopPropagation();
+          post({ type: "SESSION_MENU", sessionId: session.id });
+        });
+
+        const parts = [whenLabel(session.created_at)];
+        if (session.message_count) parts.push(`${session.message_count} msg`);
+        const subtitle = parts.filter(Boolean).join(" · ");
+
+        const row = el("button", {
+          class: "row" + (current ? " current" : ""),
+          type: "button",
+          title: session.name || "Untitled",
+        }, [
+          el("span", { class: "row-icon", html: ICONS.chat }),
+          el("span", { class: "row-text" }, [
+            el("span", { class: "row-title", text: session.name || "Untitled" }),
+            subtitle ? el("span", { class: "row-sub", text: subtitle }) : null,
+          ]),
+          more,
+        ]);
+        // One action, not two: picking a session opens the chat showing it.
+        row.addEventListener("click", () => post({ type: "OPEN_SESSION", sessionId: session.id }));
+        list.appendChild(row);
+      }
+    }
+
+    /**
+     * One primary status, and the reason only when it helps.
+     *
+     * Four separate concepts used to be on screen at once — Offline,
+     * Disconnected, Provider not set, No model — and two of them could
+     * contradict each other. A developer only needs to know whether they can
+     * start work, and if not, why.
+     */
+    function primaryStatus(s) {
+      if (s.connecting) {
+        return { label: "Connecting\u2026", tone: "pending" };
+      }
+      if (!s.connected) {
+        return {
+          label: "Offline",
+          tone: "bad",
+          reason: s.detail || "GitPilot server isn't running",
+        };
+      }
+      if (!s.model) {
+        // Reachable but unusable is not "Ready"; saying so sends people to
+        // Settings instead of into a task that cannot start.
+        return {
+          label: "Needs setup",
+          tone: "warn",
+          reason: "No provider configured",
+        };
+      }
+      return { label: "Ready", tone: "ok" };
+    }
+
+    function render() {
+      const s = state || {};
+      const status = primaryStatus(s);
+
+      byId("status-dot").className = "dot " + status.tone;
+      byId("status-text").textContent = status.label;
+
+      const reason = byId("status-reason");
+      reason.textContent = status.reason || "";
+      reason.classList.toggle("hidden", !status.reason);
+
+      byId("model-name").textContent = s.model || "";
+      byId("btn-model").classList.toggle("hidden", !s.model);
+
+      byId("repo-line").textContent = s.repo
+        ? (s.branch ? `${s.repo} / ${s.branch}` : s.repo)
+        : "No folder open";
+
+      const offline = !s.connected && !s.connecting;
+      byId("recovery").classList.toggle("hidden", !offline);
+      byId("retrying").classList.toggle("hidden", !(offline && s.retrying));
+
+      // Offering to start a server that is already answering, slowly, sends
+      // the user at a port that is in use. A timeout means it is there.
+      const alreadyRunning = /not answering yet/.test(s.detail || "");
+      byId("btn-start-server").classList.toggle(
+        "hidden", !s.canStartLocally || alreadyRunning
+      );
+
+      renderSessions();
+    }
+
+    window.addEventListener("message", (event) => {
+      const msg = event.data;
+      if (!msg) return;
+      if (msg.type === "NAV_STATE") {
+        state = msg.state;
+        render();
+      }
+    });
+
+    renderQuickActions();
+    render();
+    post({ type: "NAV_READY" });
+  </script>
+</body>
+</html>

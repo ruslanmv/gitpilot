@@ -38,6 +38,17 @@ SNAP_DIR = "snapshot"
 TRANSCRIPT_FILE = "transcript.json"
 DESCRIPTOR_FILE = "tool_call.json"
 
+_DEFAULT_IGNORES = {
+    ".git", ".gitpilot", "__pycache__", "node_modules", ".venv", "venv",
+    ".tox", "dist", "build", "out", ".next", "target", ".mypy_cache",
+    ".pytest_cache", ".ruff_cache",
+}
+
+#: Snapshots copy the tree, so a checkpoint is only cheap while the tree is
+#: small. Past this the store degrades to transcript-only rather than
+#: quietly writing hundreds of megabytes on every tool call.
+MAX_SNAPSHOT_BYTES = 256 * 1024 * 1024
+
 
 @dataclass
 class CheckpointRecord:
@@ -50,6 +61,9 @@ class CheckpointRecord:
     note: str = ""
     files_changed: int = 0
     commit_sha: Optional[str] = None
+    #: False when the workspace was too large to copy, so restore() will
+    #: return the transcript but leave the files alone.
+    has_files: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -71,10 +85,16 @@ class ToolCallDescriptor:
 class CheckpointStore:
     """Manage checkpoints for a single workspace."""
 
-    def __init__(self, workspace_path: Path, history_root: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        workspace_path: Path,
+        history_root: Optional[Path] = None,
+        max_bytes: int = MAX_SNAPSHOT_BYTES,
+    ) -> None:
         self.workspace_path = workspace_path.resolve()
         root = history_root or HISTORY_ROOT
         self.history_dir = root / _workspace_hash(self.workspace_path)
+        self.max_bytes = max_bytes
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -97,13 +117,39 @@ class CheckpointStore:
         descriptor: ToolCallDescriptor,
         transcript: Optional[List[Dict[str, Any]]] = None,
     ) -> CheckpointRecord:
-        """Capture the workspace + transcript + tool call descriptor."""
+        """Capture the workspace + transcript + tool call descriptor.
+
+        A workspace over :data:`MAX_SNAPSHOT_BYTES` records the transcript and
+        the tool call but not the files, and says so on the record. Half a
+        checkpoint that is honest about being half beats a UI that offers a
+        rewind it cannot perform.
+        """
         self.init()
         snap = self.history_dir / SNAP_DIR
-        files_changed = _mirror_workspace(self.workspace_path, snap)
+
+        size = measure_workspace(self.workspace_path, self.max_bytes)
+        files_only = size > self.max_bytes
+        if files_only:
+            logger.warning(
+                "workspace is %.0f MB, over the %.0f MB checkpoint limit; "
+                "snapshotting the transcript only",
+                size / 1e6,
+                self.max_bytes / 1e6,
+            )
+            files_changed = 0
+        else:
+            files_changed = _mirror_workspace(self.workspace_path, snap)
         ts = time.time()
         ckpt_id = _format_id(ts, descriptor)
-        meta_dir = self.history_dir / META_DIR / ckpt_id
+        meta_root = self.history_dir / META_DIR
+        # Overwriting an existing checkpoint would destroy the very rewind the
+        # user is most likely to reach for, so collisions get a suffix.
+        if (meta_root / ckpt_id).exists():
+            for n in range(2, 1000):
+                if not (meta_root / f"{ckpt_id}~{n}").exists():
+                    ckpt_id = f"{ckpt_id}~{n}"
+                    break
+        meta_dir = meta_root / ckpt_id
         meta_dir.mkdir(parents=True, exist_ok=True)
         (meta_dir / TRANSCRIPT_FILE).write_text(
             json.dumps(transcript or [], indent=2), encoding="utf-8"
@@ -127,6 +173,7 @@ class CheckpointStore:
             note=descriptor.note,
             files_changed=files_changed,
             commit_sha=commit_sha,
+            has_files=not files_only,
         )
         (meta_dir / "record.json").write_text(
             json.dumps(record.to_dict(), indent=2), encoding="utf-8"
@@ -144,7 +191,8 @@ class CheckpointStore:
                 continue
             try:
                 data = json.loads(record_file.read_text(encoding="utf-8"))
-                out.append(CheckpointRecord(**data))
+                known = {f for f in CheckpointRecord.__dataclass_fields__}
+                out.append(CheckpointRecord(**{k: v for k, v in data.items() if k in known}))
             except Exception as e:
                 logger.debug("could not load checkpoint %s: %s", child, e)
         return out
@@ -159,23 +207,33 @@ class CheckpointStore:
         if not record_path.exists():
             raise FileNotFoundError("missing record.json")
         record = json.loads(record_path.read_text(encoding="utf-8"))
+        if not record.get("has_files", True):
+            return {
+                "record": record,
+                "removed": [],
+                "files_restored": False,
+                "transcript": _read_json(meta_dir / TRANSCRIPT_FILE, []),
+                "tool_call": _read_json(meta_dir / DESCRIPTOR_FILE, {}),
+            }
+
         sha = record.get("commit_sha")
         if sha:
             try:
-                self._git(snap, "checkout", "-q", sha, "--", ".")
+                # `checkout -- .` leaves files the commit does not contain, so
+                # reset the whole tree: the snapshot has to be the snapshot.
+                self._git(snap, "reset", "-q", "--hard", sha)
+                self._git(snap, "clean", "-qfd")
             except Exception as e:
-                logger.warning("checkout of %s failed: %s", sha, e)
-        # Mirror snapshot files back into the workspace (additive only —
-        # we never delete files the user may have created since).
-        _restore_workspace(snap, self.workspace_path)
+                logger.warning("restore of %s failed: %s", sha, e)
+        removed = _restore_workspace(snap, self.workspace_path)
         transcript_path = meta_dir / TRANSCRIPT_FILE
         descriptor_path = meta_dir / DESCRIPTOR_FILE
         return {
             "record": record,
-            "transcript": json.loads(transcript_path.read_text(encoding="utf-8"))
-            if transcript_path.exists() else [],
-            "tool_call": json.loads(descriptor_path.read_text(encoding="utf-8"))
-            if descriptor_path.exists() else {},
+            "removed": removed,
+            "files_restored": True,
+            "transcript": _read_json(transcript_path, []),
+            "tool_call": _read_json(descriptor_path, {}),
         }
 
     # ------------------------------------------------------------------
@@ -214,18 +272,56 @@ class CheckpointStore:
 # Helpers
 # ----------------------------------------------------------------------
 
-_DEFAULT_IGNORES = {".git", ".gitpilot", "__pycache__", "node_modules", ".venv", ".tox"}
+def _read_json(path: Path, fallback: Any) -> Any:
+    if not path.exists():
+        return fallback
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return fallback
+
+
+def _is_ignored(rel: Path) -> bool:
+    return any(part in _DEFAULT_IGNORES for part in rel.parts)
 
 
 def _workspace_hash(workspace: Path) -> str:
     return hashlib.sha1(str(workspace).encode("utf-8")).hexdigest()[:12]
 
 
+def measure_workspace(workspace: Path, limit: int = MAX_SNAPSHOT_BYTES) -> int:
+    """Total size of the snapshottable tree, stopping once ``limit`` is passed.
+
+    Short-circuits so that deciding *not* to snapshot a huge repository does
+    not itself cost a full walk of it.
+    """
+    total = 0
+    for path in workspace.rglob("*"):
+        rel = path.relative_to(workspace)
+        if _is_ignored(rel) or not path.is_file():
+            continue
+        try:
+            total += path.stat().st_size
+        except OSError:
+            continue
+        if total > limit:
+            return total
+    return total
+
+
 def _format_id(ts: float, descriptor: ToolCallDescriptor) -> str:
-    iso = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(ts))
+    """A sortable, unique id for one checkpoint.
+
+    Milliseconds matter: an agent can easily make two edits inside the same
+    second, and a second-resolution id made the two checkpoints collide — the
+    later snapshot overwrote the earlier one's transcript and record, so the
+    rewind the user actually wanted had quietly ceased to exist.
+    """
+    iso = time.strftime("%Y%m%dT%H%M%S", time.gmtime(ts))
+    millis = int((ts % 1) * 1000)
     tool = descriptor.name.replace("/", "_")
     suffix = f"-{Path(descriptor.target_path).name}" if descriptor.target_path else ""
-    return f"{iso}-{tool}{suffix}"[:120]
+    return f"{iso}.{millis:03d}Z-{tool}{suffix}"[:120]
 
 
 def _mirror_workspace(src: Path, dst: Path) -> int:
@@ -244,7 +340,7 @@ def _mirror_workspace(src: Path, dst: Path) -> int:
                 pass
     for path in src.rglob("*"):
         rel = path.relative_to(src)
-        if any(part in _DEFAULT_IGNORES for part in rel.parts):
+        if _is_ignored(rel):
             continue
         target = dst / rel
         if path.is_dir():
@@ -259,11 +355,22 @@ def _mirror_workspace(src: Path, dst: Path) -> int:
     return count
 
 
-def _restore_workspace(src: Path, dst: Path) -> None:
+def _restore_workspace(src: Path, dst: Path) -> List[str]:
+    """Make ``dst`` look like ``src`` again. Returns the paths deleted.
+
+    Restoring used to be additive, which meant a checkpoint could not undo the
+    one thing users most want undone: a file the agent should never have
+    created. Anything the snapshot does not contain is now removed — with the
+    same ignore list the snapshot was taken under, so ``.git``, virtualenvs
+    and dependency directories are never touched.
+    """
+    kept: set[Path] = set()
+
     for path in src.rglob("*"):
         rel = path.relative_to(src)
-        if rel.parts and rel.parts[0] == ".git":
+        if _is_ignored(rel):
             continue
+        kept.add(rel)
         target = dst / rel
         if path.is_dir():
             target.mkdir(parents=True, exist_ok=True)
@@ -273,3 +380,21 @@ def _restore_workspace(src: Path, dst: Path) -> None:
             shutil.copy2(path, target)
         except OSError:
             continue
+
+    removed: List[str] = []
+    for path in sorted(dst.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+        rel = path.relative_to(dst)
+        if _is_ignored(rel) or rel in kept:
+            continue
+        try:
+            if path.is_dir():
+                # Only an empty directory: its files were removed above, and a
+                # non-empty one means something ignored lives inside it.
+                path.rmdir()
+            else:
+                path.unlink()
+            removed.append(str(rel))
+        except OSError:
+            continue
+
+    return removed
