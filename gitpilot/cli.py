@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import threading
@@ -57,29 +58,68 @@ def _check_configuration():
         warnings.append("  Set GITPILOT_GITHUB_TOKEN or GITHUB_TOKEN in .env")
         warnings.append("  Get token at: https://github.com/settings/tokens")
 
-    # Check LLM provider configuration
+    # Check LLM provider configuration.
+    #
+    # `is_provider_configured()` is the one place that knows what each provider
+    # actually requires — notably that Ollama and OllaBridge need no API key.
+    # Re-deriving those rules here is how OllaBridge ended up reported as
+    # missing a key it never wanted.
     settings = get_settings()
     provider = settings.provider
-
-    provider_configured = False
-    if provider == LLMProvider.openai:
-        api_key = settings.openai.api_key or os.getenv("OPENAI_API_KEY")
-        provider_configured = bool(api_key)
-    elif provider == LLMProvider.claude:
-        api_key = settings.claude.api_key or os.getenv("ANTHROPIC_API_KEY")
-        provider_configured = bool(api_key)
-    elif provider == LLMProvider.watsonx:
-        api_key = settings.watsonx.api_key or os.getenv("WATSONX_API_KEY")
-        provider_configured = bool(api_key)
-    elif provider == LLMProvider.ollama:
-        # Ollama doesn't require API key, just needs to be running
-        provider_configured = True
+    provider_configured = settings.is_provider_configured()
 
     if not provider_configured:
-        issues.append(f"❌ {provider.value.upper()} API key not configured")
-        warnings.append(f"  Configure in Admin UI or set environment variable")
+        issues.append(f"❌ {provider.value.upper()} is not configured")
+        warnings.append(f"  {_provider_setup_hint(provider)}")
+        warnings.append("  Configure it in VS Code: GitPilot: Settings → AI Provider")
 
-    return has_env, github_token is not None, provider_configured, issues, warnings
+    # Configuration is not the same as being able to answer.
+    #
+    # The banner used to print "LLM Provider ✅ OLLAMA" purely on config, and
+    # the first message would then fail on an import the banner had never
+    # looked at. Claude and watsonx need the agent runtime; if it is missing,
+    # say so here rather than at the moment someone asks a question.
+    runtime_ready = True
+    if provider_configured:
+        try:
+            from .direct_chat import describe_runtime
+
+            runtime = describe_runtime()
+            runtime_ready = bool(runtime["ready"])
+            if not runtime_ready:
+                issues.append(f"❌ {provider.value.upper()} cannot answer yet")
+                warnings.append(f"  {runtime['detail']}")
+        except Exception:
+            # A broken check must not stop the server from starting.
+            pass
+
+    return (
+        has_env,
+        github_token is not None,
+        provider_configured and runtime_ready,
+        issues,
+        warnings,
+    )
+
+
+#: What each provider is missing when it reports itself unconfigured.
+_PROVIDER_SETUP_HINTS = {
+    LLMProvider.openai: "Set an OpenAI API key (OPENAI_API_KEY)",
+    LLMProvider.claude: "Set an Anthropic API key (ANTHROPIC_API_KEY)",
+    LLMProvider.watsonx: (
+        "Set a Watsonx API key and project ID "
+        "(WATSONX_API_KEY, WATSONX_PROJECT_ID)"
+    ),
+    LLMProvider.openwebui: "Set your Open WebUI URL (OPENWEBUI_BASE_URL)",
+    LLMProvider.custom: (
+        "Set the endpoint URL and model "
+        "(GITPILOT_CUSTOM_BASE_URL, GITPILOT_CUSTOM_MODEL)"
+    ),
+}
+
+
+def _provider_setup_hint(provider: LLMProvider) -> str:
+    return _PROVIDER_SETUP_HINTS.get(provider, "Check the provider configuration")
 
 
 def _display_startup_banner(host: str, port: int):
@@ -155,14 +195,25 @@ def _display_startup_banner(host: str, port: int):
     console.print()
 
 
-def _run_server(host: str, port: int, reload: bool = False):
+def _run_server(host: str, port: int, reload: bool = False, log_level: str | None = None):
     """Run the FastAPI server."""
+    from .logging_setup import LEVEL_ENV_VAR, configure
+
+    # uvicorn's log_level configures uvicorn. This configures GitPilot, which
+    # is a separate thing and was the one nobody could see.
+    level = configure(log_level)
+    level_name = logging.getLevelName(level).lower()
+
+    # `--reload` re-imports the app in a child process, where nothing set in
+    # memory here survives. The env var is how the child learns the choice.
+    os.environ[LEVEL_ENV_VAR] = level_name.upper()
+
     uvicorn.run(
         "gitpilot.api:app",
         host=host,
         port=port,
         reload=reload,
-        log_level="info",
+        log_level="debug" if level <= logging.DEBUG else "info",
     )
 
 
@@ -267,6 +318,15 @@ def serve(
         False, "--skip-init",
         help="Do not auto-run the first-run wizard when the workspace is fresh.",
     ),
+    log_level: str = typer.Option(
+        None, "--log-level", "-l", envvar="GITPILOT_LOG_LEVEL",
+        help=(
+            "How much GitPilot says about what it is doing: DEBUG, INFO "
+            "(default), WARNING, ERROR. INFO shows which chat pipeline each "
+            "request takes, the provider and model called, and how long it "
+            "took. DEBUG adds the agent internals."
+        ),
+    ),
 ):
     """Start the GitPilot server with web UI.
 
@@ -303,6 +363,10 @@ def serve(
         )
     port = choice.port
 
+    # Publish the port we actually bound so provider URLs can be checked
+    # against it (see settings.points_at_gitpilot_server).
+    os.environ["GITPILOT_SERVER_PORT"] = str(port)
+
     if port_file is not None:
         # Written before the server boots so a wrapper can start polling
         # immediately; the file is the single source of truth for the port.
@@ -315,7 +379,7 @@ def serve(
     # Start server in background thread
     thread = threading.Thread(
         target=_run_server,
-        kwargs={"host": host, "port": port, "reload": reload},
+        kwargs={"host": host, "port": port, "reload": reload, "log_level": log_level},
         daemon=False,
     )
     thread.start()

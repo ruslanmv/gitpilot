@@ -220,7 +220,7 @@ def test_to_dict_shape_is_stable() -> None:
 
 @pytest.fixture()
 def client() -> Iterator[TestClient]:
-    from gitpilot import api as api_module
+    from gitpilot import _api_app as api_module
 
     yield TestClient(api_module.app)
 
@@ -228,7 +228,7 @@ def client() -> Iterator[TestClient]:
 def test_endpoint_returns_documented_shape(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from gitpilot import api as api_module
+    from gitpilot import _api_app as api_module
 
     monkeypatch.setattr(api_module, "_is_lite_mode_active", lambda: False)
     flags.set_override(FLAG_CONTEXT_METER, True)
@@ -325,7 +325,7 @@ def test_endpoint_populates_real_breakdown_in_full_mode(
     """Outside lite mode the breakdown's system_prompt and tool_schemas
     rows must be non-zero — that's the proof the popover stopped
     showing the placeholder zeros."""
-    from gitpilot import api as api_module
+    from gitpilot import _api_app as api_module
 
     monkeypatch.setattr(api_module, "_is_lite_mode_active", lambda: False)
     flags.set_override(FLAG_CONTEXT_METER, True)
@@ -346,7 +346,7 @@ def test_endpoint_session_id_loads_messages(
 ) -> None:
     """When session_id is supplied, the messages row reflects that
     session's content.  No session_id → row stays 0."""
-    from gitpilot import api as api_module
+    from gitpilot import _api_app as api_module
 
     monkeypatch.setattr(api_module, "_is_lite_mode_active", lambda: False)
 
@@ -378,7 +378,7 @@ def test_endpoint_unknown_session_id_does_not_error(
 ) -> None:
     """Bad session ids degrade gracefully — the popover stays useful
     rather than 500ing the whole UI."""
-    from gitpilot import api as api_module
+    from gitpilot import _api_app as api_module
 
     monkeypatch.setattr(api_module, "_is_lite_mode_active", lambda: False)
     flags.set_override(FLAG_CONTEXT_METER, True)

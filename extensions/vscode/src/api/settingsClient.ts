@@ -2,12 +2,16 @@
  * GitPilot Redesign — Settings API Client
  */
 
-import { GitPilotApiClient } from "./client";
+import { GitPilotApiClient, REQUEST_TIMEOUTS } from "./client";
 import {
   ProviderName,
   ProviderTestRequest,
   ProviderTestResponse,
+  TopologySummary,
 } from "../core/types";
+
+/** How long a model list stays fresh enough to reuse. */
+const MODEL_CACHE_TTL_MS = 60_000;
 
 export interface SettingsData {
   provider: string;
@@ -22,6 +26,13 @@ export interface SettingsData {
   };
   ollama: { base_url?: string; model?: string };
   ollabridge: { base_url?: string; model?: string; api_key?: string };
+  openwebui: { base_url?: string; model?: string; api_key?: string };
+  custom: {
+    base_url?: string;
+    model?: string;
+    api_key?: string;
+    headers?: Record<string, string>;
+  };
 }
 
 type ProviderConfigMap = {
@@ -30,34 +41,116 @@ type ProviderConfigMap = {
   watsonx: SettingsData["watsonx"];
   ollama: SettingsData["ollama"];
   ollabridge: SettingsData["ollabridge"];
+  openwebui: SettingsData["openwebui"];
+  custom: SettingsData["custom"];
 };
 
 export class SettingsClient {
+  /** Model lists keyed by provider, with the time they were fetched. */
+  private modelCache = new Map<
+    string,
+    { at: number; result: { models: string[]; error?: string } }
+  >();
+
   constructor(private client: GitPilotApiClient) {}
 
   async getSettings(): Promise<SettingsData> {
-    return this.client.get<SettingsData>("/api/settings");
+    return this.client.request<SettingsData>("/api/settings", {
+      timeoutMs: REQUEST_TIMEOUTS.settings,
+    });
   }
 
   async updateSettings(updates: Partial<SettingsData>): Promise<SettingsData> {
-    return this.client.put<SettingsData>("/api/settings/llm", updates);
+    // A write can change what models are on offer, so the cache goes with it.
+    this.modelCache.clear();
+    return this.client.request<SettingsData>("/api/settings/llm", {
+      method: "PUT",
+      body: JSON.stringify(updates),
+      timeoutMs: REQUEST_TIMEOUTS.settings,
+    });
   }
 
   async setProvider(provider: ProviderName): Promise<SettingsData> {
-    return this.client.post<SettingsData>("/api/settings/provider", {
-      provider,
+    return this.client.request<SettingsData>("/api/settings/provider", {
+      method: "POST",
+      body: JSON.stringify({ provider }),
+      timeoutMs: REQUEST_TIMEOUTS.settings,
     });
   }
 
   async testProvider(req: ProviderTestRequest): Promise<ProviderTestResponse> {
-    return this.client.post<ProviderTestResponse>("/api/providers/test", req);
+    return this.client.request<ProviderTestResponse>("/api/providers/test", {
+      method: "POST",
+      body: JSON.stringify(req),
+      timeoutMs: REQUEST_TIMEOUTS.providerTest,
+      retries: 0,
+    });
   }
 
   async listModels(
     provider?: string
   ): Promise<{ models: string[]; error?: string }> {
     const query = provider ? `?provider=${provider}` : "";
-    return this.client.get(`/api/settings/models${query}`);
+    return this.client.request(`/api/settings/models${query}`, {
+      timeoutMs: REQUEST_TIMEOUTS.models,
+      retries: 0,
+    });
+  }
+
+  /**
+   * Model discovery, cached for a minute.
+   *
+   * Discovery reaches out to the provider and regularly takes 4-15s, so a
+   * page that lists models on every render is a page that feels broken. Pass
+   * `force` for an explicit "Refresh models".
+   */
+  async listModelsCached(
+    provider: string,
+    force = false
+  ): Promise<{ models: string[]; error?: string }> {
+    const hit = this.modelCache.get(provider);
+    if (!force && hit && Date.now() - hit.at < MODEL_CACHE_TTL_MS) {
+      return hit.result;
+    }
+    const result = await this.listModels(provider);
+    this.modelCache.set(provider, { at: Date.now(), result });
+    return result;
+  }
+
+  /** Drop cached model lists, e.g. after the server URL changes. */
+  clearModelCache(): void {
+    this.modelCache.clear();
+  }
+
+  // ── Agent topologies ──────────────────────────────────────────────
+
+  /** Every topology preset the server knows about. */
+  async listTopologies(): Promise<TopologySummary[]> {
+    return this.client.request<TopologySummary[]>("/api/flow/topologies", {
+      timeoutMs: REQUEST_TIMEOUTS.settings,
+    });
+  }
+
+  /**
+   * The topology the server will use when a request does not name one.
+   *
+   * `null` means no preference is saved, and the server routes each request
+   * on intent rather than forcing a fixed pipeline.
+   */
+  async getTopologyPreference(): Promise<string | null> {
+    const resp = await this.client.request<{ topology: string | null }>(
+      "/api/settings/topology",
+      { timeoutMs: REQUEST_TIMEOUTS.settings }
+    );
+    return resp.topology ?? null;
+  }
+
+  async setTopologyPreference(topology: string): Promise<void> {
+    await this.client.request("/api/settings/topology", {
+      method: "POST",
+      body: JSON.stringify({ topology }),
+      timeoutMs: REQUEST_TIMEOUTS.settings,
+    });
   }
 
   async getActiveProvider(): Promise<ProviderName> {

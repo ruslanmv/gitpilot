@@ -17,6 +17,9 @@
       --accent-bright: #ff7a3c;
       --hover: rgba(255,255,255,0.04);
       --active-bg: rgba(217,92,61,0.12);
+      --ok: #4ade80;
+      --warn: #fbbf24;
+      --bad: #f87171;
       --radius: 8px;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -30,10 +33,7 @@
     }
 
     /* ── Layout: sidebar + content ── */
-    .settings-shell {
-      display: flex;
-      height: 100vh;
-    }
+    .settings-shell { display: flex; height: 100vh; }
     .settings-sidebar {
       width: 210px;
       min-width: 210px;
@@ -44,11 +44,7 @@
       padding: 12px 0;
       overflow-y: auto;
     }
-    .settings-main {
-      flex: 1;
-      overflow-y: auto;
-      padding: 28px 36px 64px;
-    }
+    .settings-main { flex: 1; overflow-y: auto; padding: 28px 36px 64px; }
 
     /* ── Sidebar nav items ── */
     .nav-item {
@@ -86,10 +82,7 @@
       color: var(--muted);
       line-height: 1.6;
     }
-    .nav-footer a {
-      color: var(--accent-bright);
-      text-decoration: none;
-    }
+    .nav-footer a { color: var(--accent-bright); text-decoration: none; cursor: pointer; }
     .nav-footer a:hover { text-decoration: underline; }
 
     /* ── Section headings ── */
@@ -99,8 +92,17 @@
       font-size: 18px;
       font-weight: 700;
       color: var(--fg);
-      margin-bottom: 24px;
+      margin-bottom: 6px;
       letter-spacing: -0.3px;
+    }
+    .section-sub { font-size: 12.5px; color: var(--muted); margin-bottom: 22px; }
+    .group-heading {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.7px;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 26px 0 10px;
     }
 
     /* ── Field rows ── */
@@ -114,17 +116,8 @@
     }
     .field:last-child { border-bottom: none; }
     .field-info { flex: 1; min-width: 0; }
-    .field-label {
-      font-size: 14px;
-      font-weight: 600;
-      color: var(--fg);
-      margin-bottom: 3px;
-    }
-    .field-desc {
-      font-size: 12px;
-      color: var(--muted);
-      line-height: 1.55;
-    }
+    .field-label { font-size: 14px; font-weight: 600; color: var(--fg); margin-bottom: 3px; }
+    .field-desc { font-size: 12px; color: var(--muted); line-height: 1.55; }
     .field-desc code {
       background: rgba(255,255,255,0.06);
       padding: 1px 5px;
@@ -149,6 +142,7 @@
     input:focus, select:focus { border-color: var(--accent); }
     input[type="number"] { min-width: 90px; }
     select { cursor: pointer; }
+    input:disabled, select:disabled { opacity: 0.55; cursor: not-allowed; }
 
     /* ── Toggle switch ── */
     .toggle {
@@ -173,53 +167,185 @@
     }
     .toggle.active::after { transform: translateX(18px); }
 
-    /* ── Action buttons ── */
+    /* ── Buttons ── */
     .btn {
       font-family: inherit;
       font-size: 13px;
       font-weight: 600;
-      padding: 7px 18px;
+      padding: 7px 16px;
       border-radius: var(--radius);
       cursor: pointer;
       border: 1px solid var(--border);
       background: var(--surface);
       color: var(--fg);
       transition: background 100ms ease, border-color 100ms ease;
+      white-space: nowrap;
     }
-    .btn:hover { background: var(--hover); border-color: rgba(255,122,60,0.35); }
-    .btn-primary {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #fff;
-    }
-    .btn-primary:hover { background: #C44F32; }
-    .btn-danger {
-      color: #f87171;
-      border-color: rgba(248,113,113,0.35);
-    }
-    .btn-danger:hover { background: rgba(248,113,113,0.08); }
+    .btn:hover:not(:disabled) { background: var(--hover); border-color: rgba(255,122,60,0.35); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #C44F32; }
+    .btn-ghost { background: none; border-color: transparent; color: var(--muted); }
+    .btn-ghost:hover:not(:disabled) { color: var(--fg); background: var(--hover); }
+    .btn-danger { color: var(--bad); border-color: rgba(248,113,113,0.35); }
+    .btn-danger:hover:not(:disabled) { background: rgba(248,113,113,0.08); }
+    .btn-sm { font-size: 12px; padding: 5px 11px; }
+    .btn-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 
     /* ── Status badge ── */
     .status-badge {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 4px 10px;
+      padding: 3px 10px;
       border-radius: 999px;
-      font-size: 12px;
+      font-size: 11.5px;
       font-weight: 600;
+      border: 1px solid transparent;
     }
-    .status-badge.connected { background: rgba(74,222,128,0.1); color: #4ade80; border: 1px solid rgba(74,222,128,0.3); }
-    .status-badge.disconnected { background: rgba(248,113,113,0.1); color: #f87171; border: 1px solid rgba(248,113,113,0.3); }
-    .status-dot { width: 7px; height: 7px; border-radius: 50%; }
-    .connected .status-dot { background: #4ade80; }
-    .disconnected .status-dot { background: #f87171; }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+    .status-badge.ok { background: rgba(74,222,128,0.1); color: var(--ok); border-color: rgba(74,222,128,0.3); }
+    .status-badge.bad { background: rgba(248,113,113,0.1); color: var(--bad); border-color: rgba(248,113,113,0.3); }
+    .status-badge.pending { background: rgba(251,191,36,0.1); color: var(--warn); border-color: rgba(251,191,36,0.3); }
+    .status-badge.neutral { background: var(--hover); color: var(--muted); border-color: var(--border); }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px 18px;
+    }
+    .card + .card { margin-top: 10px; }
+
+    /* Server status card */
+    .server-card { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+    .server-card .server-info { flex: 1; min-width: 180px; }
+    .server-card .server-title {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 14px; font-weight: 600; margin-bottom: 4px; flex-wrap: wrap;
+    }
+    .server-url { font-size: 12px; color: var(--muted); word-break: break-all; }
+
+    /* Provider list rows */
+    .provider-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      width: 100%;
+      text-align: left;
+      font-family: inherit;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 16px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      color: var(--fg);
+      transition: border-color 120ms ease, background 120ms ease;
+    }
+    .provider-row:hover { background: var(--hover); border-color: rgba(255,122,60,0.4); }
+    .provider-row.active-provider { border-color: var(--accent); background: var(--active-bg); }
+    .provider-avatar {
+      width: 34px; height: 34px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 700; flex-shrink: 0;
+      background: rgba(255,122,60,0.16); color: var(--accent-bright);
+      border: 1px solid rgba(255,122,60,0.3);
+    }
+    .provider-text { flex: 1; min-width: 0; }
+    .provider-name { font-size: 13.5px; font-weight: 600; margin-bottom: 2px; }
+    .provider-meta { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+    .provider-chevron { color: var(--muted); flex-shrink: 0; font-size: 16px; line-height: 1; }
+
+    /* ── Provider detail page ── */
+    .detail-back {
+      display: inline-flex; align-items: center; gap: 7px;
+      background: none; border: none; padding: 4px 0; margin-bottom: 18px;
+      color: var(--muted); font-family: inherit; font-size: 12.5px;
+      font-weight: 600; cursor: pointer;
+    }
+    .detail-back:hover { color: var(--accent-bright); }
+    .detail-header { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; flex-wrap: wrap; }
+    .detail-title { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
+
+    .form-row { padding: 14px 0; border-bottom: 1px solid var(--border); }
+    .form-row:last-of-type { border-bottom: none; }
+    .form-label { font-size: 13px; font-weight: 600; margin-bottom: 6px; display: block; }
+    .form-hint { font-size: 11.5px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
+    .form-hint a { color: var(--accent-bright); text-decoration: none; cursor: pointer; }
+    .form-hint a:hover { text-decoration: underline; }
+    .input-wide { width: 100%; min-width: 0; }
+    .input-group { display: flex; gap: 8px; align-items: center; }
+    .input-group > input, .input-group > select { flex: 1; min-width: 0; }
+
+    /* Tabs (OllaBridge connection methods) */
+    .tabs { display: flex; gap: 6px; border-bottom: 1px solid var(--border); margin-bottom: 4px; flex-wrap: wrap; }
+    .tab {
+      background: none; border: none; border-bottom: 2px solid transparent;
+      color: var(--muted); font-family: inherit; font-size: 12.5px; font-weight: 600;
+      padding: 8px 12px; cursor: pointer;
+    }
+    .tab:hover { color: var(--fg); }
+    .tab.active { color: var(--accent-bright); border-bottom-color: var(--accent-bright); }
+    .tab-panel { display: none; padding-top: 6px; }
+    .tab-panel.active { display: block; }
+
+    /* Disclosure */
+    .disclosure { border-top: 1px solid var(--border); margin-top: 18px; padding-top: 14px; }
+    .disclosure-toggle {
+      background: none; border: none; color: var(--muted);
+      font-family: inherit; font-size: 12.5px; font-weight: 600;
+      cursor: pointer; padding: 4px 0; display: flex; align-items: center; gap: 7px;
+    }
+    .disclosure-toggle:hover { color: var(--fg); }
+    .disclosure-body { display: none; padding-top: 12px; }
+    .disclosure.open .disclosure-body { display: block; }
+    .disclosure.open .disclosure-caret { transform: rotate(90deg); }
+    .disclosure-caret { display: inline-block; transition: transform 120ms ease; }
+
+    /* Inline notices */
+    .notice {
+      border-radius: 8px;
+      padding: 12px 14px;
+      font-size: 12.5px;
+      line-height: 1.55;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      margin: 14px 0;
+    }
+    .notice.ok { border-color: rgba(74,222,128,0.35); background: rgba(74,222,128,0.07); }
+    .notice.bad { border-color: rgba(248,113,113,0.35); background: rgba(248,113,113,0.07); }
+    .notice.info { border-color: rgba(255,122,60,0.3); background: rgba(255,122,60,0.06); }
+    .notice-title { font-weight: 700; margin-bottom: 4px; }
+    .notice code {
+      display: inline-block;
+      background: rgba(255,255,255,0.07);
+      padding: 3px 7px;
+      border-radius: 4px;
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 11.5px;
+      margin-top: 6px;
+      user-select: all;
+    }
+    .hidden { display: none !important; }
+    .actions-bar {
+      display: flex; gap: 10px; flex-wrap: wrap;
+      margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border);
+    }
+    .spinner {
+      width: 12px; height: 12px; border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.2);
+      border-top-color: var(--accent-bright);
+      display: inline-block;
+      animation: spin 700ms linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
 
     /* ── Save toast ── */
     .save-toast {
       position: fixed;
-      bottom: 20px;
-      right: 28px;
+      bottom: 20px; right: 28px;
       background: var(--accent);
       color: #fff;
       padding: 10px 22px;
@@ -232,6 +358,18 @@
       pointer-events: none;
     }
     .save-toast.visible { opacity: 1; transform: translateY(0); }
+
+    /* ── Narrow editor windows ── */
+    @media (max-width: 720px) {
+      .settings-sidebar { width: 62px; min-width: 62px; }
+      .settings-sidebar .nav-item { justify-content: center; font-size: 0; gap: 0; padding: 11px 0; }
+      .settings-sidebar .nav-item svg { width: 20px; height: 20px; }
+      .nav-footer { display: none; }
+      .settings-main { padding: 20px 16px 56px; }
+      .field { flex-direction: column; gap: 10px; align-items: stretch; }
+      .field-control { width: 100%; }
+      .field-control input, .field-control select { width: 100%; min-width: 0; }
+    }
   </style>
 </head>
 <body>
@@ -244,7 +382,11 @@
       </button>
       <button class="nav-item" data-page="provider">
         <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10H12V2z"/><path d="M20.24 7.76L12 12"/></svg></span>
-        AI Provider
+        AI Providers
+      </button>
+      <button class="nav-item" data-page="mcp">
+        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="8" height="8" rx="2"/><rect x="14" y="14" width="8" height="8" rx="2"/><path d="M6 10v4a4 4 0 0 0 4 4h4"/></svg></span>
+        MCP Servers
       </button>
       <button class="nav-item" data-page="agent">
         <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>
@@ -257,8 +399,8 @@
 
       <div class="nav-footer">
         <div>Version: __VERSION__</div>
-        <a href="https://github.com/ruslanmv/gitpilot" data-href="docs">GitPilot Docs</a><br/>
-        <a href="https://github.com/ruslanmv/gitpilot/issues" data-href="issues">Report Issue</a>
+        <a data-external="https://github.com/ruslanmv/gitpilot">GitPilot Docs</a><br/>
+        <a data-external="https://github.com/ruslanmv/gitpilot/issues">Report Issue</a>
       </div>
     </nav>
 
@@ -267,6 +409,7 @@
       <!-- === General === -->
       <div class="section-page active" id="page-general">
         <div class="section-heading">General</div>
+        <div class="section-sub">Connection and repository access.</div>
 
         <div class="field">
           <div class="field-info">
@@ -290,19 +433,6 @@
 
         <div class="field">
           <div class="field-info">
-            <div class="field-label">Connection status</div>
-            <div class="field-desc">Current backend connection state.</div>
-          </div>
-          <div class="field-control">
-            <span class="status-badge" id="connection-status">
-              <span class="status-dot"></span>
-              <span id="connection-text">Checking...</span>
-            </span>
-          </div>
-        </div>
-
-        <div class="field">
-          <div class="field-info">
             <div class="field-label">GitHub Token</div>
             <div class="field-desc">Personal access token for repository integration. Falls back to <code>GITHUB_TOKEN</code> env var.</div>
           </div>
@@ -312,50 +442,141 @@
         </div>
       </div>
 
-      <!-- === AI Provider === -->
+      <!-- === AI Providers === -->
       <div class="section-page" id="page-provider">
-        <div class="section-heading">AI Provider</div>
+        <!-- Overview view -->
+        <div id="provider-overview">
+          <div class="section-heading">AI Providers</div>
+          <div class="section-sub">Choose and configure the model GitPilot uses.</div>
 
-        <div class="field">
-          <div class="field-info">
-            <div class="field-label">Provider</div>
-            <div class="field-desc">Choose your LLM provider. Ollama and OllaBridge are free and require no API key.</div>
+          <!-- Server connection -->
+          <div class="card server-card">
+            <div class="server-info">
+              <div class="server-title">
+                <span>GitPilot Server</span>
+                <span class="status-badge pending" id="server-badge">
+                  <span class="status-dot"></span><span id="server-badge-text">Checking…</span>
+                </span>
+              </div>
+              <div class="server-url" id="server-url-text">—</div>
+            </div>
+            <div class="btn-row">
+              <button class="btn btn-sm" id="btn-reconnect" type="button">Reconnect</button>
+              <button class="btn btn-sm" id="btn-change-server" type="button">Change server</button>
+            </div>
           </div>
-          <div class="field-control">
-            <select id="provider">
-              <option value="ollama">Ollama (local, free)</option>
-              <option value="ollabridge">OllaBridge (cloud, free)</option>
-              <option value="openai">OpenAI</option>
-              <option value="claude">Anthropic Claude</option>
-              <option value="watsonx">IBM Watsonx</option>
-            </select>
+
+          <!-- Offline recovery -->
+          <div id="server-offline" class="hidden">
+            <div class="notice bad">
+              <div class="notice-title">GitPilot server is not connected</div>
+              <div id="offline-detail">Provider settings are stored by the GitPilot backend, so they cannot be loaded right now.</div>
+              <div class="btn-row" style="margin-top: 14px;">
+                <button class="btn btn-primary btn-sm" id="btn-start-server" type="button">Start local server</button>
+                <button class="btn btn-sm" id="btn-offline-reconnect" type="button">Reconnect</button>
+                <button class="btn btn-sm" id="btn-offline-change" type="button">Change server URL</button>
+                <button class="btn btn-ghost btn-sm" id="btn-copy-diag" type="button">Copy diagnostics</button>
+              </div>
+              <div style="margin-top: 12px;">
+                Or start it yourself:
+                <br /><code id="offline-command">gitpilot serve --no-open</code>
+              </div>
+            </div>
+          </div>
+
+          <!-- Provider lists -->
+          <div id="provider-lists" class="hidden">
+            <div class="group-heading">Active provider</div>
+            <div id="active-provider-list"></div>
+
+            <div class="group-heading">Available providers</div>
+            <div id="available-provider-list"></div>
+
+            <div class="disclosure" id="overview-advanced">
+              <button class="disclosure-toggle" type="button" data-disclosure="overview-advanced">
+                <span class="disclosure-caret">›</span> Advanced
+              </button>
+              <div class="disclosure-body">
+                <div class="form-hint">
+                  Everything above is configurable here. The browser admin panel is
+                  only needed for rarely used options.
+                  <br /><br />
+                  <a id="link-web-admin">Open the browser admin panel</a>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
-        <div class="field">
-          <div class="field-info">
-            <div class="field-label">Lite mode</div>
-            <div class="field-desc">Use simplified prompts optimized for small LLMs (&lt;7B params) like tinyllama, phi-3-mini, gemma-2b, qwen2.5:1.5b.</div>
+        <!-- Single-provider configuration view -->
+        <div id="provider-detail" class="hidden"></div>
+      </div>
+
+      <!-- === MCP Servers === -->
+      <div class="section-page" id="page-mcp">
+        <div id="mcp-overview">
+          <div class="section-heading">MCP Servers</div>
+          <div class="section-sub">
+            Attach Model Context Protocol servers to give the agents extra
+            tools — a database schema, a vector index, your own service. Tools
+            are off until you enable them.
           </div>
-          <div class="field-control">
-            <div class="toggle" id="liteMode" role="switch" tabindex="0"></div>
+
+          <!-- Gateway status -->
+          <div class="card server-card">
+            <div class="server-info">
+              <div class="server-title">
+                <span>MCP Context Forge</span>
+                <span class="status-badge pending" id="mcp-gateway-badge">
+                  <span class="status-dot"></span><span id="mcp-gateway-text">Checking…</span>
+                </span>
+              </div>
+              <div class="server-url" id="mcp-gateway-url">—</div>
+              <div class="server-url" id="mcp-gateway-detail"></div>
+            </div>
+            <div class="btn-row">
+              <button class="btn btn-primary btn-sm hidden" id="btn-install-forge" type="button">Install MCP Context Forge</button>
+              <button class="btn btn-sm" id="btn-configure-gateway" type="button">Configure</button>
+              <button class="btn btn-sm" id="btn-sync-gateway" type="button">Sync</button>
+            </div>
           </div>
+
+          <div id="mcp-forge-progress" class="notice info hidden"></div>
+
+          <!-- Backend offline -->
+          <div id="mcp-offline" class="notice bad hidden">
+            <div class="notice-title">GitPilot server is not connected</div>
+            <div id="mcp-offline-detail">
+              MCP servers are managed by the GitPilot backend. Connect from
+              AI Providers, then come back.
+            </div>
+          </div>
+
+          <div id="mcp-body" class="hidden">
+            <div class="group-heading">Attached servers</div>
+            <div id="mcp-server-list"></div>
+
+            <div class="group-heading">Add a server</div>
+            <div class="btn-row" style="margin-bottom: 12px;">
+              <input type="text" id="mcp-search" class="input-wide" style="min-width:200px" placeholder="Search a registry, e.g. postgres" />
+              <button class="btn btn-sm" id="btn-search-registry" type="button">Search</button>
+              <button class="btn btn-sm" id="btn-add-custom" type="button">Add manually</button>
+            </div>
+            <div id="mcp-registry-status" class="form-hint"></div>
+            <div id="mcp-catalog-list"></div>
+          </div>
+
+          <div id="mcp-result" class="notice hidden"></div>
         </div>
 
-        <div class="field">
-          <div class="field-info">
-            <div class="field-label">Open Admin Panel</div>
-            <div class="field-desc">Advanced provider configuration, model selection, and API key management in the browser.</div>
-          </div>
-          <div class="field-control">
-            <button class="btn" id="open-admin-btn" type="button">Open</button>
-          </div>
-        </div>
+        <!-- One server's tools -->
+        <div id="mcp-detail" class="hidden"></div>
       </div>
 
       <!-- === Agent === -->
       <div class="section-page" id="page-agent">
         <div class="section-heading">Agent Behavior</div>
+        <div class="section-sub">How much GitPilot may do without asking.</div>
 
         <div class="field">
           <div class="field-info">
@@ -377,18 +598,36 @@
 
         <div class="field">
           <div class="field-info">
-            <div class="field-label">Default topology</div>
-            <div class="field-desc">Agent topology to use for multi-agent pipeline execution.</div>
+            <div class="field-label">Lite mode</div>
+            <div class="field-desc">Use simplified prompts optimized for small LLMs (&lt;7B params) like tinyllama, phi-3-mini, gemma-2b, qwen2.5:1.5b.</div>
           </div>
           <div class="field-control">
-            <input type="text" id="defaultTopology" value="default" />
+            <div class="toggle" id="liteMode" role="switch" tabindex="0"></div>
           </div>
         </div>
+
+        <div class="group-heading">Agent topology</div>
+        <div class="field-desc" style="margin-bottom: 14px;">
+          A topology decides which agents run and in what order. Choose
+          <strong>Automatic</strong> to let GitPilot route each request on
+          intent, or pin a fixed pipeline for predictable behaviour.
+        </div>
+
+        <div id="topology-offline" class="notice bad hidden">
+          <div class="notice-title">Topologies need the GitPilot server</div>
+          <div id="topology-offline-detail">
+            Connect to the backend from AI Providers, then come back.
+          </div>
+        </div>
+
+        <div id="topology-list"></div>
+        <div id="topology-result" class="notice hidden"></div>
       </div>
 
       <!-- === Editor === -->
       <div class="section-page" id="page-editor">
         <div class="section-heading">Editor Integration</div>
+        <div class="section-sub">What GitPilot shows inside your editor.</div>
 
         <div class="field">
           <div class="field-info">
@@ -443,7 +682,6 @@
     </main>
   </div>
 
-  <!-- Save toast -->
   <div class="save-toast" id="save-toast">Settings saved</div>
 
   <script nonce="__NONCE__">
@@ -451,13 +689,58 @@
     const post = (msg) => vscode.postMessage(msg);
     const byId = (id) => document.getElementById(id);
 
+    const CATALOG = __PROVIDER_CATALOG__;
+    const ORDER = __PROVIDER_ORDER__;
+    const OLLABRIDGE = __OLLABRIDGE_DEFAULTS__;
+
+    /**
+     * Provider navigation is two-level: an overview list, and exactly one
+     * provider form at a time. `page` is the whole of that state.
+     *
+     * @type {{view: "overview"} | {view: "provider", provider: string}}
+     */
+    let page = { view: "overview" };
+
+    /** Latest provider data from the host. Null until the backend answers. */
+    let setup = null;
+    /** Last server state pushed by the host. */
+    let serverState = "connecting";
+
+    /** Correlates async replies with the request that asked for them. */
+    let nextRequestId = 1;
+    const pending = new Map();
+    function request(message, onReply) {
+      const requestId = nextRequestId++;
+      pending.set(requestId, onReply);
+      post({ ...message, requestId });
+      return requestId;
+    }
+
+    // ── Small DOM helpers ──
+    const el = (tag, props = {}, children = []) => {
+      const node = document.createElement(tag);
+      for (const [key, value] of Object.entries(props)) {
+        if (key === "class") node.className = value;
+        else if (key === "text") node.textContent = value;
+        else if (key.startsWith("on")) node.addEventListener(key.slice(2).toLowerCase(), value);
+        else if (value !== undefined && value !== null) node.setAttribute(key, value);
+      }
+      for (const child of [].concat(children)) {
+        if (child) node.appendChild(child);
+      }
+      return node;
+    };
+    const initials = (label) =>
+      label.replace(/[^A-Za-z ]/g, "").split(/\s+/).filter(Boolean).slice(0, 2)
+        .map((w) => w[0].toUpperCase()).join("") || "AI";
+
     // ── Toggle helpers ──
     const getToggle = (id) => byId(id)?.classList.contains("active");
     const setToggle = (id, val) => {
-      const el = byId(id);
-      if (!el) return;
-      el.classList.toggle("active", Boolean(val));
-      el.setAttribute("aria-checked", String(Boolean(val)));
+      const node = byId(id);
+      if (!node) return;
+      node.classList.toggle("active", Boolean(val));
+      node.setAttribute("aria-checked", String(Boolean(val)));
     };
 
     // ── Sidebar navigation ──
@@ -466,12 +749,25 @@
         document.querySelectorAll(".nav-item").forEach((b) => b.classList.remove("active"));
         btn.classList.add("active");
         document.querySelectorAll(".section-page").forEach((p) => p.classList.remove("active"));
-        const page = byId("page-" + btn.dataset.page);
-        if (page) page.classList.add("active");
+        byId("page-" + btn.dataset.page)?.classList.add("active");
+        if (btn.dataset.page === "provider") {
+          // Entering the section always lands on the overview, and always
+          // re-checks the server rather than trusting a stale badge.
+          page = { view: "overview" };
+          renderProviderSection();
+          post({ type: "LOAD_PROVIDER_OVERVIEW" });
+        }
+        if (btn.dataset.page === "agent") {
+          post({ type: "LOAD_TOPOLOGIES" });
+        }
+        if (btn.dataset.page === "mcp") {
+          mcpPage = { view: "overview" };
+          post({ type: "LOAD_MCP_OVERVIEW" });
+        }
       });
     });
 
-    // ── Toggle click/keyboard ──
+    // ── Toggles / auto-save for VS Code-side settings ──
     document.querySelectorAll(".toggle").forEach((toggle) => {
       toggle.addEventListener("click", () => {
         toggle.classList.toggle("active");
@@ -483,23 +779,16 @@
       });
     });
 
-    // ── Auto-save on input change (debounced) ──
     let saveTimer = null;
-    const debounceSave = () => {
-      clearTimeout(saveTimer);
-      saveTimer = setTimeout(saveSettings, 600);
-    };
-    document.querySelectorAll("input, select").forEach((el) => {
-      el.addEventListener("input", debounceSave);
-      el.addEventListener("change", debounceSave);
+    const debounceSave = () => { clearTimeout(saveTimer); saveTimer = setTimeout(saveSettings, 600); };
+    ["serverUrl", "githubToken", "permissionMode",
+     "chatFontSize", "maxChatHistory"].forEach((id) => {
+      const node = byId(id);
+      if (!node) return;
+      node.addEventListener("input", debounceSave);
+      node.addEventListener("change", debounceSave);
     });
 
-    // ── Open admin panel ──
-    byId("open-admin-btn")?.addEventListener("click", () => {
-      post({ type: "OPEN_ADMIN" });
-    });
-
-    // ── Collect + save ──
     function saveSettings() {
       post({
         type: "SAVE_SETTINGS",
@@ -507,9 +796,7 @@
           serverUrl: byId("serverUrl").value.trim(),
           autoConnect: getToggle("autoConnect"),
           githubToken: byId("githubToken").value,
-          provider: byId("provider").value,
           permissionMode: byId("permissionMode").value,
-          defaultTopology: byId("defaultTopology").value.trim() || "default",
           liteMode: getToggle("liteMode"),
           showInlineHints: getToggle("showInlineHints"),
           scanOnSave: getToggle("scanOnSave"),
@@ -520,50 +807,1226 @@
       });
     }
 
-    // ── Receive current settings ──
+    // ── Server card actions ──
+    byId("btn-reconnect").addEventListener("click", () => post({ type: "RECONNECT_SERVER" }));
+    byId("btn-offline-reconnect").addEventListener("click", () => post({ type: "RECONNECT_SERVER" }));
+    byId("btn-change-server").addEventListener("click", () => post({ type: "CHANGE_SERVER_URL" }));
+    byId("btn-offline-change").addEventListener("click", () => post({ type: "CHANGE_SERVER_URL" }));
+    byId("btn-start-server").addEventListener("click", () => post({ type: "START_LOCAL_SERVER" }));
+    byId("btn-copy-diag").addEventListener("click", () => post({ type: "COPY_DIAGNOSTICS" }));
+    byId("link-web-admin").addEventListener("click", () => post({ type: "OPEN_WEB_ADMIN" }));
+
+    document.querySelectorAll("[data-external]").forEach((node) => {
+      node.addEventListener("click", () =>
+        post({ type: "OPEN_EXTERNAL", url: node.dataset.external }));
+    });
+
+    document.addEventListener("click", (event) => {
+      const toggle = event.target.closest(".disclosure-toggle");
+      if (toggle) toggle.closest(".disclosure")?.classList.toggle("open");
+    });
+
+    // ── Provider section rendering ──
+
+    function renderProviderSection() {
+      const overview = byId("provider-overview");
+      const detail = byId("provider-detail");
+      if (page.view === "provider") {
+        overview.classList.add("hidden");
+        detail.classList.remove("hidden");
+        renderProviderPage(page.provider);
+      } else {
+        detail.classList.add("hidden");
+        detail.replaceChildren();
+        overview.classList.remove("hidden");
+        renderOverview();
+      }
+    }
+
+    function renderServerCard(state, serverUrl, detailText, command) {
+      const badge = byId("server-badge");
+      const text = byId("server-badge-text");
+      const labels = {
+        connecting: ["pending", "Checking…"],
+        starting: ["pending", "Starting…"],
+        online: ["ok", "Connected"],
+        offline: ["bad", "Not connected"],
+      };
+      const [cls, label] = labels[state] || labels.offline;
+      badge.className = "status-badge " + cls;
+      text.textContent = label;
+      if (serverUrl) byId("server-url-text").textContent = serverUrl;
+      if (command) byId("offline-command").textContent = command;
+      if (detailText) byId("offline-detail").textContent = detailText;
+    }
+
+    function renderOverview() {
+      const offline = serverState === "offline";
+      byId("server-offline").classList.toggle("hidden", !offline);
+      byId("provider-lists").classList.toggle("hidden", offline || !setup);
+
+      if (offline || !setup) return;
+
+      const active = byId("active-provider-list");
+      const available = byId("available-provider-list");
+      active.replaceChildren();
+      available.replaceChildren();
+
+      for (const entry of setup.providers) {
+        const row = providerRow(entry);
+        (entry.active ? active : available).appendChild(row);
+      }
+    }
+
+    function providerRow(entry) {
+      const meta = CATALOG[entry.name] || {};
+      const subtitle = entry.active
+        ? (entry.model || meta.description || "")
+        : (meta.description || "");
+
+      return el("button", {
+        class: "provider-row" + (entry.active ? " active-provider" : ""),
+        type: "button",
+        onclick: () => { page = { view: "provider", provider: entry.name }; renderProviderSection(); },
+      }, [
+        el("span", { class: "provider-avatar", text: initials(entry.label) }),
+        el("span", { class: "provider-text" }, [
+          el("span", { class: "provider-name", text: entry.label }),
+          el("span", { class: "provider-meta", text: subtitle }),
+        ]),
+        entry.active
+          ? el("span", { class: "status-badge ok" }, [
+              el("span", { class: "status-dot" }),
+              el("span", { text: "Active" }),
+            ])
+          : (entry.configured
+              ? null
+              : el("span", { class: "status-badge neutral", text: "Needs setup" })),
+        el("span", { class: "provider-chevron", text: "›" }),
+      ]);
+    }
+
+    // ── Provider detail pages ──
+
+    function renderProviderPage(provider) {
+      const detail = byId("provider-detail");
+      const meta = CATALOG[provider] || { label: provider, suggestedModels: [] };
+      const config = (setup && setup.configs && setup.configs[provider]) || {
+        model: "", base_url: "", hasApiKey: false,
+      };
+
+      detail.replaceChildren();
+      detail.appendChild(el("button", {
+        class: "detail-back", type: "button",
+        onclick: () => { page = { view: "overview" }; renderProviderSection(); },
+      }, [el("span", { text: "‹" }), el("span", { text: "Back to AI Providers" })]));
+
+      detail.appendChild(el("div", { class: "detail-header" }, [
+        el("span", { class: "provider-avatar", text: initials(meta.label) }),
+        el("span", { class: "detail-title", text: meta.label }),
+        setup && setup.activeProvider === provider
+          ? el("span", { class: "status-badge ok" }, [
+              el("span", { class: "status-dot" }), el("span", { text: "Active" })])
+          : null,
+      ]));
+      detail.appendChild(el("div", { class: "section-sub", text: meta.description || "" }));
+
+      const body =
+        provider === "ollabridge" ? ollaBridgePage(config)
+        : provider === "ollama" ? ollamaPage(config)
+        : provider === "openwebui" ? openWebUiPage(config)
+        : provider === "custom" ? customEndpointPage(config)
+        : apiKeyProviderPage(provider, meta, config);
+
+      detail.appendChild(body);
+    }
+
+    /** Status line + inline result area shared by every provider page. */
+    function resultArea(id) {
+      return el("div", { id, class: "notice hidden" });
+    }
+    function showResult(id, ok, message) {
+      const node = byId(id);
+      if (!node) return;
+      node.className = "notice " + (ok ? "ok" : "bad");
+      node.textContent = message;
+    }
+    function showBusy(id, message) {
+      const node = byId(id);
+      if (!node) return;
+      node.className = "notice info";
+      node.replaceChildren(el("span", { class: "spinner" }), el("span", { text: " " + message }));
+    }
+
+    /**
+     * Field builders return `{ node, read }` rather than relying on element
+     * IDs.
+     *
+     * The OllaBridge page renders three connection tabs at once, so an
+     * id-based lookup like `byId("field-api-key")` could just as easily hand
+     * back the input from a hidden tab. Holding the element directly makes
+     * "which field does this read?" unambiguous.
+     */
+
+    /** API-key field: shows that a key exists, never what it is. */
+    function apiKeyField(provider, config, opts = {}) {
+      const input = el("input", {
+        type: "password",
+        class: "input-wide",
+        placeholder: config.hasApiKey
+          ? "Leave empty to keep the current key"
+          : (opts.placeholder || "Paste your API key"),
+        autocomplete: "off",
+      });
+      const reveal = el("button", {
+        class: "btn btn-sm", type: "button",
+        title: "Show or hide the value you typed",
+        text: "Show",
+      });
+      reveal.addEventListener("click", () => {
+        input.type = input.type === "password" ? "text" : "password";
+        reveal.textContent = input.type === "password" ? "Show" : "Hide";
+      });
+
+      const hint = el("div", { class: "form-hint" });
+      if (config.hasApiKey) {
+        hint.appendChild(el("span", {
+          text: `API key configured: ${config.apiKeyHint || "••••"}. Leave the field empty to keep it. `,
+        }));
+        hint.appendChild(el("a", {
+          text: "Remove API key",
+          onclick: () => request({ type: "REMOVE_PROVIDER_KEY", provider }, (reply) => {
+            if (reply.ok && reply.data) { setup = reply.data; renderProviderPage(provider); }
+            showResult("provider-result", reply.ok, reply.message);
+          }),
+        }));
+      } else if (opts.keyUrl) {
+        hint.appendChild(el("span", { text: "Get your API key from " }));
+        hint.appendChild(el("a", {
+          text: opts.keyUrlLabel || opts.keyUrl,
+          onclick: () => post({ type: "OPEN_EXTERNAL", url: opts.keyUrl }),
+        }));
+      }
+      if (opts.keyNote) {
+        hint.appendChild(el("div", { text: opts.keyNote, style: "margin-top:6px" }));
+      }
+
+      const label = el("label", { class: "form-label", text: opts.label || "API Key" });
+      const node = el("div", { class: "form-row" }, [
+        label,
+        el("div", { class: "input-group" }, [input, reveal]),
+        hint,
+      ]);
+      // An empty box means "keep the stored key" — see the host's
+      // toBackendConfig, which drops a blank key rather than clearing one.
+      return { node, read: () => input.value };
+    }
+
+    /**
+     * Model field: a select over discovered models, with a manual-entry escape
+     * hatch. Discovery is lazy — it runs for this provider only, when the page
+     * opens or when the user asks for a refresh.
+     */
+    function modelField(provider, config, suggested, onResult) {
+      const select = el("select", { class: "input-wide" });
+      const manual = el("input", {
+        type: "text", class: "input-wide hidden",
+        placeholder: "e.g. qwen2.5-coder:7b",
+      });
+      const status = el("div", { class: "form-hint", text: "Loading models…" });
+
+      const fill = (models, error) => {
+        const options = [];
+        const seen = new Set();
+        const candidates = [].concat(models || [], suggested || [], config.model ? [config.model] : []);
+        for (const m of candidates) {
+          if (m && !seen.has(m)) { seen.add(m); options.push(m); }
+        }
+        select.replaceChildren(...options.map((m) => {
+          const option = el("option", { value: m, text: m });
+          if (m === config.model) option.selected = true;
+          return option;
+        }));
+        select.disabled = options.length === 0;
+        status.textContent = error
+          ? `Could not list models (${error}). Suggested models are shown; you can also enter one manually.`
+          : (models && models.length
+              ? `${models.length} model(s) available.`
+              : "No models discovered — showing suggestions.");
+      };
+      fill([], null);
+      status.textContent = "Loading models…";
+
+      const refresh = el("button", { class: "btn btn-sm", type: "button", text: "Refresh" });
+
+      const load = (force) => {
+        status.textContent = force ? "Refreshing models…" : "Loading models…";
+        request({ type: "LOAD_PROVIDER_MODELS", provider, force }, (reply) => {
+          // A reply that arrives after the user has navigated away belongs to
+          // a page that no longer exists.
+          if (!node.isConnected) return;
+          fill(reply.models, reply.error);
+          if (onResult) onResult(reply);
+        });
+      };
+      refresh.addEventListener("click", () => load(true));
+
+      const toggleManual = el("a", { text: "Enter a model name manually" });
+      toggleManual.addEventListener("click", () => {
+        const useManual = manual.classList.contains("hidden");
+        manual.classList.toggle("hidden", !useManual);
+        select.classList.toggle("hidden", useManual);
+        refresh.disabled = useManual;
+        if (useManual) { manual.value = select.value || config.model || ""; manual.focus(); }
+        toggleManual.textContent = useManual
+          ? "Choose from the list"
+          : "Enter a model name manually";
+      });
+
+      const node = el("div", { class: "form-row" }, [
+        el("label", { class: "form-label", text: "Model" }),
+        el("div", { class: "input-group" }, [select, manual, refresh]),
+        status,
+        el("div", { class: "form-hint" }, [toggleManual]),
+      ]);
+
+      load(false);
+
+      const read = () =>
+        manual.classList.contains("hidden")
+          ? (select.value || "")
+          : manual.value.trim();
+      return { node, read, reload: load };
+    }
+
+    function baseUrlField(label, value, placeholder, hint) {
+      const input = el("input", {
+        type: "text", class: "input-wide",
+        value: value || "", placeholder: placeholder || "",
+      });
+      const node = el("div", { class: "form-row" }, [
+        el("label", { class: "form-label", text: label }),
+        input,
+        hint ? el("div", { class: "form-hint", text: hint }) : null,
+      ]);
+      return { node, read: () => input.value.trim() };
+    }
+
+    function textField(label, value, placeholder, hint) {
+      return baseUrlField(label, value, placeholder, hint);
+    }
+
+    /** Test / Save buttons, wired to the host. */
+    function actionsBar(provider, collect) {
+      const test = el("button", { class: "btn", type: "button", text: "Test connection" });
+      const save = el("button", { class: "btn btn-primary", type: "button", text: "Save and activate" });
+
+      test.addEventListener("click", () => {
+        test.disabled = save.disabled = true;
+        showBusy("provider-result", "Testing connection…");
+        request({ type: "TEST_PROVIDER", provider, config: collect() }, (reply) => {
+          test.disabled = save.disabled = false;
+          showResult("provider-result", reply.ok, reply.message);
+        });
+      });
+
+      save.addEventListener("click", () => {
+        test.disabled = save.disabled = true;
+        showBusy("provider-result", "Saving…");
+        request({ type: "SAVE_AND_ACTIVATE_PROVIDER", provider, config: collect() }, (reply) => {
+          test.disabled = save.disabled = false;
+          if (reply.data) setup = reply.data;
+          if (reply.ok) {
+            // Re-render so the page reflects what the backend now holds
+            // (masked key hint, active badge), then restore the message the
+            // re-render wiped.
+            renderProviderPage(provider);
+          }
+          showResult("provider-result", reply.ok, reply.message);
+        });
+      });
+
+      return el("div", { class: "actions-bar" }, [test, save]);
+    }
+
+    /** Advanced disclosure shared by the provider pages. */
+    function advancedSection(children) {
+      return el("div", { class: "disclosure" }, [
+        el("button", { class: "disclosure-toggle", type: "button" }, [
+          el("span", { class: "disclosure-caret", text: "›" }),
+          el("span", { text: " Advanced options" }),
+        ]),
+        el("div", { class: "disclosure-body" }, [].concat(children || [], [
+          el("div", { class: "form-hint", style: "margin-top:10px" }, [
+            el("a", {
+              text: "Open the browser admin panel",
+              onclick: () => post({ type: "OPEN_WEB_ADMIN" }),
+            }),
+          ]),
+        ])),
+      ]);
+    }
+
+
+    /** Claude / OpenAI / watsonx: an API key, a model, an optional base URL. */
+    function apiKeyProviderPage(provider, meta, config) {
+      const key = apiKeyField(provider, config, {
+        keyUrl: meta.keyUrl,
+        keyUrlLabel: meta.keyUrlLabel,
+        keyNote: provider === "claude"
+          ? "An Anthropic API key is required. A Claude.ai subscription does not include API access."
+          : undefined,
+      });
+      const project = provider === "watsonx"
+        ? textField("Project ID", config.project_id, "watsonx project ID",
+            "Required alongside the API key.")
+        : null;
+      const model = modelField(provider, config, meta.suggestedModels);
+      const baseUrl = baseUrlField(
+        "Base URL (optional)",
+        config.base_url,
+        meta.defaultBaseUrl || "",
+        `Leave empty to use the default ${meta.label} endpoint.`
+      );
+
+      const collect = () => {
+        const out = {
+          model: model.read(),
+          base_url: baseUrl.read(),
+          api_key: key.read(),
+        };
+        if (project) out.project_id = project.read();
+        return out;
+      };
+
+      return el("div", {}, [
+        key.node,
+        project ? project.node : null,
+        model.node,
+        baseUrl.node,
+        advancedSection(),
+        resultArea("provider-result"),
+        actionsBar(provider, collect),
+      ]);
+    }
+
+    /** Ollama: a local URL and whatever models that machine has pulled. */
+    function ollamaPage(config) {
+      const baseUrl = baseUrlField(
+        "Ollama URL",
+        config.base_url || CATALOG.ollama.defaultBaseUrl,
+        CATALOG.ollama.defaultBaseUrl,
+        "Where the Ollama server is listening on this machine."
+      );
+
+      const notRunning = el("div", { class: "notice bad hidden" }, [
+        el("div", { class: "notice-title", text: "Ollama is not running." }),
+        el("div", { text: "Start Ollama on this machine and try again." }),
+        el("div", { class: "btn-row", style: "margin-top:12px" }, [
+          el("button", {
+            class: "btn btn-sm", type: "button", text: "Retry",
+            onclick: () => renderProviderPage("ollama"),
+          }),
+          el("button", {
+            class: "btn btn-ghost btn-sm", type: "button", text: "Install Ollama",
+            onclick: () => post({ type: "OPEN_EXTERNAL", url: CATALOG.ollama.keyUrl }),
+          }),
+        ]),
+      ]);
+
+      // Model discovery doubles as a liveness check — a failure here means
+      // Ollama is not answering, which deserves a plain sentence rather than
+      // an empty dropdown.
+      const model = modelField("ollama", config, CATALOG.ollama.suggestedModels,
+        (reply) => notRunning.classList.toggle("hidden", !reply.error));
+
+      return el("div", {}, [
+        baseUrl.node,
+        notRunning,
+        model.node,
+        advancedSection(),
+        resultArea("provider-result"),
+        actionsBar("ollama", () => ({
+          model: model.read(),
+          base_url: baseUrl.read(),
+        })),
+      ]);
+    }
+
+    /** Open WebUI: an instance URL, an optional key, and its model list. */
+    function openWebUiPage(config) {
+      const meta = CATALOG.openwebui;
+      const baseUrl = baseUrlField(
+        "Open WebUI URL",
+        config.base_url || meta.defaultBaseUrl,
+        meta.defaultBaseUrl,
+        "The address of your Open WebUI instance. GitPilot adds the API path itself — paste the root, not /api or /v1."
+      );
+      const key = apiKeyField("openwebui", config, {
+        label: "API key (optional)",
+        placeholder: "Only if your instance requires authentication",
+        keyUrl: meta.keyUrl,
+        keyUrlLabel: meta.keyUrlLabel,
+        keyNote: "Create one in Open WebUI under Settings → Account → API keys. Leave empty for an instance that allows anonymous access.",
+      });
+
+      const unreachable = el("div", { class: "notice bad hidden" }, [
+        el("div", { class: "notice-title", text: "Open WebUI did not answer." }),
+        el("div", { text: "Check the URL, that the instance is running, and that the API key is valid if it requires one." }),
+        el("div", { class: "btn-row", style: "margin-top:12px" }, [
+          el("button", {
+            class: "btn btn-sm", type: "button", text: "Retry",
+            onclick: () => renderProviderPage("openwebui"),
+          }),
+        ]),
+      ]);
+
+      const model = modelField("openwebui", config, meta.suggestedModels,
+        (reply) => unreachable.classList.toggle("hidden", !reply.error));
+
+      return el("div", {}, [
+        baseUrl.node,
+        key.node,
+        unreachable,
+        model.node,
+        advancedSection(),
+        resultArea("provider-result"),
+        actionsBar("openwebui", () => ({
+          model: model.read(),
+          base_url: baseUrl.read(),
+          api_key: key.read(),
+        })),
+      ]);
+    }
+
+    /**
+     * Custom endpoint: any OpenAI-compatible gateway.
+     *
+     * The header editor exists because gateways routinely require attribution
+     * or routing headers alongside the key, and without somewhere to put them
+     * the whole provider is unusable.
+     */
+    function customEndpointPage(config) {
+      const meta = CATALOG.custom;
+      const baseUrl = baseUrlField(
+        "Endpoint URL",
+        config.base_url,
+        meta.defaultBaseUrl,
+        "The OpenAI-compatible base URL. Pasting a full /chat/completions path works too — GitPilot trims it."
+      );
+      const key = apiKeyField("custom", config, {
+        label: "API key",
+        placeholder: "Token issued by your endpoint",
+      });
+      const headers = headersField(config.headers);
+      const model = modelField("custom", config, meta.suggestedModels);
+
+      return el("div", {}, [
+        baseUrl.node,
+        key.node,
+        model.node,
+        el("div", { class: "form-hint", style: "margin:-6px 0 10px" , text:
+          "GitPilot looks for a published model catalogue at the endpoint first, then falls back to its /models listing. If neither is available, enter the model id manually." }),
+        headers.node,
+        advancedSection(),
+        resultArea("provider-result"),
+        actionsBar("custom", () => ({
+          model: model.read(),
+          base_url: baseUrl.read(),
+          api_key: key.read(),
+          headers: headers.read(),
+        })),
+      ]);
+    }
+
+    /** Editable list of extra request headers. */
+    function headersField(initial) {
+      const rows = el("div", {});
+
+      const addRow = (name = "", value = "") => {
+        const nameInput = el("input", { type: "text", class: "input-wide", value: name, placeholder: "x-user" });
+        const valueInput = el("input", { type: "text", class: "input-wide", value, placeholder: "you@example.com" });
+        const remove = el("button", { class: "btn btn-sm btn-ghost", type: "button", text: "Remove", title: "Remove this header" });
+        const row = el("div", { class: "input-group", style: "margin-bottom:8px" }, [nameInput, valueInput, remove]);
+        remove.addEventListener("click", () => row.remove());
+        rows.appendChild(row);
+      };
+
+      const entries = Object.entries(initial || {});
+      if (entries.length) {
+        entries.forEach(([k, v]) => addRow(k, v));
+      } else {
+        addRow();
+      }
+
+      const add = el("button", { class: "btn btn-sm", type: "button", text: "Add header" });
+      add.addEventListener("click", () => addRow());
+
+      const node = el("div", { class: "form-row" }, [
+        el("label", { class: "form-label", text: "Request headers (optional)" }),
+        rows,
+        el("div", { class: "btn-row" }, [add]),
+        el("div", { class: "form-hint", text: "Sent with every request. Use these for attribution or routing values your endpoint requires — not for the API key, which has its own field above." }),
+      ]);
+
+      const read = () => {
+        const out = {};
+        for (const row of rows.children) {
+          const [nameInput, valueInput] = row.querySelectorAll("input");
+          const name = nameInput.value.trim();
+          if (name) out[name] = valueInput.value.trim();
+        }
+        return out;
+      };
+
+      return { node, read };
+    }
+
+    /** OllaBridge: cloud sign-in, an API key, or your own gateway. */
+    function ollaBridgePage(config) {
+      const mode = (setup && setup.ollabridgeMode) || "cloud";
+      const wrap = el("div", {});
+      const tabs = el("div", { class: "tabs" });
+      const panels = el("div", {});
+
+      const definitions = [
+        { id: "cloud", label: "Cloud Login", build: ollaBridgeCloudPanel },
+        { id: "api_key", label: "API Key", build: ollaBridgeApiKeyPanel },
+        { id: "local", label: "Local Gateway", build: ollaBridgeLocalPanel },
+      ];
+
+      definitions.forEach((def) => {
+        const panel = el("div", {
+          class: "tab-panel" + (def.id === mode ? " active" : ""),
+        }, [def.build(config)]);
+        panels.appendChild(panel);
+
+        const tab = el("button", {
+          class: "tab" + (def.id === mode ? " active" : ""),
+          type: "button", text: def.label,
+        });
+        tab.addEventListener("click", () => {
+          tabs.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+          tab.classList.add("active");
+          panels.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
+          panel.classList.add("active");
+        });
+        tabs.appendChild(tab);
+      });
+
+      wrap.appendChild(tabs);
+      wrap.appendChild(panels);
+      wrap.appendChild(resultArea("provider-result"));
+      return wrap;
+    }
+
+    function ollaBridgeCloudPanel(config) {
+      const signedIn = Boolean(config.hasApiKey);
+      const code = el("input", {
+        type: "text", class: "input-wide",
+        placeholder: "ABCD-1234", autocomplete: "off",
+      });
+
+      const pair = el("button", { class: "btn btn-primary", type: "button", text: "Pair device" });
+      pair.addEventListener("click", () => {
+        showBusy("provider-result", "Pairing…");
+        request({ type: "PAIR_OLLABRIDGE", code: code.value, baseUrl: OLLABRIDGE.cloud }, (reply) => {
+          if (reply.data) setup = reply.data;
+          if (reply.ok) renderProviderPage("ollabridge");
+          showResult("provider-result", reply.ok, reply.message);
+        });
+      });
+
+      const signOut = el("button", { class: "btn btn-danger btn-sm", type: "button", text: "Sign out" });
+      signOut.addEventListener("click", () => {
+        request({ type: "SIGN_OUT_OLLABRIDGE" }, (reply) => {
+          if (reply.data) setup = reply.data;
+          if (reply.ok) renderProviderPage("ollabridge");
+          showResult("provider-result", reply.ok, reply.message);
+        });
+      });
+
+      const connected = signedIn
+        ? el("div", { class: "notice ok" }, [
+            el("div", { class: "notice-title", text: "Signed in to OllaBridge Cloud" }),
+            el("div", { text: `Device token ${config.apiKeyHint || "••••"} · ${config.base_url || OLLABRIDGE.cloud}` }),
+            el("div", { class: "btn-row", style: "margin-top:12px" }, [signOut]),
+          ])
+        : null;
+
+      const model = signedIn
+        ? modelField("ollabridge", config, CATALOG.ollabridge.suggestedModels)
+        : null;
+
+      return el("div", {}, [
+        connected,
+        el("div", { class: "form-row" }, [
+          el("label", { class: "form-label", text: "Sign in to OllaBridge Cloud" }),
+          el("div", { class: "btn-row" }, [
+            el("button", {
+              class: "btn", type: "button", text: "Sign in with browser",
+              onclick: () => post({ type: "START_OLLABRIDGE_LOGIN", baseUrl: OLLABRIDGE.cloud }),
+            }),
+          ]),
+          el("div", { class: "form-hint", text: "Your browser opens the OllaBridge sign-in page and shows a pairing code. GitPilot never asks for your password." }),
+        ]),
+        el("div", { class: "form-row" }, [
+          el("label", { class: "form-label", text: "Pairing code" }),
+          el("div", { class: "input-group" }, [code, pair]),
+          el("div", { class: "form-hint", text: "Paste the code from your browser to link this machine." }),
+        ]),
+        model ? model.node : null,
+        model
+          ? actionsBar("ollabridge", () => ({
+              model: model.read(),
+              base_url: config.base_url || OLLABRIDGE.cloud,
+              mode: "cloud",
+            }))
+          : null,
+      ]);
+    }
+
+    function ollaBridgeApiKeyPanel(config) {
+      const usingApiKey = setup && setup.ollabridgeMode === "api_key";
+      const baseUrl = baseUrlField(
+        "OllaBridge endpoint",
+        usingApiKey ? config.base_url : (config.base_url || OLLABRIDGE.cloud),
+        OLLABRIDGE.cloud,
+        "The OllaBridge gateway that serves your models."
+      );
+      const key = apiKeyField("ollabridge", config, {
+        keyUrl: CATALOG.ollabridge.keyUrl,
+        keyUrlLabel: CATALOG.ollabridge.keyUrlLabel,
+      });
+      const model = modelField("ollabridge", config, CATALOG.ollabridge.suggestedModels);
+
+      return el("div", {}, [
+        baseUrl.node,
+        key.node,
+        model.node,
+        advancedSection(),
+        actionsBar("ollabridge", () => ({
+          model: model.read(),
+          base_url: baseUrl.read() || OLLABRIDGE.cloud,
+          api_key: key.read(),
+          mode: "api_key",
+        })),
+      ]);
+    }
+
+    function ollaBridgeLocalPanel(config) {
+      const isLocal = setup && setup.ollabridgeMode === "local";
+      const baseUrl = baseUrlField(
+        "Local gateway URL",
+        isLocal ? config.base_url : OLLABRIDGE.local,
+        OLLABRIDGE.local,
+        "Your own OllaBridge instance. This is not GitPilot's own address — GitPilot serves on port 8000, OllaBridge on 11435."
+      );
+      const key = apiKeyField("ollabridge", config, {
+        label: "API key (optional)",
+        placeholder: "Only if your gateway requires one",
+      });
+      const model = modelField("ollabridge", config, CATALOG.ollabridge.suggestedModels);
+
+      return el("div", {}, [
+        baseUrl.node,
+        key.node,
+        model.node,
+        advancedSection(),
+        actionsBar("ollabridge", () => ({
+          model: model.read(),
+          base_url: baseUrl.read() || OLLABRIDGE.local,
+          api_key: key.read(),
+          mode: "local",
+        })),
+      ]);
+    }
+
+
+    // ── MCP servers ──
+
+    /**
+     * MCP navigation mirrors the provider pages: a list, and one server's
+     * tools behind it.
+     *
+     * @type {{view: "overview"} | {view: "server", serverId: string}}
+     */
+    let mcpPage = { view: "overview" };
+    /** Latest payload from the host; null until the backend answers. */
+    let mcpData = null;
+    /** Last registry search result, kept so a re-render does not lose it. */
+    let mcpRegistry = null;
+
+    byId("btn-install-forge").addEventListener("click", () => {
+      byId("btn-install-forge").disabled = true;
+      post({ type: "INSTALL_MCP_FORGE" });
+    });
+    byId("btn-configure-gateway").addEventListener("click", () =>
+      post({ type: "CONFIGURE_MCP_GATEWAY" }));
+    byId("btn-sync-gateway").addEventListener("click", () =>
+      request({ type: "SYNC_MCP_GATEWAY" }, (reply) =>
+        showResult("mcp-result", reply.ok, reply.message)));
+    byId("btn-add-custom").addEventListener("click", () =>
+      request({ type: "ADD_CUSTOM_MCP_SERVER" }, (reply) =>
+        showResult("mcp-result", reply.ok, reply.message)));
+
+    const runRegistrySearch = () => {
+      const query = byId("mcp-search").value;
+      byId("mcp-registry-status").textContent = "Searching…";
+      request({ type: "SEARCH_MCP_REGISTRY", query }, (reply) => {
+        mcpRegistry = reply;
+        renderMcpSection();
+      });
+    };
+    byId("btn-search-registry").addEventListener("click", runRegistrySearch);
+    byId("mcp-search").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); runRegistrySearch(); }
+    });
+
+    function renderMcpSection() {
+      const overview = byId("mcp-overview");
+      const detail = byId("mcp-detail");
+      if (mcpPage.view === "server" && mcpData) {
+        overview.classList.add("hidden");
+        detail.classList.remove("hidden");
+        renderMcpServerPage(mcpPage.serverId);
+      } else {
+        detail.classList.add("hidden");
+        detail.replaceChildren();
+        overview.classList.remove("hidden");
+        renderMcpOverview();
+      }
+    }
+
+    /** Risk badge for one tool. High-risk tools are visually distinct. */
+    function riskBadge(risk) {
+      const cls = risk === "high" ? "bad" : risk === "medium" ? "pending" : "neutral";
+      return el("span", { class: "status-badge " + cls, text: risk });
+    }
+
+    function renderMcpOverview() {
+      const offline = !mcpData || mcpData.offline;
+      byId("mcp-offline").classList.toggle("hidden", !offline);
+      byId("mcp-body").classList.toggle("hidden", offline);
+
+      if (offline) {
+        if (mcpData && mcpData.detail) {
+          byId("mcp-offline-detail").textContent = mcpData.detail;
+        }
+        byId("mcp-gateway-badge").className = "status-badge bad";
+        byId("mcp-gateway-text").textContent = "Unknown";
+        return;
+      }
+
+      // Gateway status.
+      const status = mcpData.status || {};
+      const reachable = Boolean(status.gateway_reachable);
+      byId("mcp-gateway-badge").className = "status-badge " + (reachable ? "ok" : "bad");
+      byId("mcp-gateway-text").textContent = reachable ? "Connected" : "Not running";
+      byId("mcp-gateway-url").textContent = status.gateway_url || "—";
+      byId("mcp-gateway-detail").textContent = reachable
+        ? `${status.servers_enabled || 0} of ${status.servers_installed || 0} server(s) enabled · ${status.tools_advertised || 0} tool(s) available to the agents`
+        : (status.gateway_detail || "");
+
+      // The install button only appears when there is nothing to connect to.
+      const showInstall = !reachable && !mcpData.forgeRunning;
+      byId("btn-install-forge").classList.toggle("hidden", !showInstall);
+      byId("btn-install-forge").disabled = Boolean(mcpData.forgeInstalling);
+
+      // Attached servers.
+      const list = byId("mcp-server-list");
+      list.replaceChildren();
+      const servers = (mcpData.servers || []).filter((s) => s.installed);
+      if (!servers.length) {
+        list.appendChild(el("div", { class: "form-hint", text:
+          "No servers attached yet. Pick one below to give the agents extra tools." }));
+      }
+      for (const server of servers) {
+        list.appendChild(mcpServerRow(server));
+      }
+
+      // Catalogue + registry results.
+      const catalogList = byId("mcp-catalog-list");
+      catalogList.replaceChildren();
+
+      const attached = new Set(servers.map((s) => s.id));
+      const bundled = (mcpData.catalog || []).filter((c) => !attached.has(c.id));
+      if (bundled.length) {
+        catalogList.appendChild(el("div", { class: "form-hint", style: "margin-bottom:8px",
+          text: "Bundled with GitPilot" }));
+        for (const entry of bundled) {
+          catalogList.appendChild(mcpCatalogRow(entry, "bundled"));
+        }
+      }
+
+      const statusLine = byId("mcp-registry-status");
+      if (mcpRegistry) {
+        const found = (mcpRegistry.items || []).filter((c) => !attached.has(c.id));
+        statusLine.textContent = mcpRegistry.error
+          ? `Registry unavailable: ${mcpRegistry.error}`
+          : `${found.length} result(s) from ${mcpRegistry.registryUrl || "the registry"}.`;
+        if (found.length) {
+          catalogList.appendChild(el("div", { class: "form-hint", style: "margin:12px 0 8px",
+            text: `From ${mcpRegistry.registryUrl || "the registry"}` }));
+          for (const entry of found) {
+            catalogList.appendChild(mcpCatalogRow(entry, "registry"));
+          }
+        }
+      } else {
+        statusLine.textContent = "";
+      }
+    }
+
+    /** One attached server: what it is, and how much of it is switched on. */
+    function mcpServerRow(server) {
+      const enabledTools = server.enabled_tool_count || 0;
+      const subtitle = server.enabled
+        ? `${enabledTools} of ${server.tool_count} tool(s) available to the agents`
+        : (server.description || "Disabled");
+
+      const row = el("button", {
+        class: "provider-row" + (server.enabled ? " active-provider" : ""),
+        type: "button",
+      }, [
+        el("span", { class: "provider-avatar", text: initials(server.id) }),
+        el("span", { class: "provider-text" }, [
+          el("span", { class: "provider-name", text: server.id }),
+          el("span", { class: "provider-meta", text: subtitle }),
+        ]),
+        server.enabled
+          ? el("span", { class: "status-badge ok" }, [
+              el("span", { class: "status-dot" }), el("span", { text: "Enabled" })])
+          : el("span", { class: "status-badge neutral", text: "Disabled" }),
+        el("span", { class: "provider-chevron", text: "›" }),
+      ]);
+      row.addEventListener("click", () => {
+        mcpPage = { view: "server", serverId: server.id };
+        renderMcpSection();
+      });
+      return row;
+    }
+
+    /** One server on offer, with an Attach action. */
+    function mcpCatalogRow(entry, source) {
+      const attach = el("button", { class: "btn btn-sm", type: "button", text: "Attach" });
+      attach.addEventListener("click", (event) => {
+        event.stopPropagation();
+        attach.disabled = true;
+        attach.textContent = "Attaching…";
+        request({ type: "INSTALL_MCP_SERVER", entryId: entry.id, source }, (reply) => {
+          showResult("mcp-result", reply.ok, reply.message);
+          if (!reply.ok) { attach.disabled = false; attach.textContent = "Attach"; }
+        });
+      });
+
+      return el("div", { class: "provider-row", style: "cursor:default" }, [
+        el("span", { class: "provider-avatar", text: initials(entry.id) }),
+        el("span", { class: "provider-text" }, [
+          el("span", { class: "provider-name", text: entry.id }),
+          el("span", { class: "provider-meta", text: entry.description || entry.endpoint || "" }),
+          (entry.tags && entry.tags.length)
+            ? el("span", { class: "provider-meta", style: "margin-top:4px;opacity:0.8",
+                text: entry.tags.slice(0, 5).join(" · ") })
+            : null,
+        ]),
+        attach,
+      ]);
+    }
+
+    /** One server's page: its tools, and which agents call them. */
+    function renderMcpServerPage(serverId) {
+      const detail = byId("mcp-detail");
+      const server = (mcpData.servers || []).find((s) => s.id === serverId);
+      detail.replaceChildren();
+
+      if (!server) {
+        mcpPage = { view: "overview" };
+        renderMcpSection();
+        return;
+      }
+
+      detail.appendChild(el("button", {
+        class: "detail-back", type: "button",
+        onclick: () => { mcpPage = { view: "overview" }; renderMcpSection(); },
+      }, [el("span", { text: "‹" }), el("span", { text: "Back to MCP Servers" })]));
+
+      detail.appendChild(el("div", { class: "detail-header" }, [
+        el("span", { class: "provider-avatar", text: initials(server.id) }),
+        el("span", { class: "detail-title", text: server.id }),
+        server.enabled
+          ? el("span", { class: "status-badge ok" }, [
+              el("span", { class: "status-dot" }), el("span", { text: "Enabled" })])
+          : el("span", { class: "status-badge neutral", text: "Disabled" }),
+      ]));
+      detail.appendChild(el("div", { class: "section-sub", text: server.description || "" }));
+
+      // Endpoint and the env var naming its token — never the token itself.
+      detail.appendChild(el("div", { class: "form-row" }, [
+        el("label", { class: "form-label", text: "Endpoint" }),
+        el("div", { class: "provider-meta", text: server.endpoint || "—" }),
+        server.auth_token_env
+          ? el("div", { class: "form-hint", text:
+              `Token read from ${server.auth_token_env} on the GitPilot host. The value never reaches this editor.` })
+          : null,
+      ]));
+
+      // The master switch.
+      const masterToggle = el("div", {
+        class: "toggle" + (server.enabled ? " active" : ""),
+        role: "switch", tabindex: "0",
+      });
+      masterToggle.addEventListener("click", () => {
+        request({ type: "SET_MCP_SERVER_ENABLED", serverId: server.id, enabled: !server.enabled },
+          (reply) => showResult("mcp-detail-result", reply.ok, reply.message));
+      });
+      detail.appendChild(el("div", { class: "field" }, [
+        el("div", { class: "field-info" }, [
+          el("div", { class: "field-label", text: "Available to the agents" }),
+          el("div", { class: "field-desc", text:
+            "When enabled, this server's tools are offered to the agents during a run." }),
+        ]),
+        el("div", { class: "field-control" }, [masterToggle]),
+      ]));
+
+      // Tools.
+      detail.appendChild(el("div", { class: "group-heading", text: "Tools" }));
+      const tools = server.tools || [];
+      if (!tools.length) {
+        detail.appendChild(el("div", { class: "form-hint", text:
+          "No tools advertised. Test the connection to discover them." }));
+      }
+      for (const tool of tools) {
+        const toggle = el("div", {
+          class: "toggle" + (tool.enabled ? " active" : ""),
+          role: "switch", tabindex: "0",
+        });
+        toggle.addEventListener("click", () => {
+          request({ type: "SET_MCP_TOOL_ENABLED", serverId: server.id, tool: tool.name, enabled: !tool.enabled },
+            (reply) => showResult("mcp-detail-result", reply.ok, reply.message));
+        });
+
+        const usedBy = (tool.used_by || []).length
+          ? `Used by ${tool.used_by.join(", ")}`
+          : "Not mapped to a specific agent";
+
+        detail.appendChild(el("div", { class: "field" }, [
+          el("div", { class: "field-info" }, [
+            el("div", { class: "field-label" }, [
+              el("span", { text: tool.name + "  " }),
+              riskBadge(tool.risk),
+            ]),
+            el("div", { class: "field-desc", text: usedBy }),
+          ]),
+          el("div", { class: "field-control" }, [toggle]),
+        ]));
+      }
+
+      detail.appendChild(resultArea("mcp-detail-result"));
+
+      const test = el("button", { class: "btn", type: "button", text: "Test connection" });
+      test.addEventListener("click", () => {
+        test.disabled = true;
+        showBusy("mcp-detail-result", "Testing…");
+        request({ type: "TEST_MCP_SERVER", serverId: server.id }, (reply) => {
+          test.disabled = false;
+          showResult("mcp-detail-result", reply.ok, reply.message);
+        });
+      });
+
+      const detach = el("button", { class: "btn btn-danger", type: "button", text: "Detach server" });
+      detach.addEventListener("click", () => {
+        request({ type: "UNINSTALL_MCP_SERVER", serverId: server.id }, (reply) => {
+          if (reply.ok) {
+            // Leave the page immediately rather than waiting for the host's
+            // reload: this page describes a server that no longer exists, and
+            // a reload that fails would strand the user on it.
+            mcpPage = { view: "overview" };
+            renderMcpSection();
+          }
+          showResult("mcp-result", reply.ok, reply.message);
+        });
+      });
+
+      detail.appendChild(el("div", { class: "actions-bar" }, [test, detach]));
+    }
+
+    // ── Agent topologies ──
+
+    /**
+     * Render the topology presets as selectable cards.
+     *
+     * Each card shows the agent sequence, because "Feature Builder" says
+     * far less than "explorer -> planner -> developer -> reviewer -> git".
+     * Routed topologies have no fixed sequence and say so.
+     */
+    function renderTopologies(msg) {
+      const list = byId("topology-list");
+      const offline = byId("topology-offline");
+      list.replaceChildren();
+
+      offline.classList.toggle("hidden", !msg.offline);
+      if (msg.offline) {
+        if (msg.detail) byId("topology-offline-detail").textContent = msg.detail;
+        return;
+      }
+
+      const AGENT_LABELS = {
+        explorer: "Explorer",
+        planner: "Planner",
+        developer: "Coder",
+        reviewer: "Reviewer",
+        git_agent: "PR Manager",
+      };
+
+      const card = (id, name, description, agents, selected) => {
+        const row = el("button", {
+          class: "provider-row" + (selected ? " active-provider" : ""),
+          type: "button",
+        }, [
+          el("span", { class: "provider-text" }, [
+            el("span", { class: "provider-name", text: name }),
+            el("span", { class: "provider-meta", text: description }),
+            agents && agents.length
+              ? el("span", {
+                  class: "provider-meta",
+                  style: "margin-top:4px;opacity:0.85",
+                  text: agents.map((a) => AGENT_LABELS[a] || a).join("  →  "),
+                })
+              : el("span", {
+                  class: "provider-meta",
+                  style: "margin-top:4px;opacity:0.85",
+                  text: "Agents chosen per request",
+                }),
+          ]),
+          selected
+            ? el("span", { class: "status-badge ok" }, [
+                el("span", { class: "status-dot" }),
+                el("span", { text: "Active" }),
+              ])
+            : null,
+        ]);
+
+        row.addEventListener("click", () => {
+          const result = byId("topology-result");
+          result.className = "notice info";
+          result.textContent = "Saving…";
+          request({ type: "SET_TOPOLOGY", topology: id }, (reply) => {
+            result.className = "notice " + (reply.ok ? "ok" : "bad");
+            result.textContent = reply.ok
+              ? `${name} is now the default topology.`
+              : reply.message;
+            if (reply.ok) post({ type: "LOAD_TOPOLOGIES" });
+          });
+        });
+        return row;
+      };
+
+      // "Automatic" is the absence of a saved preference, not a preset.
+      list.appendChild(card(
+        "auto",
+        "Automatic (recommended)",
+        "GitPilot routes each request to the agents that fit it.",
+        null,
+        !msg.selected || msg.selected === "auto"
+      ));
+
+      const groups = [
+        ["Pipelines — fixed agent sequences", "pipeline"],
+        ["System topologies", "system"],
+      ];
+      for (const [heading, category] of groups) {
+        const items = (msg.topologies || []).filter((t) => t.category === category);
+        if (!items.length) continue;
+        list.appendChild(el("div", { class: "group-heading", text: heading }));
+        for (const t of items) {
+          list.appendChild(card(
+            t.id,
+            `${t.icon ? t.icon + " " : ""}${t.name}`,
+            t.description,
+            t.agents_used,
+            msg.selected === t.id
+          ));
+        }
+      }
+    }
+
+    // ── Messages from the extension host ──
     window.addEventListener("message", (event) => {
       const msg = event.data;
       if (!msg) return;
 
-      if (msg.type === "SETTINGS_DATA") {
-        const s = msg.payload || {};
-        byId("serverUrl").value = s.serverUrl || "http://127.0.0.1:8000";
-        setToggle("autoConnect", s.autoConnect !== false);
-        byId("githubToken").value = s.githubToken || "";
-        byId("defaultTopology").value = s.defaultTopology || "default";
-        setToggle("liteMode", Boolean(s.liteMode));
-        setToggle("showInlineHints", s.showInlineHints !== false);
-        setToggle("scanOnSave", Boolean(s.scanOnSave));
-        setToggle("showSecurityDiagnostics", s.showSecurityDiagnostics !== false);
-        byId("chatFontSize").value = String(s.chatFontSize || 13);
-        byId("maxChatHistory").value = String(s.maxChatHistory || 100);
-
-        const providerSelect = byId("provider");
-        if (s.provider && providerSelect) {
-          for (const opt of providerSelect.options) {
-            if (opt.value === s.provider) { opt.selected = true; break; }
-          }
-        }
-
-        const badge = byId("connection-status");
-        const text = byId("connection-text");
-        if (s.connected) {
-          badge.className = "status-badge connected";
-          text.textContent = "Connected";
-        } else {
-          badge.className = "status-badge disconnected";
-          text.textContent = "Disconnected";
-        }
+      if (msg.requestId && pending.has(msg.requestId)) {
+        const handler = pending.get(msg.requestId);
+        pending.delete(msg.requestId);
+        handler(msg);
+        return;
       }
 
-      if (msg.type === "SETTINGS_SAVED") {
-        const toast = byId("save-toast");
-        toast.classList.add("visible");
-        setTimeout(() => toast.classList.remove("visible"), 1800);
+      switch (msg.type) {
+        case "SETTINGS_DATA": {
+          const s = msg.payload || {};
+          byId("serverUrl").value = s.serverUrl || "http://127.0.0.1:8000";
+          setToggle("autoConnect", s.autoConnect !== false);
+          byId("githubToken").value = s.githubToken || "";
+          byId("permissionMode").value = s.permissionMode || "normal";
+          setToggle("liteMode", Boolean(s.liteMode));
+          setToggle("showInlineHints", s.showInlineHints !== false);
+          setToggle("scanOnSave", Boolean(s.scanOnSave));
+          setToggle("showSecurityDiagnostics", s.showSecurityDiagnostics !== false);
+          byId("chatFontSize").value = String(s.chatFontSize || 13);
+          byId("maxChatHistory").value = String(s.maxChatHistory || 100);
+          break;
+        }
+
+        case "SETTINGS_SAVED": {
+          const toast = byId("save-toast");
+          toast.classList.add("visible");
+          setTimeout(() => toast.classList.remove("visible"), 1800);
+          break;
+        }
+
+        case "SERVER_STATE":
+          serverState = msg.state;
+          renderServerCard(msg.state, msg.serverUrl, msg.detail, msg.command);
+          byId("btn-start-server").classList.toggle("hidden", !msg.canStartLocally);
+          if (msg.state !== "online") setup = null;
+          if (page.view === "provider" && msg.state === "offline") page = { view: "overview" };
+          renderProviderSection();
+          break;
+
+        case "PROVIDER_SETUP_DATA":
+          setup = msg.data;
+          renderProviderSection();
+          break;
+
+        case "MCP_DATA":
+          mcpData = msg;
+          renderMcpSection();
+          break;
+
+        case "MCP_FORGE_PROGRESS": {
+          const node = byId("mcp-forge-progress");
+          node.classList.remove("hidden");
+          node.className = "notice " + (
+            msg.stage === "failed" ? "bad" : msg.stage === "done" ? "ok" : "info");
+          node.textContent = msg.message;
+          if (msg.stage === "done" || msg.stage === "failed") {
+            byId("btn-install-forge").disabled = false;
+          }
+          break;
+        }
+
+        case "TOPOLOGY_DATA":
+          renderTopologies(msg);
+          break;
+
+        case "OLLABRIDGE_LOGIN_OPENED":
+          showResult("provider-result", true,
+            "Sign-in page opened in your browser. Paste the pairing code here when it appears.");
+          break;
       }
     });
 
-    // ── Init: request current settings ──
     post({ type: "GET_SETTINGS" });
   </script>
 </body>

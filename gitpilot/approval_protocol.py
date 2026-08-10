@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Dict
+from typing import Callable, Dict, Optional
 
 from .agent_events import AgentEventBus, approval_needed, approval_resolved
 
@@ -47,11 +47,21 @@ class ApprovalGate:
       5. resolve() sets the Future result, agent proceeds or skips
     """
 
-    def __init__(self, bus: AgentEventBus, mode: str = "normal") -> None:
+    def __init__(
+        self,
+        bus: AgentEventBus,
+        mode: str = "normal",
+        on_checkpoint: Optional[Callable[[str, dict], None]] = None,
+    ) -> None:
         self._bus = bus
         self._mode = mode
         self._pending: Dict[str, asyncio.Future] = {}
         self._session_allowed: set[str] = set()
+        # Called immediately before a dangerous tool is allowed to run, so a
+        # checkpoint exists for every write. This is the only place all three
+        # permission modes converge, which is why the hook lives here rather
+        # than in each tool.
+        self._on_checkpoint = on_checkpoint
 
     @property
     def mode(self) -> str:
@@ -75,6 +85,10 @@ class ApprovalGate:
             return True
 
         if self._mode == "auto":
+            # Auto mode is the one that most needs an undo: nobody saw this
+            # coming, so the checkpoint is the only thing standing between the
+            # user and an edit they never agreed to.
+            self._checkpoint(tool_name, tool_args)
             return True
 
         if self._mode == "plan":
@@ -84,6 +98,7 @@ class ApprovalGate:
             return False
 
         if tool_name in self._session_allowed:
+            self._checkpoint(tool_name, tool_args)
             return True
 
         # Normal mode: ask user
@@ -122,8 +137,26 @@ class ApprovalGate:
         if approved and scope == "session":
             self._session_allowed.add(tool_name)
 
+        if approved:
+            self._checkpoint(tool_name, tool_args)
+
         await self._bus.emit(approval_resolved(request_id, approved))
         return approved
+
+    def _checkpoint(self, tool_name: str, tool_args: dict) -> None:
+        """Snapshot before the tool runs, and never at the cost of the tool.
+
+        A checkpoint that fails must not block the work the user asked for —
+        it is a safety net, and a safety net that stops the show is worse
+        than one with a hole in it. The failure is logged and execution
+        continues.
+        """
+        if self._on_checkpoint is None:
+            return
+        try:
+            self._on_checkpoint(tool_name, tool_args)
+        except Exception as e:
+            logger.warning("could not checkpoint before %s: %s", tool_name, e)
 
     def resolve(
         self, request_id: str, approved: bool, scope: str = "once"

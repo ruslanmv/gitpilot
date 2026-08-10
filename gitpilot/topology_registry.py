@@ -1103,10 +1103,40 @@ def get_saved_topology_preference() -> Optional[str]:
             pass
     return None
 
+#: Values that mean "no fixed topology — route each request on intent".
+AUTOMATIC_TOPOLOGY_IDS = frozenset({"", "auto", "automatic", "none"})
+
+
+def clear_topology_preference() -> None:
+    """Forget any saved topology, restoring per-request routing."""
+    from .settings import CONFIG_DIR
+
+    pref_file = CONFIG_DIR / "topology_pref.json"
+    pref_file.unlink(missing_ok=True)
+
+
 def save_topology_preference(topology_id: str) -> None:
-    """Persist the user's selected topology preference."""
+    """Persist the user's selected topology preference.
+
+    "Automatic" is the *absence* of a preference, not a topology, so those
+    ids clear the file instead of writing a value no reader recognises.
+    An unknown id is rejected outright: silently storing one leaves a
+    setting that appears to be saved but does nothing.
+    """
     import json
     from .settings import CONFIG_DIR
+
+    normalised = (topology_id or "").strip().lower()
+    if normalised in AUTOMATIC_TOPOLOGY_IDS:
+        clear_topology_preference()
+        return
+
+    if topology_id not in TOPOLOGY_REGISTRY:
+        raise ValueError(
+            f"Unknown topology {topology_id!r}. "
+            f"Available: {', '.join(sorted(TOPOLOGY_REGISTRY))}"
+        )
+
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     pref_file = CONFIG_DIR / "topology_pref.json"
     pref_file.write_text(

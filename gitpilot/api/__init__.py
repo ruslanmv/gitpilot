@@ -25,3 +25,22 @@ for _name in dir(_api_app):
         continue
     globals().setdefault(_name, getattr(_api_app, _name))
 del _name
+
+
+# Serving under `uvicorn --reload` re-imports this module in a child process,
+# where whatever the CLI configured in memory is gone. The env var carries the
+# operator's choice across that boundary.
+#
+# Guarded on the variable being set, deliberately. Configuring the `gitpilot`
+# logger turns off propagation to the root logger — which is exactly what you
+# want for a server (otherwise every line prints twice once uvicorn installs
+# its handler) and exactly what you do not want under pytest, whose `caplog`
+# fixture captures through the root. No variable, no change in behaviour.
+import os as _os  # noqa: E402
+
+from gitpilot.logging_setup import LEVEL_ENV_VAR as _LEVEL_ENV_VAR  # noqa: E402
+
+if _os.getenv(_LEVEL_ENV_VAR):
+    from gitpilot.logging_setup import configure_from_env as _configure_from_env
+
+    _configure_from_env()

@@ -22,7 +22,14 @@ from typing import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-from gitpilot import api as api_module
+# Patch the module the handler's globals actually come from.
+#
+# ``gitpilot.api`` re-exports this module's names into a package namespace, so
+# monkeypatching *there* rebinds a copy the endpoint never reads. These tests
+# were written against it and passed for months while asserting nothing: the
+# stub planners were ignored, the real one ran, and it failed for its own
+# reasons. Import ``_api_app`` directly and the patches land.
+from gitpilot import _api_app as api_module
 
 
 @pytest.fixture()

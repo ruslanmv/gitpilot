@@ -1,8 +1,8 @@
 {
   "name": "gitpilot-vscode",
   "displayName": "GitPilot \u2014 Multi-Agent AI Coding Assistant",
-  "description": "The first multi-agent AI pair programmer for VS Code. Four specialized agents (Explorer, Planner, Coder, Reviewer) collaborate on every task \u2014 you approve every change. Works with OpenAI, Claude, Ollama, Watsonx.",
-  "version": "0.2.7",
+  "description": "The first multi-agent AI pair programmer for VS Code. Ten specialized agents \u2014 Explorer, Planner, Coder, Reviewer and more \u2014 collaborate on every task, and you approve every change. Works with OllaBridge, Ollama, Open WebUI, OpenAI, Claude, watsonx, or any OpenAI-compatible endpoint.",
+  "version": "0.2.8",
   "preview": false,
   "publisher": "ruslanmv",
   "license": "Apache-2.0",
@@ -48,6 +48,7 @@
     "testing"
   ],
   "activationEvents": [
+    "onCommand:gitpilot.diagnostics",
     "onCommand:gitpilot.explainSelection",
     "onCommand:gitpilot.explain_project",
     "onCommand:gitpilot.fixSelection",
@@ -55,10 +56,15 @@
     "onCommand:gitpilot.generate_tests",
     "onCommand:gitpilot.newSession",
     "onCommand:gitpilot.openChat",
+    "onCommand:gitpilot.openChatTab",
+    "onCommand:gitpilot.openHome",
+    "onCommand:gitpilot.openSettings",
     "onCommand:gitpilot.refreshProjectContext",
     "onCommand:gitpilot.refreshSessions",
     "onCommand:gitpilot.refreshSkills",
     "onCommand:gitpilot.refreshStatus",
+    "onCommand:gitpilot.rewind",
+    "onCommand:gitpilot.revertProposedChanges",
     "onCommand:gitpilot.reviewFile",
     "onCommand:gitpilot.reviewSelection",
     "onCommand:gitpilot.review_file",
@@ -75,7 +81,7 @@
     "onCommand:gitpilot.showServerInfo",
     "onCommand:gitpilot.testSelection",
     "onStartupFinished",
-    "onView:gitpilot.chatView"
+    "onView:gitpilot.navView"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -92,8 +98,8 @@
       "gitpilot": [
         {
           "type": "webview",
-          "id": "gitpilot.chatView",
-          "name": "GitPilot Workspace"
+          "id": "gitpilot.navView",
+          "name": "GitPilot"
         },
         {
           "id": "gitpilot.sessionsView",
@@ -107,8 +113,44 @@
     },
     "commands": [
       {
+        "command": "gitpilot.diagnostics",
+        "title": "Diagnostics",
+        "category": "GitPilot",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "gitpilot.executeApprovedPlan",
+        "title": "Execute the Approved Plan",
+        "category": "GitPilot",
+        "icon": "$(play)"
+      },
+      {
+        "command": "gitpilot.rewind",
+        "title": "Rewind to a Checkpoint",
+        "category": "GitPilot",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "gitpilot.revertProposedChanges",
+        "title": "Revert the Last Change",
+        "category": "GitPilot",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "gitpilot.openHome",
+        "title": "Home",
+        "category": "GitPilot",
+        "icon": "$(home)"
+      },
+      {
         "command": "gitpilot.openChat",
         "title": "Open GitPilot Workspace",
+        "category": "GitPilot",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "gitpilot.openChatTab",
+        "title": "Open Chat in an Editor Tab",
         "category": "GitPilot",
         "icon": "$(comment-discussion)"
       },
@@ -161,6 +203,12 @@
         "title": "Reconnect to Server",
         "category": "GitPilot",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "gitpilot.openSettings",
+        "title": "Settings",
+        "category": "GitPilot",
+        "icon": "$(gear)"
       },
       {
         "command": "gitpilot.showServerInfo",
@@ -498,6 +546,12 @@
           "description": "URL of the GitPilot API server",
           "order": 1
         },
+        "gitpilot.serverCommand": {
+          "type": "string",
+          "default": "gitpilot",
+          "description": "Command used to start the local GitPilot server from the Settings page. Use a full path if 'gitpilot' is not on your PATH.",
+          "order": 2
+        },
         "gitpilot.autoConnect": {
           "type": "boolean",
           "default": true,
@@ -515,6 +569,12 @@
           "default": true,
           "description": "Show CodeLens hints (Explain/Review) above functions and classes",
           "order": 4
+        },
+        "gitpilot.showHomeOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "Open GitPilot Home in the editor when a window starts with no files open. Home is never opened on top of work already in progress.",
+          "order": 5
         },
         "gitpilot.permissionMode": {
           "type": "string",
@@ -572,6 +632,13 @@
           "description": "Lite Mode: optimized for small LLMs (< 7B params). Uses simplified prompts and single-agent execution instead of multi-agent pipelines. Recommended for qwen2.5:1.5b, phi-3-mini, gemma-2b, tinyllama.",
           "order": 11
         },
+        "gitpilot.llmTimeoutSeconds": {
+          "type": "number",
+          "default": 300,
+          "minimum": 30,
+          "description": "How long to wait for a chat, plan or execute request before giving up. These run a model, so they are slow by nature — a local Ollama answering with repository context routinely takes 20-60s. Raise this if a large model on CPU is being cut off; the request is never retried, so a timeout here means the answer is lost, not duplicated.",
+          "order": 12
+        },
         "gitpilot.mcp.gatewayUrl": {
           "type": "string",
           "default": "",
@@ -601,6 +668,18 @@
           "default": "",
           "description": "Admin email used to sign in to the MCP gateway. The password is NOT a setting: run 'GitPilot: Configure MCP Gateway' to enter it \u2014 it is stored by the GitPilot server, never in VS Code.",
           "order": 22
+        },
+        "gitpilot.mcp.forgePort": {
+          "type": "number",
+          "default": 4444,
+          "description": "Port MCP Context Forge listens on when GitPilot starts it for you.",
+          "order": 23
+        },
+        "gitpilot.mcp.forgeImage": {
+          "type": "string",
+          "default": "ghcr.io/ibm/mcp-context-forge:latest",
+          "description": "Container image used to start MCP Context Forge when the workspace has no docker-compose.mcp.yml. Point this at an image your network can reach if the default is unavailable.",
+          "order": 24
         }
       }
     },
@@ -644,6 +723,11 @@
       ],
       "view/title": [
         {
+          "command": "gitpilot.openHome",
+          "when": "view == gitpilot.navView",
+          "group": "navigation"
+        },
+        {
           "command": "gitpilot.newSession",
           "when": "view == gitpilot.sessionsView",
           "group": "navigation"
@@ -665,12 +749,7 @@
         },
         {
           "command": "gitpilot.setupWizard",
-          "when": "view == gitpilot.chatView",
-          "group": "navigation"
-        },
-        {
-          "command": "gitpilot.refreshProjectContext",
-          "when": "view == gitpilot.chatView",
+          "when": "view == gitpilot.navView",
           "group": "navigation"
         }
       ],
@@ -780,11 +859,14 @@
     "compile": "tsc -p ./ && node scripts/copy-webview-assets.js",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
+    "test": "npm run compile && node test/run.js",
+    "test:only": "node test/run.js",
     "package": "vsce package",
     "publish": "vsce publish"
   },
   "devDependencies": {
     "@types/node": "^20.19.39",
+    "jsdom": "^24.1.0",
     "@types/vscode": "^1.110.0",
     "@vscode/vsce": "^2.22.0",
     "typescript": "^5.9.3"

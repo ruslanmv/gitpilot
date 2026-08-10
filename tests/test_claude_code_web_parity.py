@@ -46,7 +46,7 @@ class TestBranchListingEndpoint:
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("gitpilot.api.get_github_token", return_value="ghp_test"),
+            patch("gitpilot._api_app.get_github_token", return_value="ghp_test"),
             patch("httpx.AsyncClient", return_value=mock_client),
         ):
             result = await api_list_branches(
@@ -94,7 +94,7 @@ class TestBranchListingEndpoint:
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("gitpilot.api.get_github_token", return_value="ghp_test"),
+            patch("gitpilot._api_app.get_github_token", return_value="ghp_test"),
             patch("httpx.AsyncClient", return_value=mock_client),
         ):
             result = await api_list_branches(
@@ -117,7 +117,7 @@ class TestBranchListingEndpoint:
 
         from gitpilot.api import api_list_branches
 
-        with patch("gitpilot.api.get_github_token", return_value=None):
+        with patch("gitpilot._api_app.get_github_token", return_value=None):
             with pytest.raises(HTTPException) as exc_info:
                 await api_list_branches(
                     owner="o", repo="r", page=1, per_page=100,
@@ -149,7 +149,7 @@ class TestBranchListingEndpoint:
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("gitpilot.api.get_github_token", return_value="ghp_test"),
+            patch("gitpilot._api_app.get_github_token", return_value="ghp_test"),
             patch("httpx.AsyncClient", return_value=mock_client),
         ):
             result = await api_list_branches(
@@ -177,7 +177,7 @@ class TestBranchListingEndpoint:
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("gitpilot.api.get_github_token", return_value="ghp_test"),
+            patch("gitpilot._api_app.get_github_token", return_value="ghp_test"),
             patch("httpx.AsyncClient", return_value=mock_client),
         ):
             with pytest.raises(HTTPException) as exc_info:
@@ -200,7 +200,7 @@ class TestEnvironmentCRUD:
         """Should return a default environment when none exist."""
         from gitpilot.api import api_list_environments
 
-        with patch("gitpilot.api._ENV_ROOT", tmp_path):
+        with patch("gitpilot._api_app._ENV_ROOT", tmp_path):
             result = await api_list_environments()
 
         assert len(result.environments) == 1
@@ -217,7 +217,7 @@ class TestEnvironmentCRUD:
         (tmp_path / "env1.json").write_text(json.dumps(env1))
         (tmp_path / "env2.json").write_text(json.dumps(env2))
 
-        with patch("gitpilot.api._ENV_ROOT", tmp_path):
+        with patch("gitpilot._api_app._ENV_ROOT", tmp_path):
             result = await api_list_environments()
 
         assert len(result.environments) == 2
@@ -233,7 +233,7 @@ class TestEnvironmentCRUD:
         (tmp_path / "good.json").write_text(json.dumps(env1))
         (tmp_path / "bad.json").write_text("NOT VALID JSON{{{")
 
-        with patch("gitpilot.api._ENV_ROOT", tmp_path):
+        with patch("gitpilot._api_app._ENV_ROOT", tmp_path):
             result = await api_list_environments()
 
         assert len(result.environments) == 1
@@ -246,7 +246,7 @@ class TestEnvironmentCRUD:
 
         config = EnvironmentConfig(name="Staging", network_access="full", env_vars={"NODE_ENV": "staging"})
 
-        with patch("gitpilot.api._ENV_ROOT", tmp_path):
+        with patch("gitpilot._api_app._ENV_ROOT", tmp_path):
             result = await api_create_environment(config)
 
         assert result["name"] == "Staging"
@@ -265,7 +265,7 @@ class TestEnvironmentCRUD:
 
         config = EnvironmentConfig(id="my-env", name="Custom", network_access="none")
 
-        with patch("gitpilot.api._ENV_ROOT", tmp_path):
+        with patch("gitpilot._api_app._ENV_ROOT", tmp_path):
             result = await api_create_environment(config)
 
         assert result["id"] == "my-env"
@@ -282,7 +282,7 @@ class TestEnvironmentCRUD:
 
         new_config = EnvironmentConfig(name="Updated", network_access="full", env_vars={"KEY": "val"})
 
-        with patch("gitpilot.api._ENV_ROOT", tmp_path):
+        with patch("gitpilot._api_app._ENV_ROOT", tmp_path):
             result = await api_update_environment("env1", new_config)
 
         assert result["id"] == "env1"
@@ -300,7 +300,7 @@ class TestEnvironmentCRUD:
         env = {"id": "env1", "name": "ToDelete", "network_access": "limited", "env_vars": {}}
         (tmp_path / "env1.json").write_text(json.dumps(env))
 
-        with patch("gitpilot.api._ENV_ROOT", tmp_path):
+        with patch("gitpilot._api_app._ENV_ROOT", tmp_path):
             result = await api_delete_environment("env1")
 
         assert result["deleted"] is True
@@ -313,7 +313,7 @@ class TestEnvironmentCRUD:
 
         from gitpilot.api import api_delete_environment
 
-        with patch("gitpilot.api._ENV_ROOT", tmp_path):
+        with patch("gitpilot._api_app._ENV_ROOT", tmp_path):
             with pytest.raises(HTTPException) as exc_info:
                 await api_delete_environment("nonexistent")
             assert exc_info.value.status_code == 404
@@ -340,7 +340,7 @@ class TestSessionMessageEndpoints:
 
         mgr, session = self._create_session(tmp_path, repo_full_name="o/r", branch="main")
 
-        with patch("gitpilot.api._session_mgr", mgr):
+        with patch("gitpilot._api_app._session_mgr", mgr):
             result = await api_add_session_message(
                 session.id,
                 {"role": "user", "content": "Hello agent"},
@@ -362,7 +362,7 @@ class TestSessionMessageEndpoints:
 
         mgr = SessionManager(root=tmp_path)
 
-        with patch("gitpilot.api._session_mgr", mgr):
+        with patch("gitpilot._api_app._session_mgr", mgr):
             with pytest.raises(HTTPException) as exc_info:
                 await api_add_session_message(
                     "nonexistent-id",
@@ -380,7 +380,7 @@ class TestSessionMessageEndpoints:
         session.add_message("assistant", "hi there")
         mgr.save(session)
 
-        with patch("gitpilot.api._session_mgr", mgr):
+        with patch("gitpilot._api_app._session_mgr", mgr):
             result = await api_get_session_messages(session.id)
 
         assert result["session_id"] == session.id
@@ -399,7 +399,7 @@ class TestSessionMessageEndpoints:
 
         mgr = SessionManager(root=tmp_path)
 
-        with patch("gitpilot.api._session_mgr", mgr):
+        with patch("gitpilot._api_app._session_mgr", mgr):
             with pytest.raises(HTTPException) as exc_info:
                 await api_get_session_messages("nonexistent-id")
             assert exc_info.value.status_code == 404
@@ -411,7 +411,7 @@ class TestSessionMessageEndpoints:
 
         mgr, session = self._create_session(tmp_path)
 
-        with patch("gitpilot.api._session_mgr", mgr):
+        with patch("gitpilot._api_app._session_mgr", mgr):
             result = await api_get_session_diff(session.id)
 
         assert result["session_id"] == session.id
@@ -434,7 +434,7 @@ class TestSessionMessageEndpoints:
         }
         mgr.save(session)
 
-        with patch("gitpilot.api._session_mgr", mgr):
+        with patch("gitpilot._api_app._session_mgr", mgr):
             result = await api_get_session_diff(session.id)
 
         assert result["diff"]["files_changed"] == 3
@@ -451,7 +451,7 @@ class TestSessionMessageEndpoints:
 
         mgr = SessionManager(root=tmp_path)
 
-        with patch("gitpilot.api._session_mgr", mgr):
+        with patch("gitpilot._api_app._session_mgr", mgr):
             with pytest.raises(HTTPException) as exc_info:
                 await api_get_session_diff("nonexistent-id")
             assert exc_info.value.status_code == 404
@@ -464,7 +464,7 @@ class TestSessionMessageEndpoints:
         for status in ("active", "paused", "completed", "failed", "waiting"):
             mgr, session = self._create_session(tmp_path)
 
-            with patch("gitpilot.api._session_mgr", mgr):
+            with patch("gitpilot._api_app._session_mgr", mgr):
                 result = await api_update_session_status(
                     session.id,
                     {"status": status},
@@ -484,7 +484,7 @@ class TestSessionMessageEndpoints:
 
         mgr, session = self._create_session(tmp_path)
 
-        with patch("gitpilot.api._session_mgr", mgr):
+        with patch("gitpilot._api_app._session_mgr", mgr):
             with pytest.raises(HTTPException) as exc_info:
                 await api_update_session_status(
                     session.id,
@@ -501,7 +501,7 @@ class TestSessionMessageEndpoints:
 
         mgr = SessionManager(root=tmp_path)
 
-        with patch("gitpilot.api._session_mgr", mgr):
+        with patch("gitpilot._api_app._session_mgr", mgr):
             with pytest.raises(HTTPException) as exc_info:
                 await api_update_session_status(
                     "nonexistent-id",
@@ -531,7 +531,7 @@ class TestWebSocketEndpoint:
         mgr = SessionManager(root=tmp_path)
         ws = AsyncMock()
 
-        with patch("gitpilot.api._session_mgr", mgr):
+        with patch("gitpilot._api_app._session_mgr", mgr):
             await session_websocket(ws, "nonexistent-id")
 
         ws.accept.assert_awaited_once()
@@ -556,7 +556,7 @@ class TestWebSocketEndpoint:
         # Simulate disconnect after initial connection
         ws.receive_json = AsyncMock(side_effect=WebSocketDisconnect())
 
-        with patch("gitpilot.api._session_mgr", mgr):
+        with patch("gitpilot._api_app._session_mgr", mgr):
             await session_websocket(ws, session.id)
 
         ws.accept.assert_awaited_once()
@@ -580,7 +580,7 @@ class TestWebSocketEndpoint:
             side_effect=[{"type": "ping"}, WebSocketDisconnect()]
         )
 
-        with patch("gitpilot.api._session_mgr", mgr):
+        with patch("gitpilot._api_app._session_mgr", mgr):
             await session_websocket(ws, session.id)
 
         # Should have sent: session_restored, pong
@@ -602,7 +602,7 @@ class TestWebSocketEndpoint:
             side_effect=[{"type": "cancel"}, WebSocketDisconnect()]
         )
 
-        with patch("gitpilot.api._session_mgr", mgr):
+        with patch("gitpilot._api_app._session_mgr", mgr):
             await session_websocket(ws, session.id)
 
         sent_events = [call[0][0] for call in ws.send_json.call_args_list]
@@ -632,8 +632,8 @@ class TestWebSocketEndpoint:
         mock_dispatch = AsyncMock(return_value={"answer": "Here is the explanation."})
 
         with (
-            patch("gitpilot.api._session_mgr", mgr),
-            patch("gitpilot.api.dispatch_request", mock_dispatch),
+            patch("gitpilot._api_app._session_mgr", mgr),
+            patch("gitpilot._api_app.dispatch_request", mock_dispatch),
         ):
             await session_websocket(ws, session.id)
 
@@ -681,7 +681,7 @@ class TestWebSocketEndpoint:
             ]
         )
 
-        with patch("gitpilot.api._session_mgr", mgr):
+        with patch("gitpilot._api_app._session_mgr", mgr):
             await session_websocket(ws, session.id)
 
         sent_events = [call[0][0] for call in ws.send_json.call_args_list]
@@ -711,8 +711,8 @@ class TestWebSocketEndpoint:
         mock_dispatch = AsyncMock(side_effect=RuntimeError("Agent crashed"))
 
         with (
-            patch("gitpilot.api._session_mgr", mgr),
-            patch("gitpilot.api.dispatch_request", mock_dispatch),
+            patch("gitpilot._api_app._session_mgr", mgr),
+            patch("gitpilot._api_app.dispatch_request", mock_dispatch),
         ):
             await session_websocket(ws, session.id)
 

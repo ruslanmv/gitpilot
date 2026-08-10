@@ -29,6 +29,7 @@ DOCKER_COMPOSE := $(shell if command -v docker > /dev/null && docker compose ver
         vercel vercel-build vercel-deploy \
         build-container run-container stop-container logs-container clean-container publish-container \
         extension-install extension-compile extension-package extension-publish publish-extension \
+        extension-test extension-dev extension-uninstall \
         mcp mcp-down mcp-logs gateway gateway-down gateway-logs gateway-register \
         install-mcp run-mcp run-all run-all-local stop-mcp logs-mcp sync-mcp uninstall-mcp \
         fix-line-endings install-mcp-workflows register-mcp-servers \
@@ -42,6 +43,8 @@ help:
 	@echo "  make install          Install runtime deps + frontend + MCP stack"
 	@echo "  make install-dev      Install developer/test tooling"
 	@echo "  make install-full     Install runtime + dev/docs tooling + MCP stack"
+	@echo "  make install-cli      Point the 'gitpilot' command at this checkout"
+	@echo "  make check-cli        Report which GitPilot the 'gitpilot' command runs"
 	@echo "  make uv-install       Create/refresh Python env with runtime deps only"
 	@echo "  make uv-install-dev   Add developer/test tooling via uv"
 	@echo "  make uv-install-docs  Add documentation tooling via uv"
@@ -77,6 +80,9 @@ help:
 	@echo "  make extension-install   Install extension npm dependencies"
 	@echo "  make extension-compile   Compile TypeScript to JavaScript"
 	@echo "  make extension-package   Package extension into .vsix file"
+	@echo "  make extension-test      Run the extension test suites"
+	@echo "  make extension-dev       Package + install into your local VS Code"
+	@echo "  make extension-uninstall Remove the locally installed extension"
 	@echo "  make extension-publish   Publish extension to VS Code Marketplace"
 	@echo "  make publish-extension   Alias for extension-publish"
 	@echo ""
@@ -113,6 +119,23 @@ install: uv-install frontend-install install-mcp install-matrixlab-soft
 	@echo "   Run 'make startup' for the full GitPilot + MatrixLab + URL-fixup flow."
 	@echo "   No Docker?  Use 'make run-bare' to start GitPilot without MCP."
 	@echo "   Optional:   'make install-dev' for test/lint/build tooling."
+	@bash scripts/check-cli-version.sh
+
+## Point the `gitpilot` command at this checkout.
+##
+## `make install` prepares .venv and stops there — `make run` uses it, and
+## installing a command outside the project is something to ask for rather
+## than have done to you. On a machine that ever ran `pip install gitcopilot`,
+## `gitpilot serve` keeps running that released wheel until this is run, which
+## is why a fix that is definitely in the tree can appear not to work.
+.PHONY: install-cli
+install-cli:
+	@bash scripts/install-cli.sh
+
+## Report which GitPilot the `gitpilot` command actually runs.
+.PHONY: check-cli
+check-cli:
+	@bash scripts/check-cli-version.sh
 
 ## Soft variant of install-matrixlab — warns and skips on docker-missing /
 ## daemon-down / port-held instead of aborting the parent installer.  Wired
@@ -618,10 +641,54 @@ extension-package: extension-compile
 	@echo "✅ Extension packaged successfully!"
 	@echo ""
 	@echo "📁 VSIX file:"
-	@ls -lh $(EXTENSION_DIR)/*.vsix 2>/dev/null || echo "  (no .vsix found)"
+	@ls -lh $$(ls -t $(EXTENSION_DIR)/*.vsix 2>/dev/null | head -1) 2>/dev/null || echo "  (no .vsix found)"
 	@echo ""
 	@echo "Install locally with:"
-	@echo "  code --install-extension $(EXTENSION_DIR)/gitpilot-vscode-*.vsix"
+	@echo "  code --install-extension $$(ls -t $(EXTENSION_DIR)/*.vsix | head -1) --force"
+	@echo ""
+	@echo "  --force is required: the version does not change between dev builds,"
+	@echo "  so VS Code otherwise refuses to reinstall. Or just: make extension-dev"
+
+## Run the extension's test suites (webview + panel host)
+extension-test: extension-compile
+	@echo "🧪 Running VS Code extension tests..."
+	@cd $(EXTENSION_DIR) && node test/run.js
+
+## Package and install the extension into your local VS Code, then reload
+extension-dev: extension-package
+	@echo ""
+	@echo "🔎 Built from: $$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown') $$(git diff --quiet 2>/dev/null && echo '(clean)' || echo '(with uncommitted changes)')"
+	@echo "   If a change you expected is missing, check you have pulled it."
+	@echo ""
+	@$(MAKE) --no-print-directory version-check
+	@echo "💻 Installing into VS Code..."
+	@if command -v code >/dev/null 2>&1; then \
+		code --install-extension $$(ls -t $(EXTENSION_DIR)/*.vsix | head -1) --force && \
+		echo "" && \
+		echo "✅ Installed. Reload VS Code to pick it up:" && \
+		echo "   Ctrl/Cmd+Shift+P → 'Developer: Reload Window'" && \
+		echo "" && \
+		echo "Then try it:" && \
+		echo "   Ctrl/Cmd+Shift+P → 'GitPilot: Settings'"; \
+	else \
+		echo "⚠️  The 'code' command is not on your PATH."; \
+		echo ""; \
+		echo "   VS Code → Ctrl/Cmd+Shift+P → Shell Command: Install code command in PATH"; \
+		echo ""; \
+		echo "   Or install the .vsix by hand:"; \
+		echo "     Extensions view → ... menu → Install from VSIX..."; \
+		echo "     $$(ls -t $(EXTENSION_DIR)/*.vsix | head -1)"; \
+		exit 1; \
+	fi
+
+## Remove the locally installed extension
+extension-uninstall:
+	@if command -v code >/dev/null 2>&1; then \
+		code --uninstall-extension ruslanmv.gitpilot-vscode || true; \
+		echo "✅ Uninstalled. Reload VS Code to finish."; \
+	else \
+		echo "⚠️  The 'code' command is not on your PATH — remove it from the Extensions view."; \
+	fi
 
 ## Publish extension to VS Code Marketplace
 extension-publish: extension-compile
@@ -954,3 +1021,33 @@ fix-matrixlab-url:
 .PHONY: diagnose-matrixlab
 diagnose-matrixlab:
 	@bash scripts/diagnose-matrixlab.sh
+
+
+## Report the extension and backend versions, and flag a mismatch.
+##
+## `make extension-dev` builds the extension only. The Python backend is
+## installed separately, and `gitpilot` is a console script that imports from
+## site-packages rather than the directory you are standing in — so a fresh
+## checkout and a stale install look identical until a feature misbehaves for
+## reasons nothing on screen explains.
+.PHONY: version-check
+version-check:
+	@ext_ver=$$(grep -m1 '"version"' $(EXTENSION_DIR)/package.json | sed 's/.*"version": *"\([^"]*\)".*/\1/'); \
+	repo_ver=$$(grep -m1 '^version' pyproject.toml | sed 's/.*"\([^"]*\)".*/\1/'); \
+	inst_ver=$$(python3 -c "from importlib.metadata import version; print(version('gitcopilot'))" 2>/dev/null); \
+	echo "🧩 Versions"; \
+	echo "   extension (built)    $$ext_ver"; \
+	echo "   backend  (repo)      $$repo_ver"; \
+	echo "   backend  (installed) $${inst_ver:-not installed}"; \
+	if [ -n "$$inst_ver" ] && [ "$$inst_ver" != "$$repo_ver" ]; then \
+		echo ""; \
+		echo "   ⚠️  The installed backend is $$inst_ver but this checkout is $$repo_ver."; \
+		echo "      Nothing here touches Python. Reinstall the backend:"; \
+		echo "        pip install -e . --no-deps"; \
+		echo "      Then check that 'gitpilot serve' prints v$$repo_ver."; \
+	elif [ -z "$$inst_ver" ]; then \
+		echo ""; \
+		echo "   ⚠️  No installed gitcopilot found. The extension will have no backend."; \
+		echo "        pip install -e . --no-deps"; \
+	fi
+	@echo ""

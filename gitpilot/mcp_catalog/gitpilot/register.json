@@ -1,0 +1,56 @@
+{
+  "name": "gitpilot-mcp-server",
+  "description": "GitPilot exposes its own multi-agent code-generation surface (plan, execute, list_repos, describe_repo, run_skill, create_pr) as MCP tools so external agents (e.g. HomePilot Coder personas) can drive GitPilot through MCP Context Forge.",
+  "transport": "streamable-http",
+  "endpoint": "http://gitpilot:8000/mcp-server/mcp",
+  "enabled": false,
+  "tags": [
+    "gitpilot",
+    "code-generation",
+    "agentic",
+    "github",
+    "homepilot-compatible"
+  ],
+  "auth": {
+    "type": "bearer",
+    "env": "GITPILOT_MCP_SERVER_TOKEN"
+  },
+  "tool_policy": {
+    "default": "allow",
+    "warn": [
+      "gitpilot.run_skill",
+      "gitpilot.create_pr"
+    ],
+    "deny": []
+  },
+  "scopes": {
+    "read": [
+      "gitpilot.healthz",
+      "gitpilot.list_repos",
+      "gitpilot.list_branches",
+      "gitpilot.describe_repo",
+      "gitpilot.list_skills",
+      "gitpilot.classify_topology"
+    ],
+    "plan": [
+      "gitpilot.plan",
+      "gitpilot.execute"
+    ],
+    "mutation": [
+      "gitpilot.run_skill",
+      "gitpilot.create_pr"
+    ]
+  },
+  "healthcheck": {
+    "url": "http://gitpilot:8000/mcp-server/healthz",
+    "interval_seconds": 30
+  },
+  "metadata": {
+    "owner": "gitpilot",
+    "risk_level": "high",
+    "read_only_default": true,
+    "upstream": "https://github.com/ruslanmv/gitpilot",
+    "wizard_compatible": true,
+    "homepilot_persona_kind": "coder"
+  }
+}

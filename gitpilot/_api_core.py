@@ -1368,15 +1368,107 @@ async def api_update_session_context(session_id: str, payload: dict):
     }
 
 
-@app.post("/api/sessions/{session_id}/checkpoint")
-async def api_create_checkpoint(session_id: str, payload: dict):
-    """Create a checkpoint for a session."""
-    session = _session_mgr.load(session_id)
+from dataclasses import asdict as _asdict_cp
+
+
+def _load_session_or_404(session_id: str):
+    """Load a session, or answer 404.
+
+    SessionManager.load raises FileNotFoundError rather than returning None,
+    so the usual ``if not session`` guard never fires and an unknown id came
+    back as a 500.
+    """
+    try:
+        session = _session_mgr.load(session_id)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail="Session not found") from e
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    label = payload.get("label", "checkpoint")
-    cp = _session_mgr.create_checkpoint(session, label=label)
-    return {"checkpoint_id": cp.id, "label": cp.label, "created_at": cp.created_at}
+    return session
+
+
+def _session_workspace(session) -> Path | None:
+    """The directory a session's checkpoints cover, if it has one.
+
+    A GitHub-mode session has no local tree, so it checkpoints the
+    conversation and nothing else rather than guessing at a path.
+    """
+    raw = session.repo_root or session.folder_path
+    if not raw:
+        return None
+    path = Path(raw)
+    return path if path.exists() else None
+
+
+def _checkpoint_dict(cp) -> dict:
+    """One checkpoint, in the shape every client renders."""
+    return {
+        "id": cp.id,
+        "description": cp.description,
+        "timestamp": cp.timestamp,
+        "message_index": cp.message_index,
+        "tool_name": cp.tool_name,
+        "target_path": cp.target_path,
+        # A client must not offer "restore files" for a checkpoint that has
+        # none — a workspace over the size limit stores the transcript only.
+        "has_files": cp.has_files and bool(cp.store_id),
+    }
+
+
+@app.post("/api/sessions/{session_id}/checkpoint")
+async def api_create_checkpoint(session_id: str, payload: dict):
+    """Take a checkpoint of the session's workspace and conversation."""
+    session = _load_session_or_404(session_id)
+
+    cp = _session_mgr.create_checkpoint(
+        session,
+        workspace_path=_session_workspace(session),
+        description=payload.get("description") or payload.get("label") or "",
+        tool_name=payload.get("tool_name", "manual"),
+        target_path=payload.get("target_path"),
+    )
+    return _checkpoint_dict(cp)
+
+
+@app.get("/api/sessions/{session_id}/checkpoints")
+async def api_list_checkpoints(session_id: str):
+    """Every point this session can be rewound to, newest first."""
+    session = _load_session_or_404(session_id)
+
+    return {
+        "checkpoints": [
+            _checkpoint_dict(cp) for cp in reversed(session.checkpoints)
+        ],
+        "message_count": len(session.messages),
+    }
+
+
+@app.post("/api/sessions/{session_id}/rewind")
+async def api_rewind_session(session_id: str, payload: dict):
+    """Put the files and the conversation back to a checkpoint.
+
+    Both halves together: restoring files under a transcript that still
+    describes the work would leave the model reasoning about edits that no
+    longer exist.
+    """
+    session = _load_session_or_404(session_id)
+
+    checkpoint_id = payload.get("checkpoint_id")
+    if not checkpoint_id:
+        raise HTTPException(status_code=400, detail="checkpoint_id is required")
+
+    try:
+        session = _session_mgr.rewind_to_checkpoint(
+            session, checkpoint_id, workspace_path=_session_workspace(session),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+    return {
+        "session_id": session.id,
+        "messages": [_asdict_cp(m) for m in session.messages],
+        "checkpoints": [_checkpoint_dict(cp) for cp in reversed(session.checkpoints)],
+    }
 
 
 # ============================================================================

@@ -387,8 +387,121 @@ class ReasoningAwareLLM:
 # ─────────────────────────────────────────────────────────────────
 
 
+#: Built once, on first use. Defining it at import time would drag CrewAI —
+#: and LiteLLM, and ~180 packages — into every process that imports this
+#: module, which is the startup cost llm_provider goes out of its way to avoid.
+_CREWAI_WRAPPER_CLASS: Any = None
+
+
+def _crewai_wrapper_class() -> Any:
+    """A ReasoningAwareLLM that CrewAI's ``Agent`` will accept, or None.
+
+    Composition was the original choice here, and the docstring above still
+    explains why: CrewAI's LLM class changes between versions, so wrapping
+    rather than subclassing looked like the safer bet. It stopped being safe
+    when ``Agent.llm`` became a validated pydantic field typed ``str |
+    BaseLLM``. A plain wrapper is neither, so every agent built with a
+    reasoning model died at construction:
+
+        2 validation errors for Agent
+        llm.str      Input should be a valid string
+        llm.BaseLLM  Input should be a valid dictionary or instance of BaseLLM
+
+    ``BaseLLM`` is an ABC with exactly one abstract method — ``call`` — which
+    is the method this wrapper existed to intercept anyway. So the subclass
+    is small, and it satisfies the validator by being what it claims to be.
+
+    Returns None when CrewAI is absent, and the plain wrapper is used: the
+    direct-provider path has no CrewAI to satisfy.
+    """
+    global _CREWAI_WRAPPER_CLASS
+    if _CREWAI_WRAPPER_CLASS is not None:
+        return _CREWAI_WRAPPER_CLASS
+
+    try:
+        from crewai.llms.base_llm import BaseLLM
+    except Exception:  # pragma: no cover - CrewAI not installed
+        return None
+
+    from pydantic import PrivateAttr
+
+    class CrewAIReasoningAwareLLM(BaseLLM):  # type: ignore[misc, valid-type]
+        """Strips reasoning from the inner LLM's replies, and is a BaseLLM."""
+
+        _inner: Any = PrivateAttr(default=None)
+        _last_reasoning: str = PrivateAttr(default="")
+        _strip_count: int = PrivateAttr(default=0)
+
+        def __init__(self, inner_llm: Any) -> None:
+            # Carry the inner model's identity across. CrewAI reads `model`
+            # for logging, token accounting and context-window sizing; an
+            # empty one turns those into guesses.
+            super().__init__(model=getattr(inner_llm, "model", "") or "unknown")
+            self._inner = inner_llm
+
+        def call(self, *args: Any, **kwargs: Any) -> Any:
+            response = self._inner.call(*args, **kwargs)
+            if not isinstance(response, str):
+                return response
+            cleaned, reasoning = strip_reasoning_content(response)
+            if reasoning:
+                self._last_reasoning = reasoning
+                self._strip_count += 1
+            # An answer that was *only* reasoning leaves nothing behind.
+            # Handing CrewAI "" reads as a failed call; the raw text at least
+            # carries the model's work.
+            return cleaned if cleaned.strip() else response
+
+        # CrewAI asks the LLM about itself before and during a run. Answer
+        # from the real client rather than from BaseLLM's defaults, which
+        # describe nothing in particular.
+        def supports_function_calling(self) -> bool:
+            inner = self._inner
+            if hasattr(inner, "supports_function_calling"):
+                try:
+                    return bool(inner.supports_function_calling())
+                except Exception:
+                    pass
+            return False
+
+        def supports_stop_words(self) -> bool:
+            inner = self._inner
+            if hasattr(inner, "supports_stop_words"):
+                try:
+                    return bool(inner.supports_stop_words())
+                except Exception:
+                    pass
+            return True
+
+        def get_context_window_size(self) -> int:
+            inner = self._inner
+            if hasattr(inner, "get_context_window_size"):
+                try:
+                    return int(inner.get_context_window_size())
+                except Exception:
+                    pass
+            return super().get_context_window_size()
+
+        def __getattr__(self, name: str) -> Any:
+            # Reached only when normal lookup fails, so fields and methods
+            # defined here always win. Everything else — the attributes a
+            # given CrewAI version happens to poke at — comes from the
+            # client being wrapped.
+            try:
+                return super().__getattr__(name)  # type: ignore[misc]
+            except AttributeError:
+                pass
+            inner = object.__getattribute__(self, "__pydantic_private__").get("_inner")
+            if inner is None:
+                raise AttributeError(name)
+            return getattr(inner, name)
+
+    _CREWAI_WRAPPER_CLASS = CrewAIReasoningAwareLLM
+    return _CREWAI_WRAPPER_CLASS
+
+
 def wrap_if_reasoning_model(llm: Any, model_name: str) -> Any:
-    """Return a ReasoningAwareLLM wrapper if model_name is a reasoning model,
+    """Return a reasoning-aware wrapper if model_name is a reasoning model,
     otherwise return the original llm unchanged.
 
     This is the safe entry point — zero overhead for non-reasoning models.
@@ -400,11 +513,25 @@ def wrap_if_reasoning_model(llm: Any, model_name: str) -> Any:
     Returns:
         Either the wrapped LLM or the original.
     """
-    if is_reasoning_model(model_name):
-        logger.info(
-            "[ReasoningNormalizer] Wrapping LLM with ReasoningAwareLLM "
-            "for reasoning model: %s",
-            model_name,
-        )
-        return ReasoningAwareLLM(llm)
-    return llm
+    if not is_reasoning_model(model_name):
+        return llm
+
+    logger.info(
+        "[ReasoningNormalizer] Wrapping LLM for reasoning model: %s", model_name
+    )
+
+    crewai_class = _crewai_wrapper_class()
+    if crewai_class is not None:
+        try:
+            return crewai_class(llm)
+        except Exception as exc:  # pragma: no cover - unexpected CrewAI shape
+            # Never let normalization be the reason a chat cannot happen.
+            # Unstripped <think> tags are a cosmetic problem; no LLM is not.
+            logger.warning(
+                "[ReasoningNormalizer] Could not build the CrewAI-compatible "
+                "wrapper (%s); using the model unwrapped",
+                exc,
+            )
+            return llm
+
+    return ReasoningAwareLLM(llm)

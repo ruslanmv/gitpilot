@@ -23,6 +23,8 @@ class ProviderName(StrEnum):
     watsonx = "watsonx"
     ollama = "ollama"
     ollabridge = "ollabridge"
+    openwebui = "openwebui"
+    custom = "custom"
 
 
 class ProviderHealth(StrEnum):
@@ -258,6 +260,19 @@ class OllaBridgeProviderInput(BaseModel):
     connection_type: ProviderConnectionType | None = None
 
 
+class OpenWebUIProviderInput(BaseModel):
+    base_url: str | None = None
+    model: str | None = None
+    api_key: str | None = None
+
+
+class CustomProviderInput(BaseModel):
+    base_url: str | None = None
+    model: str | None = None
+    api_key: str | None = None
+    headers: dict[str, str] | None = None
+
+
 class ProviderTestRequest(BaseModel):
     provider: ProviderName
     openai: OpenAIProviderInput | None = None
@@ -265,6 +280,8 @@ class ProviderTestRequest(BaseModel):
     watsonx: WatsonxProviderInput | None = None
     ollama: OllamaProviderInput | None = None
     ollabridge: OllaBridgeProviderInput | None = None
+    openwebui: OpenWebUIProviderInput | None = None
+    custom: CustomProviderInput | None = None
 
 
 class ProviderTestResponse(ProviderStatusResponse):

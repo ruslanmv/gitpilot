@@ -693,7 +693,7 @@ class TestAPIEndpoints:
 
     def test_flow_current_without_param_backward_compat(self, client):
         """Without topology param, returns legacy graph or saved pref."""
-        with patch("gitpilot.api.get_saved_topology_preference", return_value=None):
+        with patch("gitpilot._api_app.get_saved_topology_preference", return_value=None):
             resp = client.get("/api/flow/current")
         assert resp.status_code == 200
         data = resp.json()
@@ -723,7 +723,17 @@ class TestAPIEndpoints:
         assert data["recommended_topology"] == "feature_builder"
 
     def test_topology_preference_save_and_get(self, client):
-        with patch("gitpilot.api.save_topology_preference") as mock_save:
+        # The endpoint echoes what the *reader* returns, not what was posted,
+        # so mocking only the writer leaves the read-back with nothing to
+        # find. Both halves have to be stubbed for the round trip to mean
+        # anything — the GET block below already does this.
+        with (
+            patch("gitpilot._api_app.save_topology_preference") as mock_save,
+            patch(
+                "gitpilot._api_app.get_saved_topology_preference",
+                return_value="architect_mode",
+            ),
+        ):
             mock_save.return_value = None
             resp = client.post(
                 "/api/settings/topology",
@@ -734,7 +744,7 @@ class TestAPIEndpoints:
             assert resp.json()["topology"] == "architect_mode"
             mock_save.assert_called_once_with("architect_mode")
 
-        with patch("gitpilot.api.get_saved_topology_preference", return_value="architect_mode"):
+        with patch("gitpilot._api_app.get_saved_topology_preference", return_value="architect_mode"):
             resp = client.get("/api/settings/topology")
             assert resp.status_code == 200
             assert resp.json()["topology"] == "architect_mode"

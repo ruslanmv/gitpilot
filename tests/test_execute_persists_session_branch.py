@@ -22,7 +22,7 @@ from typing import Any, Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-from gitpilot import api as api_module
+from gitpilot import _api_app as api_module
 
 
 @pytest.fixture()

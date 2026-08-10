@@ -190,8 +190,10 @@ def _get_provider_base_url(settings, provider) -> str | None:
     from .settings import LLMProvider
 
     if provider == LLMProvider.ollabridge:
+        from .settings import OLLABRIDGE_DEFAULT_BASE_URL
+
         return settings.ollabridge.base_url or os.getenv(
-            "OLLABRIDGE_BASE_URL", "http://localhost:8000"
+            "OLLABRIDGE_BASE_URL", OLLABRIDGE_DEFAULT_BASE_URL
         )
     if provider == LLMProvider.ollama:
         return settings.ollama.base_url or os.getenv(

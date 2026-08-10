@@ -92,6 +92,11 @@ async def _drive_generate_plan(
         lambda: {
             "set_repo_context": lambda *a, **kw: None,
             "get_repository_context_summary": _no_files_summary,
+            # The planner agent is built with PLANNER_TOOLS, not
+            # REPOSITORY_TOOLS. The key arrived with that split and the stub
+            # was not updated, so generate_plan died on KeyError before it
+            # could reach the guarded section this test is about.
+            "PLANNER_TOOLS": [],
             "REPOSITORY_TOOLS": [],
             "WRITE_TOOLS": [],
             "ISSUE_TOOLS": [],

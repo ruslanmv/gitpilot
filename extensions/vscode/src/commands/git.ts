@@ -21,21 +21,21 @@ export function registerGitCommands(
         // ── Basic Git Operations ───────────────────────────────
         vscode.commands.registerCommand('gitpilot.gitStatus', () => {
             chatProvider.sendMessageFromCommand('Show me the git status of this repository');
-            vscode.commands.executeCommand('gitpilot.chatView.focus');
+            vscode.commands.executeCommand('gitpilot.openChatTab');
         }),
 
         vscode.commands.registerCommand('gitpilot.gitDiffAnalysis', () => {
             chatProvider.sendMessageFromCommand(
                 'Analyze the current git diff and summarize what changed, why it might have changed, and if there are any issues',
             );
-            vscode.commands.executeCommand('gitpilot.chatView.focus');
+            vscode.commands.executeCommand('gitpilot.openChatTab');
         }),
 
         vscode.commands.registerCommand('gitpilot.smartCommit', () => {
             chatProvider.sendMessageFromCommand(
                 'Analyze the staged changes and generate a semantic commit message following conventional commits. Show me the plan before executing.',
             );
-            vscode.commands.executeCommand('gitpilot.chatView.focus');
+            vscode.commands.executeCommand('gitpilot.openChatTab');
         }),
 
         vscode.commands.registerCommand('gitpilot.createPR', async () => {
@@ -49,7 +49,7 @@ export function registerGitCommands(
                 : 'Analyze all commits on this branch and create a pull request with an AI-generated title and description.';
 
             chatProvider.sendMessageFromCommand(message);
-            vscode.commands.executeCommand('gitpilot.chatView.focus');
+            vscode.commands.executeCommand('gitpilot.openChatTab');
         }),
 
         // ── Intermediate Git Operations ────────────────────────
@@ -71,14 +71,14 @@ export function registerGitCommands(
             };
 
             chatProvider.sendMessageFromCommand(prompts[action.action]);
-            vscode.commands.executeCommand('gitpilot.chatView.focus');
+            vscode.commands.executeCommand('gitpilot.openChatTab');
         }),
 
         vscode.commands.registerCommand('gitpilot.conflictResolver', () => {
             chatProvider.sendMessageFromCommand(
                 'Check for merge conflicts in the current repository. If any exist, explain each conflict, suggest resolutions, and show the plan before applying changes.',
             );
-            vscode.commands.executeCommand('gitpilot.chatView.focus');
+            vscode.commands.executeCommand('gitpilot.openChatTab');
         }),
 
         vscode.commands.registerCommand('gitpilot.stashManager', async () => {
@@ -97,7 +97,7 @@ export function registerGitCommands(
             };
 
             chatProvider.sendMessageFromCommand(prompts[action.action]);
-            vscode.commands.executeCommand('gitpilot.chatView.focus');
+            vscode.commands.executeCommand('gitpilot.openChatTab');
         }),
 
         // ── Advanced Git Operations ────────────────────────────
@@ -106,7 +106,7 @@ export function registerGitCommands(
             chatProvider.sendMessageFromCommand(
                 `Perform a comprehensive health check on this repository (${ctx.repoOwner}/${ctx.repoName}). Check for: large files, stale branches, missing .gitignore entries, untracked sensitive files, commit message quality, and branch protection status.`,
             );
-            vscode.commands.executeCommand('gitpilot.chatView.focus');
+            vscode.commands.executeCommand('gitpilot.openChatTab');
         }),
 
         vscode.commands.registerCommand('gitpilot.commitSearch', async () => {
@@ -119,7 +119,7 @@ export function registerGitCommands(
             chatProvider.sendMessageFromCommand(
                 `Search the commit history for: "${query}". Show relevant commits with their messages, authors, dates, and changed files.`,
             );
-            vscode.commands.executeCommand('gitpilot.chatView.focus');
+            vscode.commands.executeCommand('gitpilot.openChatTab');
         }),
 
         vscode.commands.registerCommand('gitpilot.impactAnalysis', async () => {
@@ -137,7 +137,7 @@ export function registerGitCommands(
             chatProvider.sendMessageFromCommand(
                 `Perform an impact analysis for "${target}". Show: which files depend on it, what would break if it changed, recent change frequency, and test coverage status.`,
             );
-            vscode.commands.executeCommand('gitpilot.chatView.focus');
+            vscode.commands.executeCommand('gitpilot.openChatTab');
         }),
 
         // ── Natural Language Git ───────────────────────────────
@@ -151,7 +151,7 @@ export function registerGitCommands(
             chatProvider.sendMessageFromCommand(
                 `I want to do this Git operation: "${command}". Generate the exact Git command(s), explain what each does, warn me about any risks, and show the plan before executing.`,
             );
-            vscode.commands.executeCommand('gitpilot.chatView.focus');
+            vscode.commands.executeCommand('gitpilot.openChatTab');
         }),
     );
 }

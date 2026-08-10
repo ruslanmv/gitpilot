@@ -16,6 +16,39 @@ const PROVIDER_LABELS: Record<string, { label: string; description: string }> = 
     watsonx: { label: 'Watsonx', description: 'IBM Granite and foundation models' },
 };
 
+/**
+ * Confirm the backend is reachable, reconnecting once if the cached state
+ * says otherwise.
+ *
+ * `client.isConnected` is a cached flag, refreshed on a 30s timer. Treating it
+ * as ground truth is how these commands came to report "Not connected" at a
+ * server that had been running for minutes. When the probe really does fail,
+ * the user is offered the settings page — which has recovery actions —
+ * instead of a dead-end warning.
+ */
+async function ensureConnected(
+    client: GitPilotApiClient,
+    action: string,
+): Promise<boolean> {
+    if (client.isConnected && await client.health()) {
+        return true;
+    }
+    const connected = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Window, title: 'Connecting to GitPilot...' },
+        async () => client.connect(),
+    );
+    if (connected) { return true; }
+
+    const choice = await vscode.window.showWarningMessage(
+        `Could not reach the GitPilot server at ${client.serverUrl}, so ${action} is unavailable.`,
+        'Open Settings',
+    );
+    if (choice === 'Open Settings') {
+        await vscode.commands.executeCommand('gitpilot.openSettings');
+    }
+    return false;
+}
+
 export function registerServerCommands(
     context: vscode.ExtensionContext,
     client: GitPilotApiClient,
@@ -72,10 +105,7 @@ export function registerServerCommands(
         }),
 
         vscode.commands.registerCommand('gitpilot.showServerInfo', async () => {
-            if (!client.isConnected) {
-                vscode.window.showWarningMessage('Not connected to GitPilot server');
-                return;
-            }
+            if (!await ensureConnected(client, 'server info')) { return; }
 
             try {
                 const settings = await client.getSettings();
@@ -105,10 +135,7 @@ export function registerServerCommands(
 
         // ── Provider Selection ─────────────────────────────────────
         vscode.commands.registerCommand('gitpilot.selectProvider', async () => {
-            if (!client.isConnected) {
-                vscode.window.showWarningMessage('Not connected to GitPilot server. Run "GitPilot: Reconnect" first.');
-                return;
-            }
+            if (!await ensureConnected(client, 'provider selection')) { return; }
 
             try {
                 const settings = await client.getSettings();
@@ -146,10 +173,7 @@ export function registerServerCommands(
 
         // ── Model Selection ────────────────────────────────────────
         vscode.commands.registerCommand('gitpilot.selectModel', async () => {
-            if (!client.isConnected) {
-                vscode.window.showWarningMessage('Not connected to GitPilot server.');
-                return;
-            }
+            if (!await ensureConnected(client, 'model selection')) { return; }
 
             try {
                 const settings = await client.getSettings();
@@ -351,10 +375,7 @@ export function registerServerCommands(
 
         // ── LLM API Key Configuration ─────────────────────────────
         vscode.commands.registerCommand('gitpilot.setLlmApiKey', async () => {
-            if (!client.isConnected) {
-                vscode.window.showWarningMessage('Not connected to GitPilot server.');
-                return;
-            }
+            if (!await ensureConnected(client, 'API key configuration')) { return; }
 
             try {
                 const settings = await client.getSettings();
@@ -386,10 +407,7 @@ export function registerServerCommands(
 
         // ── LLM Base URL Configuration ────────────────────────────
         vscode.commands.registerCommand('gitpilot.setLlmBaseUrl', async () => {
-            if (!client.isConnected) {
-                vscode.window.showWarningMessage('Not connected to GitPilot server.');
-                return;
-            }
+            if (!await ensureConnected(client, 'base URL configuration')) { return; }
 
             try {
                 const settings = await client.getSettings();
@@ -425,10 +443,7 @@ export function registerServerCommands(
         }),
 
         vscode.commands.registerCommand('gitpilot.selectTopology', async () => {
-            if (!client.isConnected) {
-                vscode.window.showWarningMessage('Not connected');
-                return;
-            }
+            if (!await ensureConnected(client, 'topology selection')) { return; }
             try {
                 const topologies = await client.listTopologies();
                 const items = topologies.map(t => ({
@@ -452,10 +467,7 @@ export function registerServerCommands(
         }),
 
         vscode.commands.registerCommand('gitpilot.toggleLiteMode', async () => {
-            if (!client.isConnected) {
-                vscode.window.showWarningMessage('Not connected');
-                return;
-            }
+            if (!await ensureConnected(client, 'Lite Mode')) { return; }
             try {
                 // Read current state from server
                 const data = await client.request<{ lite_mode: boolean }>('/api/settings/lite-mode');

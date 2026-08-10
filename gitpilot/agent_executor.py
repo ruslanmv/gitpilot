@@ -109,7 +109,14 @@ class StreamingAgentExecutor:
                 "fall back to batch chat.",
                 repo_full_name,
             )
-            await self._bus.emit(evt.status_change("done"))
+            # Terminate the stream, but do not claim the task finished.
+            #
+            # `agent_done` is what closes the SSE loop; `status_change("done")`
+            # is what the UI reads to stop the thinking animation. Emitting
+            # both here announced completion before any work had started: the
+            # extension cleared its spinner, then re-raised it for the batch
+            # call it was about to make, so a single question visibly cycled
+            # thinking → done → thinking. Only the terminator belongs here.
             await self._bus.emit(evt.agent_done(summary=""))
             return None
 

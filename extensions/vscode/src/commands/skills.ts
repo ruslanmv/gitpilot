@@ -43,7 +43,7 @@ export function registerSkillCommands(
             }
 
             chatProvider.sendMessageFromCommand(`/${skillName}`);
-            vscode.commands.executeCommand('gitpilot.chatView.focus');
+            vscode.commands.executeCommand('gitpilot.openChatTab');
         }),
 
         vscode.commands.registerCommand('gitpilot.installPlugin', async () => {

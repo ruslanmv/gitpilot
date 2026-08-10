@@ -1,7 +1,23 @@
 /**
  * GitPilot Redesign — Error Translator
  * Converts raw exceptions to user-friendly messages.
+ *
+ * The canned message per status code is a floor, not a ceiling. When the
+ * backend sends a `detail`, that text wins: it was written for this exact
+ * failure and names the provider, the missing package and the command to
+ * run, none of which can be recovered from a status number. Guessing over
+ * it is how a configured Ollama came to report a "circuit breaker" that
+ * was never involved.
  */
+
+/** Codes whose canned text is a guess we should not print over a real one. */
+const _detailedStatuses = new Set([500, 502, 503, 504]);
+
+/** Read the server's explanation off an error, if it carried one. */
+function _serverDetail(err: any): string {
+  const detail = err?.detail ?? err?.response?.data?.detail;
+  return typeof detail === "string" ? detail.trim() : "";
+}
 
 export class ErrorTranslator {
   private _patterns: Array<{
@@ -41,8 +57,11 @@ export class ErrorTranslator {
     },
     {
       match: (err) => err?.status === 503 || err?.statusCode === 503,
+      // Deliberately vague: 503 covers both a tripped circuit breaker and an
+      // agent runtime that could not be built, and only the server knows
+      // which. When it says, `_serverDetail` speaks instead of this.
       message:
-        "The LLM provider is temporarily unavailable (circuit breaker active). Please wait a moment and try again.",
+        "The LLM provider is unavailable. Check Settings → AI Providers, or wait a moment and try again.",
     },
     {
       match: (err) => err?.status === 504 || err?.statusCode === 504,
@@ -65,6 +84,13 @@ export class ErrorTranslator {
   translate(err: any): string {
     if (!err) {
       return "An unknown error occurred.";
+    }
+
+    // The server's own words, for the codes where the canned line is a guess.
+    const status = err?.status ?? err?.statusCode;
+    const detail = _serverDetail(err);
+    if (detail && _detailedStatuses.has(status)) {
+      return detail;
     }
 
     for (const pattern of this._patterns) {

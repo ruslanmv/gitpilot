@@ -18,7 +18,9 @@ export type ProviderName =
   | "claude"
   | "watsonx"
   | "ollama"
-  | "ollabridge";
+  | "ollabridge"
+  | "openwebui"
+  | "custom";
 
 export type ProviderConnectionType =
   | "local"
@@ -80,6 +82,9 @@ export interface ChangedFile {
   reason?: string;
   hasDiff: boolean;
   diffPreview?: string;
+  /** Supplied by the backend when it knows; otherwise read off diffPreview. */
+  additions?: number;
+  deletions?: number;
   contentPreview?: string;
 }
 
@@ -310,13 +315,25 @@ export type ExtensionToWebviewMessage =
   | { type: "PLAN_STEP_UPDATE"; payload: { stepIndex: number; stepTitle: string; action: string; status: string } }
   | { type: "TERMINAL_OUTPUT"; payload: { stream: "stdout" | "stderr" | "exit"; text: string; exitCode?: number } }
   | { type: "DIAGNOSTICS_RESULT"; payload: { file?: string; errors: number; warnings: number; entries: Array<{ file: string; line: number; severity: string; message: string }> } }
-  | { type: "TEST_RESULT"; payload: { framework: string; passed: number; failed: number; skipped: number; exitCode: number } };
+  | { type: "TEST_RESULT"; payload: { framework: string; passed: number; failed: number; skipped: number; exitCode: number } }
+  // ── Composer context: what GitPilot will look at, stated before you send ──
+  | {
+      type: "EDITOR_CONTEXT";
+      payload: { file?: string; range?: string; text?: string } | undefined;
+    }
+  | { type: "FILE_INDEX"; payload: { files: string[] } }
+  | { type: "ATTACH_CONTEXT_FILE"; payload: { path: string } }
+  //: A new task begins: the panel drops everything the last one left behind.
+  | { type: "SESSION_RESET" };
 
 export type WebviewToExtensionMessage =
   | { type: "INIT" }
   | { type: "START_SESSION"; payload: { mode: WorkspaceMode } }
   | { type: "CHANGE_MODE"; payload: { mode: WorkspaceMode } }
   | { type: "SEND_CHAT"; payload: { text: string } }
+  | { type: "REQUEST_FILE_INDEX" }
+  | { type: "REWIND" }
+  | { type: "PICK_CONTEXT_FILE" }
   | {
       type: "RUN_QUICK_ACTION";
       payload: {
@@ -451,8 +468,154 @@ export interface ProviderTestRequest {
     api_key?: string;
     connection_type?: "local" | "api_key" | "pairing";
   };
+  openwebui?: {
+    base_url?: string;
+    model?: string;
+    api_key?: string;
+  };
+  custom?: {
+    base_url?: string;
+    model?: string;
+    api_key?: string;
+    headers?: Record<string, string>;
+  };
 }
 
 export interface ProviderTestResponse extends ProviderStatusResponse {
   details?: string;
 }
+
+// ── AI Provider setup (VS Code settings webview) ──────────────────────────
+//
+// The settings webview never sees a secret. The extension host reads provider
+// settings from the GitPilot backend, strips API keys down to a boolean and a
+// last-four hint, and sends only that. Keys travel in one direction: from an
+// input box, through the host, to the backend.
+
+/** Which OllaBridge connection method the user is configuring. */
+export type OllaBridgeMode = "cloud" | "api_key" | "local";
+
+/** A provider's stored configuration, with secrets replaced by a hint. */
+export interface SanitizedProviderConfig {
+  model?: string;
+  base_url?: string;
+  /** Watsonx only. */
+  project_id?: string;
+  /**
+   * Custom endpoint only: extra request headers.
+   *
+   * These are not secrets — they carry attribution and routing values such as
+   * a user id — so they round-trip to the webview intact. A header used to
+   * pass a bearer token belongs in the API key field instead.
+   */
+  headers?: Record<string, string>;
+  /** True when the backend holds an API key for this provider. */
+  hasApiKey: boolean;
+  /** Masked tail of the stored key, e.g. "••••A7X2". Never the key itself. */
+  apiKeyHint?: string;
+}
+
+/** What the overview page renders for one provider. */
+export interface ProviderOverviewEntry {
+  name: ProviderName;
+  label: string;
+  description: string;
+  /** Model currently configured, when there is one. */
+  model?: string;
+  active: boolean;
+  configured: boolean;
+}
+
+/** Everything the provider pages need, refreshed on every load and save. */
+export interface ProviderSetupData {
+  activeProvider: ProviderName;
+  providers: ProviderOverviewEntry[];
+  configs: Partial<Record<ProviderName, SanitizedProviderConfig>>;
+  /** Which OllaBridge tab the stored configuration corresponds to. */
+  ollabridgeMode: OllaBridgeMode;
+  serverUrl: string;
+}
+
+/**
+ * Values a provider page submits.
+ *
+ * `api_key` follows the "blank means keep" rule: absent or empty leaves the
+ * stored key untouched, so a page can save a model change without ever having
+ * held the secret. Clearing a key is an explicit REMOVE_PROVIDER_KEY message.
+ */
+export interface ProviderConfigInput {
+  model?: string;
+  base_url?: string;
+  project_id?: string;
+  api_key?: string;
+  /** Custom endpoint only: extra request headers, replacing what is stored. */
+  headers?: Record<string, string>;
+  /** OllaBridge only: which tab produced these values. */
+  mode?: OllaBridgeMode;
+}
+
+/** Why the provider pages cannot reach the backend right now. */
+export type ServerConnectionState =
+  | "connecting"
+  | "starting"
+  | "online"
+  | "offline";
+
+/** Messages the settings webview sends to the extension host. */
+export type ProviderSettingsMessage =
+  | { type: "LOAD_PROVIDER_OVERVIEW" }
+  | { type: "LOAD_PROVIDER_MODELS"; provider: ProviderName; requestId: number; force?: boolean }
+  | { type: "TEST_PROVIDER"; provider: ProviderName; requestId: number; config: ProviderConfigInput }
+  | { type: "SAVE_AND_ACTIVATE_PROVIDER"; provider: ProviderName; requestId: number; config: ProviderConfigInput }
+  | { type: "REMOVE_PROVIDER_KEY"; provider: ProviderName; requestId: number }
+  | { type: "START_OLLABRIDGE_LOGIN"; baseUrl?: string }
+  | { type: "PAIR_OLLABRIDGE"; requestId: number; code: string; baseUrl?: string }
+  | { type: "SIGN_OUT_OLLABRIDGE"; requestId: number }
+  | { type: "RECONNECT_SERVER" }
+  | { type: "START_LOCAL_SERVER" }
+  | { type: "CHANGE_SERVER_URL" }
+  | { type: "COPY_DIAGNOSTICS" }
+  | { type: "OPEN_WEB_ADMIN" }
+  | { type: "OPEN_EXTERNAL"; url: string };
+
+/**
+ * A topology preset: which agents run, in what shape.
+ *
+ * `agents_used` is empty for routed topologies — those pick agents per
+ * request rather than running a fixed sequence.
+ */
+export interface TopologySummary {
+  id: string;
+  name: string;
+  description: string;
+  category: "system" | "pipeline" | string;
+  icon?: string;
+  agents_used: string[];
+  execution_style: string;
+}
+
+// ── MCP servers (VS Code settings webview) ────────────────────────────────
+//
+// MCP servers augment what the agents can do: attaching a Postgres server
+// gives the Explorer schema discovery and the Coder safe queries, for the
+// duration it stays enabled. The settings page is where that surface is
+// chosen, so it shows not just "which servers" but "which tools, and which
+// agents call them".
+
+/** Where a server on offer came from. */
+export type McpCatalogSource = "bundled" | "registry";
+
+/** Messages the MCP settings pages send to the extension host. */
+export type McpSettingsMessage =
+  | { type: "LOAD_MCP_OVERVIEW" }
+  | { type: "OPEN_MCP_SERVER"; serverId: string }
+  | { type: "SET_MCP_SERVER_ENABLED"; requestId: number; serverId: string; enabled: boolean }
+  | { type: "SET_MCP_TOOL_ENABLED"; requestId: number; serverId: string; tool: string; enabled: boolean }
+  | { type: "TEST_MCP_SERVER"; requestId: number; serverId: string }
+  | { type: "UNINSTALL_MCP_SERVER"; requestId: number; serverId: string }
+  | { type: "INSTALL_MCP_SERVER"; requestId: number; entryId: string; source: McpCatalogSource }
+  | { type: "SEARCH_MCP_REGISTRY"; requestId: number; query: string }
+  | { type: "ADD_CUSTOM_MCP_SERVER"; requestId: number }
+  | { type: "INSTALL_MCP_FORGE" }
+  | { type: "SYNC_MCP_GATEWAY"; requestId: number }
+  | { type: "CONFIGURE_MCP_GATEWAY" };
