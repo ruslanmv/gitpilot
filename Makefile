@@ -338,6 +338,17 @@ test-fast:
 	@echo "🧪 Running tests (no isolation)..."
 	@$(UV_ENV) $(UV) run --extra dev pytest
 
+## Tool parity gate — Batch V4-A2
+## Runs every canonical tool against the CrewAI tool it replaces, on the same
+## fixture, and asserts the strings a model reads are identical.  Rewrites
+## tests/toolkit/parity/corpus.json so the diff is reviewable; commit it with
+## the change that moved it.  `make test` compares without recording, so an
+## ordinary run cannot bless a divergence.
+test-parity:
+	@echo "🪞 Running tool parity gate (legacy vs registry)..."
+	@GITPILOT_PARITY_RECORD=1 $(UV_ENV) $(UV) run --extra dev pytest tests/toolkit -q
+	@git --no-pager diff --stat -- tests/toolkit/parity/corpus.json || true
+
 ## Coverage gate — Batch P1-B
 ## Enforces the >= 80 % threshold on the gated modules listed in
 ## pyproject.toml [tool.coverage.run] include.  Use `make coverage` locally;
@@ -379,6 +390,19 @@ docs-serve:
 docs-build:
 	@echo "📚 Building static docs site -> site/ ..."
 	@$(UV_ENV) $(UV) run --extra docs mkdocs build --strict
+
+## End-to-end verification — Batch V4-H5.
+## A model writes hello.py, and we run it. Against a local stub by default (real
+## HTTP, real dialect, real policy, real file); against a pulled Ollama model with
+## `make verify-e2e-real`, which is the one that tests the *model*.
+verify-e2e:
+	@echo "🔁 End-to-end: a model writes hello.py, and we run it..."
+	@$(UV_ENV) $(UV) run python scripts/verify_end_to_end.py
+
+verify-e2e-real:
+	@echo "🔁 End-to-end against a real Ollama model..."
+	@$(UV_ENV) $(UV) run python scripts/verify_end_to_end.py --real \
+		--model $${MODEL:-qwen2.5:1.5b}
 
 linkcheck:
 	@echo "🔗 Running in-repo markdown link checker..."

@@ -1,0 +1,88 @@
+# T5 Code Inspector, as a policy — Batch V4-G3, §15.3.
+#
+# The read-only topology, and the one the §19.1 trace test runs against: a run
+# that reads and reports and *cannot* write, so "did the safety stack actually
+# hold?" has a topology to ask it of.
+#
+# Read-only here is enforced three ways, deliberately overlapping:
+#
+#   1. The capability mask has no fs.write/fs.edit/fs.delete/git.commit at all,
+#      so the model is never even offered those schemas.
+#   2. `terminal.run: {classes: [READ_ONLY, TEST]}` refuses a shell command the
+#      classifier reads as a build, an install or a mutation — a *denial*, not an
+#      approval prompt, because asking a human to approve `npm install` during a
+#      code review is asking the wrong question.
+#   3. `approval.mode: plan` puts the whole run in plan mode, which the policy
+#      engine treats as read-only regardless of what any capability says.
+#
+# Three layers because each catches something the others miss: the mask stops a
+# tool being offered, the classes stop a permitted tool being used destructively,
+# and plan mode stops anything that slipped past both.
+id: code_inspector
+name: Code Inspector
+icon: "🔍"
+category: pipeline
+description: >-
+  Read-only review: read the code, judge it, quote the lines. Cannot write, commit
+  or run anything that changes the workspace.
+
+execution:
+  engine: agentic_loop
+  dialect: auto
+
+agent:
+  role: code_reviewer
+  subagents: [explorer, reviewer]
+
+capabilities:
+  fs.read: true
+  fs.list: true
+  fs.glob: true
+  fs.grep: true
+  terminal.run: { network: false, classes: [READ_ONLY, TEST] }
+  terminal.which: true
+  test.detect: true
+  # Naming TEST is the opt-in: a read-only run executes READ_ONLY commands on the
+  # classifier's own evidence, but running the suite executes arbitrary project
+  # code, so a topology has to ask for it in a file someone reviewed.
+  test.run: { classes: [TEST] }
+  git.status: true
+  git.diff: true
+  git.log: true
+  github.pr.get: true
+  github.pr.list: true
+  github.search.code: true
+  todo.write: true
+  agent.delegate: { max_depth: 1 }
+
+approval:
+  mode: plan          # tighten-only: a plan-mode topology cannot be widened by a
+                      # session, and a session in plan mode is not widened by this
+
+verification:
+  tests: "off"        # there is nothing to verify: this run changes nothing
+  max_fix_cycles: 0
+
+limits:
+  max_iterations: 30
+  max_tool_calls: 90
+  max_runtime_seconds: 1200
+
+classifier_hints:
+  - review
+  - audit
+  - security
+  - inspect
+  - analyze code
+  - vulnerabilities
+  - quality
+  - what changed
+  - diff
+  - pre-merge
+  - check quality
+  - code smell
+  - coverage
+
+sequence: [explorer, reviewer]
+
+visualization: auto

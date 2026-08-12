@@ -190,42 +190,17 @@ def _extract(payload: dict[str, Any]) -> str:
 def _without_reasoning(answer: str, model: str) -> str:
     """Drop a reasoning model's private thinking from the visible answer.
 
-    deepseek-r1, QwQ and friends wrap their scratchpad in ``<think>`` tags
-    and put the reply after it. The CrewAI path has always known this —
-    build_llm() wraps those models — but this path does not go through
-    CrewAI, so its callers were shown the raw output: a wall of reasoning
-    with the actual answer somewhere at the end, or nothing they would
-    recognise as an answer at all.
-
-    A model that spends its whole budget thinking leaves nothing after the
-    close tag. Returning "" there would surface as "returned an empty
-    response", which is both unhelpful and untrue — so the raw text is
-    kept instead. Partial output beats a wrong diagnosis.
+    The implementation moved to
+    :func:`gitpilot.reasoning_normalizer.visible_answer` in Batch V4-B1 so the
+    provider clients in ``gitpilot.agent.providers`` share it rather than
+    carrying a second copy.  Kept as a module function because this module's
+    tests call it directly.
     """
-    if not answer:
-        return answer
     try:
-        from .reasoning_normalizer import is_reasoning_model, strip_reasoning_content
+        from .reasoning_normalizer import visible_answer
     except Exception:  # pragma: no cover - defensive
         return answer
-
-    # Tags rather than the model name decide it. A local `ollama create`
-    # name need not mention deepseek, and a model that emitted no reasoning
-    # is unaffected either way.
-    if "<think" not in answer and not is_reasoning_model(model or ""):
-        return answer
-
-    cleaned, reasoning = strip_reasoning_content(answer)
-    cleaned = (cleaned or "").strip()
-    if not cleaned:
-        logger.debug(
-            "%s produced only reasoning (%d chars); showing it unmodified "
-            "rather than reporting an empty response",
-            model,
-            len(reasoning or ""),
-        )
-        return answer
-    return cleaned
+    return visible_answer(answer, model)
 
 
 async def chat(

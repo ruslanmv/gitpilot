@@ -12,6 +12,13 @@ from typing import Optional
 
 from crewai.tools import tool
 
+from .sandbox_routing import (
+    SandboxFallback,
+    coerce_timeout,
+    format_sandbox_output,
+    run_command_in_workspace_sync,
+    run_snippet_sync,
+)
 from .workspace import WorkspaceManager, WorkspaceInfo
 from .terminal import TerminalExecutor, TerminalSession
 
@@ -230,169 +237,24 @@ def run_in_sandbox(language: str, code: str, timeout: str = "120") -> str:
 # ---------------------------------------------------------------------
 # Sandbox helpers
 # ---------------------------------------------------------------------
+# The routing itself lives in :mod:`gitpilot.sandbox_routing` (Batch V4-A4) so
+# the canonical ``terminal.*`` tools reach the same backends without importing
+# CrewAI through this module.  These names stay as thin aliases: this file's
+# tools and their tests use them.
 
-class _SandboxFallback(Exception):
-    """Raised when the sandbox path is unusable and the caller should
-    fall back to the legacy TerminalSession executor."""
-
-
-def _coerce_timeout(value: object) -> int:
-    try:
-        n = int(str(value))
-    except (TypeError, ValueError):
-        return 120
-    if n <= 0:
-        return 120
-    return min(n, 600)
-
-
-def _format_sandbox_output(result, label: str) -> str:
-    """Render a SandboxResult / SandboxRunResponse-shaped object as the
-    same text block the agent has been reading from ``run_command``,
-    so existing prompt parsing keeps working — just with the backend
-    line appended so the agent (and the user reading the trace) can
-    see which sandbox ran the command."""
-    backend = getattr(result, "backend", None) or "subprocess"
-    pretty = {
-        "subprocess": "local subprocess",
-        "matrixlab": "MatrixLab",
-        "off": "pass-through (host)",
-    }.get(backend, backend)
-    lines = [f"Sandbox: {pretty}", f"Command: {label}", f"Exit code: {result.exit_code}"]
-    if getattr(result, "duration_ms", None) is not None:
-        lines.append(f"Duration: {result.duration_ms} ms")
-    if result.stdout:
-        lines.append("--- stdout ---")
-        lines.append(result.stdout)
-    if result.stderr:
-        lines.append("--- stderr ---")
-        lines.append(result.stderr)
-    if getattr(result, "timed_out", False):
-        lines.append("WARNING: Command timed out")
-    if getattr(result, "truncated", False):
-        lines.append("WARNING: Output was truncated")
-    sbid = getattr(result, "sandbox_id", None)
-    if sbid:
-        lines.append(f"sandbox_id: {sbid}")
-    return "\n".join(lines) + "\n"
+_SandboxFallback = SandboxFallback
+_coerce_timeout = coerce_timeout
+_format_sandbox_output = format_sandbox_output
 
 
 def _run_via_sandbox(command: str, timeout: int, workspace_path) -> str:
-    """Route ``run_command`` through the configured sandbox backend.
-
-    Raises :class:`_SandboxFallback` so the caller can drop to the
-    legacy TerminalSession path if the sandbox can't be constructed
-    (e.g. httpx missing in a stripped runtime)."""
-    try:
-        from pathlib import Path
-
-        from .sandbox import (
-            BACKEND_MATRIXLAB,
-            BACKEND_OFF,
-            BACKEND_SUBPROCESS,
-            MatrixLabSandbox,
-            NullSandbox,
-            SandboxPolicy,
-            SandboxRunError,
-            SandboxUnavailableError,
-            SubprocessSandbox,
-        )
-        from .settings import get_settings
-    except Exception as exc:  # noqa: BLE001
-        raise _SandboxFallback(str(exc)) from exc
-
-    cfg = get_settings().sandbox
-    backend = (cfg.backend or BACKEND_SUBPROCESS).strip().lower()
-
-    # MatrixLab's /repo/run endpoint requires a real ``repo_url`` —
-    # that's the contract for cloning + running CI against a remote
-    # repo, not for arbitrary in-workspace shell commands.  Route
-    # workspace commands through the snippet path instead (POST
-    # /api/sandbox/run with language=bash), which already dispatches
-    # to MatrixLab /code/run.  Keeps the agent's run_command working
-    # whichever backend the user picked.
-    if backend == BACKEND_MATRIXLAB:
-        return _run_snippet_via_sandbox("bash", command, timeout)
-
-    policy = SandboxPolicy(
-        workspace=Path(workspace_path),
-        timeout_sec=timeout,
-        allow_network=cfg.allow_network,
-        image=cfg.matrixlab_image or None,
-    )
-    if backend == BACKEND_OFF:
-        sb = NullSandbox(policy)
-    else:
-        sb = SubprocessSandbox(policy)
-
-    # Run + close in a SINGLE event loop.  MatrixLabSandbox would
-    # lazily build an httpx.AsyncClient on first use; closing it in a
-    # different loop than it was created in is the textbook asyncio
-    # antipattern (RuntimeError: Event loop is closed).  Two separate
-    # asyncio.run() calls would do exactly that.  (For the
-    # subprocess/null path the close is a no-op, but keeping the
-    # pattern uniform means future backends can rely on it.)
-    async def _run_and_close():
-        try:
-            return await sb.run(command, timeout=timeout)
-        finally:
-            aclose = getattr(sb, "aclose", None)
-            if aclose is not None:
-                try:
-                    await aclose()
-                except Exception:  # noqa: BLE001
-                    pass
-    try:
-        result = _run_async(_run_and_close())
-    except SandboxUnavailableError as exc:
-        return f"Error: sandbox backend {backend!r} unreachable: {exc}\n"
-    except SandboxRunError as exc:
-        return f"Error: sandbox backend {backend!r} reported an error: {exc}\n"
-    except PermissionError as exc:
-        return f"Permission denied by sandbox policy: {exc}\n"
-    return _format_sandbox_output(result, command)
+    """Route ``run_command`` through the configured sandbox backend."""
+    return run_command_in_workspace_sync(command, timeout, workspace_path)
 
 
 def _run_snippet_via_sandbox(language: str, code: str, timeout: int) -> str:
-    """Execute a fenced snippet by POSTing to GitPilot's own
-    /api/sandbox/run endpoint so the agent and the chat UI share one
-    code path. Going via the HTTP surface (rather than reaching into
-    sandbox_api internals) keeps the lifecycle / cleanup behaviour
-    identical between the two callers."""
-    try:
-        import os
-
-        import httpx
-    except Exception as exc:  # noqa: BLE001
-        raise _SandboxFallback(str(exc)) from exc
-
-    port = os.environ.get("GITPILOT_PORT") or "8765"
-    base = os.environ.get("GITPILOT_INTERNAL_URL") or f"http://127.0.0.1:{port}"
-    body = {"language": language, "code": code, "timeout_sec": timeout}
-    try:
-        with httpx.Client(timeout=timeout + 10) as client:
-            resp = client.post(f"{base}/api/sandbox/run", json=body)
-    except httpx.HTTPError as exc:
-        return f"Error: could not reach the in-process sandbox API: {exc}\n"
-    if resp.status_code >= 400:
-        try:
-            detail = resp.json().get("detail", resp.text)
-        except Exception:  # noqa: BLE001
-            detail = resp.text
-        return f"Sandbox error ({resp.status_code}): {detail}\n"
-    data = resp.json()
-
-    class _R:
-        backend = data.get("backend")
-        exit_code = data.get("exit_code")
-        stdout = data.get("stdout", "")
-        stderr = data.get("stderr", "")
-        duration_ms = data.get("duration_ms")
-        timed_out = data.get("timed_out", False)
-        truncated = data.get("truncated", False)
-        sandbox_id = data.get("sandbox_id")
-
-    return _format_sandbox_output(_R(), f"{language} <snippet>")
+    """Execute a fenced snippet through GitPilot's own /api/sandbox/run."""
+    return run_snippet_sync(language, code, timeout)
 
 
 # -----------------------------------------------------------------------

@@ -1,0 +1,90 @@
+# T3 Feature Builder, as a policy — Batch V4-G3, §15.3.
+#
+# Was a five-agent CrewAI pipeline: explorer → planner → developer → reviewer →
+# git_agent. The ordering in that pipeline was the good idea; the five separate
+# LLM calls were the cost. Each handoff was a fresh context that had to be told
+# what the previous agent found, and anything the summary dropped was gone.
+#
+# One agent with the reviewer template available does the same work with the
+# context intact: it explores, implements, and can spawn a reviewer subagent over
+# its own diff. The `sequence` below is kept so the legacy dispatcher still runs
+# the old pipeline until the flip (§15.4) — one document, both paths.
+#
+# `verification.tests: required` is not a default here, it is the point: a feature
+# that has not been run is not a feature.
+id: feature_builder
+name: Feature Builder
+icon: "🚀"
+category: pipeline
+description: >-
+  Build a feature end to end: explore where it belongs, implement it in the
+  surrounding style, review the diff, and prove it with tests.
+
+execution:
+  engine: agentic_loop
+  dialect: auto
+
+agent:
+  role: feature_builder
+  subagents: [explorer, reviewer, test_analyst]
+
+capabilities:
+  fs.read: true
+  fs.list: true
+  fs.glob: true
+  fs.grep: true
+  fs.write: true
+  fs.edit: true
+  fs.delete: ask
+  terminal.run: { network: false }
+  terminal.which: true
+  test.detect: true
+  test.run: true
+  git.status: true
+  git.diff: true
+  git.log: true
+  git.branch: true
+  git.commit: ask
+  git.push: false
+  github.issue.get: true
+  github.issue.list: true
+  github.pr.get: true
+  github.pr.create: ask
+  github.search.code: true
+  todo.write: true
+  agent.delegate: { max_depth: 1 }
+
+approval:
+  mode: session_default
+
+verification:
+  tests: required
+  max_fix_cycles: 3
+
+limits:
+  max_iterations: 50
+  max_tool_calls: 150
+  max_runtime_seconds: 2400
+
+# Kept so ``classify_message`` still routes this topology (§15.2).
+classifier_hints:
+  - add
+  - create
+  - implement
+  - build
+  - new feature
+  - endpoint
+  - component
+  - module
+  - integrate
+  - migration
+  - refactor
+  - rewrite
+  - enhance
+  - upgrade
+
+# The v1 CrewAI pipeline, kept until the flip so the legacy dispatcher still has
+# a sequence to run.  It selects on this, not on the engine.
+sequence: [explorer, planner, developer, reviewer, git_agent]
+
+visualization: auto

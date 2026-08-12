@@ -24,12 +24,16 @@ const STYLE_COLOURS = {
   single_task: "#6c8cff",
   react_loop: "#ff7a3c",
   crew_pipeline: "#4caf88",
+  // The v4 engine (Batch V4-G1). Distinct from react_loop, which was only ever a
+  // label on a hand-drawn graph — this one names a topology the agent loop runs.
+  agentic_loop: "#b06cff",
 };
 
 const STYLE_LABELS = {
   single_task: "Dispatch",
   react_loop: "ReAct Loop",
   crew_pipeline: "Pipeline",
+  agentic_loop: "Agentic Loop",
 };
 
 /* ------------------------------------------------------------------ */

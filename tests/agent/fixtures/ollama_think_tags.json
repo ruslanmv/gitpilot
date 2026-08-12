@@ -1,0 +1,12 @@
+{
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "<think>The user wants the test command.</think>Run make test."
+      },
+      "finish_reason": "stop"
+    }
+  ]
+}

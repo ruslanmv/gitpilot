@@ -45,6 +45,11 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import httpx
 
+from .shell_safety import BLOCKED_PATTERNS as _SHARED_BLOCKED_PATTERNS
+from .shell_safety import NETWORK_ENV_KEYS as _SHARED_NETWORK_ENV_KEYS
+from .shell_safety import SECRET_ENV_KEYS as _SHARED_SECRET_ENV_KEYS
+from .shell_safety import blocked_reason, strip_secret_env
+
 logger = logging.getLogger(__name__)
 
 # Backend identifiers ---------------------------------------------------
@@ -67,15 +72,11 @@ MAX_OUTPUT_BYTES = 512_000
 # GITPILOT_MATRIXLAB_URL or via Settings → Sandbox.
 DEFAULT_MATRIXLAB_URL = "http://localhost:8765"
 
-# Conservative deny patterns reused across backends.
-BLOCKED_PATTERNS: Tuple[str, ...] = (
-    "rm -rf /",
-    "mkfs",
-    "dd if=/dev/zero",
-    ":(){ :|:& };:",
-    "shutdown -h",
-    "shutdown -r",
-)
+# Conservative deny patterns reused across backends.  Defined in
+# :mod:`gitpilot.shell_safety` so the terminal executor cannot drift from it
+# (Batch V4-0C); re-exported here because this name is part of the module's
+# established surface.
+BLOCKED_PATTERNS: Tuple[str, ...] = _SHARED_BLOCKED_PATTERNS
 
 
 # ----------------------------------------------------------------------
@@ -116,10 +117,10 @@ class SandboxPolicy:
     image: Optional[str] = None  # MatrixLab image override
 
     def validate(self, command_str: str) -> None:
+        matched = blocked_reason(command_str, self.blocked_patterns)
+        if matched is not None:
+            raise PermissionError(f"command blocked by sandbox policy: {matched!r}")
         lower = command_str.lower().strip()
-        for pattern in self.blocked_patterns:
-            if pattern in lower:
-                raise PermissionError(f"command blocked by sandbox policy: {pattern!r}")
         if self.allowed_commands is not None and lower:
             base = lower.split()[0]
             if base not in self.allowed_commands:
@@ -251,15 +252,9 @@ class SubprocessSandbox(Sandbox):
     backend = BACKEND_SUBPROCESS
 
     # Keys removed from the environment when ``allow_network`` is False.
-    _NETWORK_ENV_KEYS = (
-        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
-        "http_proxy", "https_proxy", "all_proxy", "no_proxy",
-    )
+    _NETWORK_ENV_KEYS = _SHARED_NETWORK_ENV_KEYS
     # Always stripped — secrets that shouldn't leak into sandboxed runs.
-    _STRIP_ALWAYS = (
-        "GITHUB_TOKEN", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
-        "WATSONX_API_KEY", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
-    )
+    _STRIP_ALWAYS = _SHARED_SECRET_ENV_KEYS
 
     async def run(
         self,
@@ -313,10 +308,7 @@ class SubprocessSandbox(Sandbox):
         )
 
     def _build_env(self, overrides: Optional[Mapping[str, str]]) -> Dict[str, str]:
-        env: Dict[str, str] = {k: v for k, v in os.environ.items() if k not in self._STRIP_ALWAYS}
-        if not self.policy.allow_network:
-            for key in self._NETWORK_ENV_KEYS:
-                env.pop(key, None)
+        env = strip_secret_env(allow_network=self.policy.allow_network)
         env.update(self.policy.extra_env)
         if overrides:
             env.update(overrides)

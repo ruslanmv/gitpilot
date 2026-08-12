@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -63,6 +64,38 @@ async def detect_test_command(workspace_path: Path) -> Optional[str]:
             pass
 
     return None
+
+
+def parse_test_counts(output: str) -> tuple[int, int, int]:
+    """Best-effort extraction of (passed, failed, skipped) from test output.
+
+    Moved here from ``StreamingAgentExecutor._parse_test_counts`` in Batch
+    V4-A6 so the ``test.run`` tool and the validation phase read the same
+    numbers out of the same text.  Deliberately regex-shaped rather than
+    per-framework parsers: the counts are for a status line and a model's
+    next decision, not for a report, and every runner prints "N passed"
+    somewhere.
+    """
+    passed = failed = skipped = 0
+
+    # pytest, jest and vitest all say "N passed" / "N failed" / "N skipped".
+    match = re.search(r"(\d+)\s+passed", output)
+    if match:
+        passed = int(match.group(1))
+    match = re.search(r"(\d+)\s+failed", output)
+    if match:
+        failed = int(match.group(1))
+    match = re.search(r"(\d+)\s+skipped", output)
+    if match:
+        skipped = int(match.group(1))
+
+    # go test prints per-package "ok" / "FAIL" lines instead of totals.
+    if "FAIL" in output and failed == 0:
+        failed = output.count("FAIL")
+    if "ok" in output and passed == 0:
+        passed = output.count("\nok")
+
+    return passed, failed, skipped
 
 
 async def detect_framework_name(workspace_path: Path) -> Optional[str]:

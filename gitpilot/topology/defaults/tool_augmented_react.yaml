@@ -1,0 +1,76 @@
+# T9 — the engine pilot, as a policy document (Batch V4-G1, §15.3).
+#
+# T9 shipped as a flow graph and nothing else: its picture named a "tool-def
+# pruner", a "sandbox runner" and an "approval batcher" as though they were
+# agents, and no executor read any of it. Phase C made it the pilot of the real
+# engine; this document is the rest of that — the capabilities, approvals,
+# verification and limits that the picture used to imply.
+#
+# It is deliberately the *first* v2 document. T9 is opt-in and experimental, so
+# migrating it proves the whole path — document → policy → RunRequest → mask —
+# without touching a topology anyone relies on. The other eight land in
+# Batches V4-G2 and V4-G3.
+id: tool_augmented_react
+name: Tool-Augmented ReAct (experimental)
+icon: "🧪"           # test tube — flags it as experimental
+category: system
+description: >-
+  The v4 agentic engine: one main agent in a while(tool_use) loop over the real
+  tool registry, policy-bound, with subagents on demand. Experimental — this is
+  the topology the engine was piloted on.
+
+execution:
+  engine: agentic_loop
+  dialect: auto          # the ModelProfile decides; a topology guessing over it
+                         # is how a 1.5B model gets sent schemas it cannot use
+
+agent:
+  role: software_engineer
+  subagents: [explorer, reviewer, researcher, test_analyst]
+
+capabilities:
+  fs.read: true
+  fs.list: true
+  fs.glob: true
+  fs.grep: true
+  fs.write: true
+  fs.edit: true
+  fs.delete: ask
+  terminal.run: { network: false }
+  terminal.run_snippet: ask
+  terminal.which: true
+  terminal.env: true
+  test.detect: true
+  test.run: true
+  git.status: true
+  git.diff: true
+  git.log: true
+  git.branch: true
+  git.stash: true
+  git.commit: ask
+  git.push: false        # the pilot never pushes; a run that wants to says so
+  github.issue.get: true
+  github.issue.list: true
+  github.issue.create: ask
+  github.issue.comment: ask
+  github.pr.get: true
+  github.pr.list: true
+  github.pr.create: ask
+  github.search.code: true
+  github.search.issues: true
+  todo.write: true
+  agent.delegate: { max_depth: 1 }
+
+approval:
+  mode: session_default  # whatever the session is in; a topology may only tighten
+
+verification:
+  tests: auto
+  max_fix_cycles: 3
+
+limits:
+  max_iterations: 40
+  max_tool_calls: 120
+  max_runtime_seconds: 1800
+
+visualization: auto

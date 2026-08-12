@@ -135,14 +135,23 @@ async def _list_skills(args: dict[str, Any], ctx: CallContext) -> dict[str, Any]
     manager_cls = getattr(skills_mod, "SkillManager", None)
     if manager_cls is None:
         return {"available": False, "skills": []}
+    # ``list_skills`` is the real method (Batch V4-0B).  The previous
+    # ``list``/``all`` probe matched nothing, so this tool always reported an
+    # empty catalogue — silently, which is worse than an error.  The aliases
+    # stay as fallbacks for third-party managers.
     try:
         manager = manager_cls()
-        if hasattr(manager, "list"):
-            entries = manager.list()
-        elif hasattr(manager, "all"):
-            entries = manager.all()
+        for candidate in ("list_skills", "list", "all"):
+            lister = getattr(manager, candidate, None)
+            if callable(lister):
+                entries = lister()
+                break
         else:
-            entries = []
+            return {
+                "available": False,
+                "reason": f"{manager_cls.__name__} exposes no skill listing method",
+                "skills": [],
+            }
     except Exception as exc:  # noqa: BLE001
         return {"available": False, "reason": str(exc), "skills": []}
 
@@ -184,61 +193,74 @@ async def _classify_topology(args: dict[str, Any], ctx: CallContext) -> dict[str
 # Plan / execute (read-mostly; exposed at SCOPE_PLAN)
 # ---------------------------------------------------------------------------
 async def _plan(args: dict[str, Any], ctx: CallContext) -> dict[str, Any]:
+    """Produce a read-only plan via :func:`gitpilot.agentic.generate_plan`.
+
+    Batch V4-0B: this probed for ``agentic.build_plan``/``agentic.plan``, and
+    neither has ever existed — the real entrypoint is ``generate_plan`` — so
+    the tool reported ``no plan() entrypoint`` on every call.  The kwargs it
+    passed (``owner``/``repo``/``branch``/``workspace_root``) did not match
+    that function either, so simply renaming the lookup would still have
+    failed; the call is now built against the real signature.
+
+    ``workspace_root`` is accepted by the declared schema but unused: planning
+    runs against a GitHub repository, not a local checkout.
+    """
     prompt = args["prompt"]
     agentic = _safe_import("gitpilot.agentic")
     if agentic is None:
         return {"available": False, "reason": "agentic engine not loaded"}
 
-    plan_fn = getattr(agentic, "build_plan", None) or getattr(agentic, "plan", None)
+    plan_fn = (
+        getattr(agentic, "generate_plan", None)
+        or getattr(agentic, "build_plan", None)   # third-party/legacy aliases
+        or getattr(agentic, "plan", None)
+    )
     if plan_fn is None:
         return {"available": False, "reason": "no plan() entrypoint"}
+
+    owner, repo = args.get("owner"), args.get("repo")
+    if not owner or not repo:
+        return {
+            "available": False,
+            "reason": "owner and repo are required to plan against a repository",
+        }
+
     try:
         plan = await _maybe_await(
-            plan_fn(
-                prompt=prompt,
-                owner=args.get("owner"),
-                repo=args.get("repo"),
-                branch=args.get("branch"),
-                workspace_root=args.get("workspace_root"),
-            )
+            plan_fn(prompt, f"{owner}/{repo}", branch_name=args.get("branch"))
         )
-    except TypeError:
-        # Older signatures may not accept all kwargs; fall back to positional.
-        try:
-            plan = await _maybe_await(plan_fn(prompt))
-        except Exception as exc:  # noqa: BLE001
-            return {"available": False, "reason": str(exc)}
     except Exception as exc:  # noqa: BLE001
         return {"available": False, "reason": str(exc)}
 
+    if hasattr(plan, "model_dump"):
+        plan = plan.model_dump()
     return {"available": True, "plan": plan, "call_id": ctx.call_id}
 
 
 async def _execute(args: dict[str, Any], ctx: CallContext) -> dict[str, Any]:
-    plan_id = args["plan_id"]
-    agentic = _safe_import("gitpilot.agentic")
-    if agentic is None:
-        return {"available": False, "reason": "agentic engine not loaded"}
+    """Report honestly that plan-id execution is not implemented.
 
-    exec_fn = (
-        getattr(agentic, "execute_plan", None)
-        or getattr(agentic, "execute", None)
-    )
-    if exec_fn is None:
-        return {"available": False, "reason": "no execute() entrypoint"}
-    try:
-        result = await _maybe_await(
-            exec_fn(plan_id=plan_id, approval_token=args.get("approval_token"))
-        )
-    except TypeError:
-        try:
-            result = await _maybe_await(exec_fn(plan_id))
-        except Exception as exc:  # noqa: BLE001
-            return {"available": False, "reason": str(exc)}
-    except Exception as exc:  # noqa: BLE001
-        return {"available": False, "reason": str(exc)}
+    Batch V4-0B: this probed ``agentic.execute_plan``, found it, and then
+    called it with ``plan_id=``/``approval_token=`` — arguments it does not
+    take.  The real function needs the plan *object* plus a repository, and
+    GitPilot persists no server-side plan store to resolve an id against, so
+    the declared contract cannot be honoured by any renaming.  Callers got a
+    ``TypeError`` string that read like a bug in their request.
 
-    return {"available": True, "result": result, "call_id": ctx.call_id}
+    Until the agentic runtime lands (a run id replaces the plan id, and
+    ``/api/v2/agent/*`` becomes the execution surface), this returns a reason
+    that says what to use instead.
+    """
+    _ = args.get("plan_id")
+    return {
+        "available": False,
+        "reason": (
+            "gitpilot.execute is not implemented: plans are not persisted "
+            "server-side, so a plan_id cannot be resolved. Use POST "
+            "/api/chat/execute with the plan object returned by gitpilot.plan."
+        ),
+        "call_id": ctx.call_id,
+    }
 
 
 # ---------------------------------------------------------------------------

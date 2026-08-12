@@ -651,10 +651,14 @@ class TestWebSocketEndpoint:
         assert len(agent_msgs) == 1
         assert agent_msgs[0]["content"] == "Here is the explanation."
 
-        # Verify dispatch was called with canonical signature
+        # Verify dispatch was called with canonical signature.  ``token`` joined
+        # it in Batch V4-0D: this socket used to pass none at all, so repo-mode
+        # chat silently ran on the server's own credentials.  It is None here
+        # because the mock connection carries no Authorization header.
         mock_dispatch.assert_awaited_once_with(
             user_request="Explain the code",
             repo_full_name="owner/repo",
+            token=None,
             branch_name="main",
         )
 

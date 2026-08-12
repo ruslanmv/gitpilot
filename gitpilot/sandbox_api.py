@@ -103,6 +103,13 @@ class SandboxRunRequest(BaseModel):
     language: str
     code: str
     timeout_sec: Optional[int] = Field(default=None, ge=1, le=600)
+    #: Proof that an ExecutionPlan for exactly this code was approved
+    #: (Batch V4-D6, F7).  Minted by ``POST /api/sandbox/approve``.
+    approval_token: Optional[str] = None
+    #: Which session is running this, so a token cannot be spent by another and
+    #: so the *persisted* mode can be consulted.  There is deliberately no
+    #: ``permission_mode`` field: a request body is not an authorisation channel.
+    session_id: Optional[str] = None
 
 
 class SandboxRunResponse(BaseModel):
@@ -140,6 +147,8 @@ class SandboxPlanRequest(BaseModel):
     parent_run_id: Optional[str] = None
     # Override timeout per-plan; falls back to sandbox.timeout_sec.
     timeout_sec: Optional[int] = Field(default=None, ge=1, le=600)
+    #: The session the plan belongs to, so its approval token is bound to it.
+    session_id: Optional[str] = None
     # The list of files in the active repo, used to verify file-run
     # plans.  Sent by the client so the planner is stateless and
     # repo-aware without re-reading the tree on every plan call.
@@ -153,6 +162,17 @@ class SandboxPlanRequest(BaseModel):
 
 class SandboxPlanResponse(BaseModel):
     plan: Dict[str, Any]
+
+
+class SandboxApproveRequest(BaseModel):
+    plan_id: str
+    session_id: Optional[str] = None
+
+
+class SandboxApproveResponse(BaseModel):
+    approval_token: str
+    plan_id: str
+    expires_in: int
 
 
 # ----------------------------------------------------------------------
@@ -323,6 +343,7 @@ async def api_sandbox_plan(req: SandboxPlanRequest) -> SandboxPlanResponse:
                     f"or extension not in the runnable allowlist."
                 ),
             )
+        _remember_plan(plan, req.session_id, language=plan.language, code=plan.inline_code or "")
         return SandboxPlanResponse(plan=plan.to_dict())
 
     if req.code is not None:
@@ -348,11 +369,99 @@ async def api_sandbox_plan(req: SandboxPlanRequest) -> SandboxPlanResponse:
                     f"snippet is empty or language is not runnable."
                 ),
             )
+        _remember_plan(plan, req.session_id, language=req.language or "", code=req.code)
         return SandboxPlanResponse(plan=plan.to_dict())
 
     raise HTTPException(
         status_code=400,
         detail="provide either 'file' or 'code'+'language' to build a plan",
+    )
+
+
+#: Set ``GITPILOT_SANDBOX_REQUIRE_APPROVAL=0`` to run without a token.  It exists
+#: for a single-user local install that drives the endpoint from a script, and it
+#: is opt-out rather than opt-in because a shipped default of "trust the client"
+#: is what F7 was.
+_APPROVAL_ENV = "GITPILOT_SANDBOX_REQUIRE_APPROVAL"
+
+
+def _approval_required() -> bool:
+    return (os.environ.get(_APPROVAL_ENV, "1").strip().lower()
+            not in ("0", "false", "no", "off"))
+
+
+def _require_approval(req: SandboxRunRequest) -> None:
+    """Refuse a run nobody approved — Batch V4-D6 (F7)."""
+    if not _approval_required():
+        return
+
+    from .sandbox_tokens import get_store, session_runs_without_asking
+
+    session_id = (req.session_id or "").strip()
+
+    if req.approval_token:
+        ok, reason = get_store().consume(
+            req.approval_token,
+            language=req.language, code=req.code, session_id=session_id,
+        )
+        if ok:
+            return
+        raise HTTPException(status_code=403, detail=reason)
+
+    # The only other way through: a session the user themselves switched to
+    # `auto`, read from the persisted record.  Never from this request body.
+    if session_runs_without_asking(session_id):
+        return
+
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            "this run has not been approved: POST /api/sandbox/plan, then "
+            "/api/sandbox/approve, and send the resulting approval_token"
+        ),
+    )
+
+
+def _remember_plan(plan: Any, session_id: Optional[str], *, language: str, code: str) -> None:
+    """Keep the plan server-side so its approval can be verified (F7).
+
+    A file-run plan has no captured code — it reads the file at execute time —
+    so its digest covers the command instead. Either way the token is bound to
+    something the server chose, not to something the client sends back.
+    """
+    from .sandbox_tokens import get_store
+
+    payload = code if code else " ".join(plan.command)
+    get_store().remember(
+        plan_id=plan.plan_id,
+        session_id=session_id or "",
+        language=language or plan.language,
+        code=payload,
+        plan=plan.to_dict(),
+    )
+
+
+@router.post("/approve", response_model=SandboxApproveResponse)
+async def api_sandbox_approve(req: SandboxApproveRequest) -> SandboxApproveResponse:
+    """Approve a planned run and mint a single-use token — Batch V4-D6 (F7).
+
+    The ExecutionPlan card is unchanged; what changes is that its Approve button
+    now produces something the server will check. Before this, approval was
+    entirely client-side and ``/run`` executed whatever it was handed.
+    """
+    from .sandbox_tokens import TOKEN_TTL_S, get_store
+
+    token = get_store().approve(req.plan_id, req.session_id or "")
+    if token is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"no plan {req.plan_id!r} awaiting approval for this session; "
+                "request a plan first"
+            ),
+        )
+    return SandboxApproveResponse(
+        approval_token=token.token, plan_id=token.plan_id, expires_in=int(TOKEN_TTL_S),
     )
 
 
@@ -364,7 +473,13 @@ async def api_sandbox_run(req: SandboxRunRequest) -> SandboxRunResponse:
     UI POSTs ``{language, code}`` and renders ``stdout`` / ``stderr`` /
     ``exit_code`` next to the snippet.  The selected backend (local
     subprocess vs MatrixLab) is whatever the user picked in Settings.
+
+    Requires an approval token, or a session whose **persisted** mode is
+    ``auto`` — Batch V4-D6 (F7). Until then this endpoint executed arbitrary
+    code for anyone who could reach it, with the approval card providing the
+    appearance of a gate and none of the substance.
     """
+    _require_approval(req)
     lang = req.language.strip().lower()
     spec = LANGUAGE_RUNNERS.get(lang)
     if spec is None:

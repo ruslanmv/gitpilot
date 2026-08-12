@@ -23,7 +23,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -67,16 +66,16 @@ class HookResult:
 class HookManager:
     """Register and fire lifecycle hooks."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._hooks: Dict[HookEvent, List[HookDefinition]] = {
             e: [] for e in HookEvent
         }
 
-    def register(self, hook: HookDefinition):
+    def register(self, hook: HookDefinition) -> None:
         self._hooks[hook.event].append(hook)
         logger.info("Registered hook '%s' for event '%s'", hook.name, hook.event)
 
-    def unregister(self, event: HookEvent, name: str):
+    def unregister(self, event: HookEvent, name: str) -> None:
         self._hooks[event] = [h for h in self._hooks[event] if h.name != name]
 
     def list_hooks(self) -> List[Dict[str, Any]]:
@@ -92,7 +91,7 @@ class HookManager:
                 })
         return result
 
-    def load_from_file(self, path: Path):
+    def load_from_file(self, path: Path) -> None:
         """Load hooks from a JSON config file.
 
         Format::
@@ -166,10 +165,18 @@ class HookManager:
         context: Optional[Dict[str, Any]],
         cwd: Optional[Path],
     ) -> HookResult:
-        env = {**os.environ}
-        if context:
-            for k, v in context.items():
-                env[f"GITPILOT_HOOK_{k.upper()}"] = str(v)
+        # Batch V4-D5. This built the child environment from `os.environ`
+        # unfiltered — the same defect Batch V4-0C fixed in the terminal
+        # executor. It went unnoticed because nothing fired hooks; giving them
+        # callers without fixing it would hand every user-authored hook
+        # GITHUB_TOKEN and every provider API key.
+        from .shell_safety import strip_secret_env
+
+        overrides = {
+            f"GITPILOT_HOOK_{key.upper()}": str(value)
+            for key, value in (context or {}).items()
+        }
+        env = strip_secret_env(overrides=overrides)
 
         proc = await asyncio.create_subprocess_shell(
             hook.command,

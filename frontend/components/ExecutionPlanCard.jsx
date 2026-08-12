@@ -172,6 +172,32 @@ export async function fetchExecutionPlan(payload) {
   return data.plan;
 }
 
+/** Approve a plan and return the body to POST to /api/sandbox/run.
+ *
+ * The card's UX is unchanged; what changed is that the server now requires
+ * proof of approval.  Until Batch V4-D6 the approval was entirely client-side:
+ * /api/sandbox/run executed whatever it was handed, so anything that could
+ * reach it ran arbitrary code.  One helper for all three run buttons, so a
+ * future call site cannot forget the token and silently lose the gate. */
+export async function approveAndBuildRunBody(plan, { sessionId } = {}) {
+  const res = await fetch(apiUrl("/api/sandbox/approve"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ plan_id: plan.plan_id, session_id: sessionId || null }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.detail || `Approval failed (HTTP ${res.status})`);
+  }
+  return {
+    language: plan.language,
+    code: plan.inline_code,
+    timeout_sec: plan.timeout_sec,
+    approval_token: data.approval_token,
+    session_id: sessionId || null,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Styles
 // ---------------------------------------------------------------------------

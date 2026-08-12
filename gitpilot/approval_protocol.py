@@ -2,38 +2,36 @@
 """
 Tool approval protocol for agent execution.
 
-When an agent wants to run a dangerous tool (write_file, run_command,
-git_commit), the ApprovalGate pauses execution and waits for the user
-to approve via WebSocket, SSE callback, or VS Code postMessage.
+The gate pauses execution and waits for the user to approve, via WebSocket, SSE
+callback, or VS Code postMessage.
 
 Permission modes:
-  - "normal"  Ask user before dangerous tools (default)
+  - "normal"  Ask user before risky tools (default)
   - "auto"    Approve everything automatically
   - "plan"    Block all writes and commands (read-only)
+
+Two things moved out in Batch V4-D3/D4, and their absence is deliberate:
+
+* **``DANGEROUS_TOOLS`` is gone.** It was a hardcoded frozenset mixing VS Code
+  tool names with CrewAI display strings, which meant it recognised
+  ``"write_file"`` and ``"Write local file"`` but not ``fs.write`` — a tool
+  named in the canonical scheme fell straight through as safe. Risk now comes
+  from ``ToolSpec.risk``, command classification and capability qualifiers,
+  computed by :mod:`gitpilot.agent.policy`. The caller decides what to gate;
+  the gate's job is to ask.
+* **``on_checkpoint`` is gone.** The loop owns checkpointing
+  (:mod:`gitpilot.agent.checkpointing`), so the ``ask`` path cannot snapshot
+  twice and every permission mode snapshots the same way.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Callable, Dict, Optional
+from typing import Dict
 
 from .agent_events import AgentEventBus, approval_needed, approval_resolved
 
 logger = logging.getLogger(__name__)
-
-DANGEROUS_TOOLS = frozenset({
-    # VS Code local agent tool names
-    "write_file",
-    "edit_file",
-    "run_command",
-    "git_commit",
-    # CrewAI tool display names
-    "Write local file",
-    "Delete local file",
-    "Run shell command",
-    "Git commit",
-})
-
 
 class ApprovalGate:
     """
@@ -51,17 +49,11 @@ class ApprovalGate:
         self,
         bus: AgentEventBus,
         mode: str = "normal",
-        on_checkpoint: Optional[Callable[[str, dict], None]] = None,
     ) -> None:
         self._bus = bus
         self._mode = mode
         self._pending: Dict[str, asyncio.Future] = {}
         self._session_allowed: set[str] = set()
-        # Called immediately before a dangerous tool is allowed to run, so a
-        # checkpoint exists for every write. This is the only place all three
-        # permission modes converge, which is why the hook lives here rather
-        # than in each tool.
-        self._on_checkpoint = on_checkpoint
 
     @property
     def mode(self) -> str:
@@ -77,18 +69,16 @@ class ApprovalGate:
         tool_args: dict,
         summary: str = "",
         diff_preview: str | None = None,
+        risk: str = "medium",
     ) -> bool:
         """
         Returns True if the tool may proceed. Blocks until user responds.
-        """
-        if tool_name not in DANGEROUS_TOOLS:
-            return True
 
+        Every call reaching here is one the caller decided needs a decision —
+        the gate no longer second-guesses that against a name list, because the
+        list could not recognise a canonically-named tool.
+        """
         if self._mode == "auto":
-            # Auto mode is the one that most needs an undo: nobody saw this
-            # coming, so the checkpoint is the only thing standing between the
-            # user and an edit they never agreed to.
-            self._checkpoint(tool_name, tool_args)
             return True
 
         if self._mode == "plan":
@@ -98,15 +88,12 @@ class ApprovalGate:
             return False
 
         if tool_name in self._session_allowed:
-            self._checkpoint(tool_name, tool_args)
             return True
 
         # Normal mode: ask user
         request_id = f"approval-{id(self)}-{len(self._pending)}"
         future: asyncio.Future = asyncio.get_event_loop().create_future()
         self._pending[request_id] = future
-
-        risk = "high" if tool_name in ("run_command", "Run shell command") else "medium"
 
         await self._bus.emit(
             approval_needed(
@@ -137,26 +124,8 @@ class ApprovalGate:
         if approved and scope == "session":
             self._session_allowed.add(tool_name)
 
-        if approved:
-            self._checkpoint(tool_name, tool_args)
-
         await self._bus.emit(approval_resolved(request_id, approved))
         return approved
-
-    def _checkpoint(self, tool_name: str, tool_args: dict) -> None:
-        """Snapshot before the tool runs, and never at the cost of the tool.
-
-        A checkpoint that fails must not block the work the user asked for —
-        it is a safety net, and a safety net that stops the show is worse
-        than one with a hole in it. The failure is logged and execution
-        continues.
-        """
-        if self._on_checkpoint is None:
-            return
-        try:
-            self._on_checkpoint(tool_name, tool_args)
-        except Exception as e:
-            logger.warning("could not checkpoint before %s: %s", tool_name, e)
 
     def resolve(
         self, request_id: str, approved: bool, scope: str = "once"

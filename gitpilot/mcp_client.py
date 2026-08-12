@@ -212,6 +212,40 @@ class MCPClient:
         texts = [c.get("text", "") for c in content if c.get("type") == "text"]
         return "\n".join(texts) if texts else result
 
+    def _make_crewai_wrapper(
+        self,
+        crewai_tool: Any,
+        conn: MCPConnection,
+        tool_name: str,
+        description: str,
+    ) -> Any:
+        """Build one CrewAI tool bound to exactly one MCP tool.
+
+        A factory, not an inline closure, on purpose.  Defining the wrapper in
+        the loop body captured ``conn``/``tool_name`` by reference to the
+        enclosing scope, so every generated tool invoked whichever tool the
+        loop happened to visit last — each wrapper carried the right *name* and
+        called the wrong *tool*.  Binding through a function's parameters is
+        the fix; default arguments would work too but would leak into the
+        signature CrewAI derives the args schema from.
+        """
+        def _invoke(params: str = "{}") -> str:
+            import asyncio as _aio
+
+            loop = _aio.new_event_loop()
+            try:
+                parsed = json.loads(params) if isinstance(params, str) else params
+                return str(loop.run_until_complete(
+                    self.call_tool(conn, tool_name, parsed)
+                ))
+            finally:
+                loop.close()
+
+        # Set before decorating: CrewAI reads the description off the
+        # docstring at decoration time, so assigning afterwards was a no-op.
+        _invoke.__doc__ = description
+        return crewai_tool(tool_name)(_invoke)
+
     def to_crewai_tools(self, conn: MCPConnection) -> list:
         """Wrap MCP tools as CrewAI-compatible tool functions.
 
@@ -219,29 +253,15 @@ class MCPClient:
         """
         from crewai.tools import tool as crewai_tool
 
-        wrapped = []
-        for mcp_tool in conn.tools:
-            # Capture in closure
-            _conn = conn
-            _name = mcp_tool.name
-            _desc = mcp_tool.description or f"MCP tool: {_name}"
-
-            @crewai_tool(_name)
-            def _wrapper(params: str = "{}") -> str:
-                __doc__ = _desc  # noqa: F841
-                import asyncio as _aio
-                loop = _aio.new_event_loop()
-                try:
-                    parsed = json.loads(params) if isinstance(params, str) else params
-                    return str(loop.run_until_complete(
-                        MCPClient.call_tool(self, _conn, _name, parsed)
-                    ))
-                finally:
-                    loop.close()
-
-            _wrapper.__doc__ = _desc
-            wrapped.append(_wrapper)
-        return wrapped
+        return [
+            self._make_crewai_wrapper(
+                crewai_tool,
+                conn,
+                mcp_tool.name,
+                mcp_tool.description or f"MCP tool: {mcp_tool.name}",
+            )
+            for mcp_tool in conn.tools
+        ]
 
     # ------------------------------------------------------------------
     # Transport internals
@@ -309,7 +329,16 @@ class MCPClient:
         url = conn.config.url
         if not url:
             raise ValueError(f"HTTP server '{conn.config.name}' requires a url")
-        headers = {**conn.config.headers, "Content-Type": "application/json"}
+        headers = {
+            **conn.config.headers,
+            "Content-Type": "application/json",
+            # Streamable-HTTP MCP servers choose their response framing from Accept,
+            # and some — MCP Context Forge's `/mcp` mount among them — refuse a
+            # request that does not admit the event-stream form even when they answer
+            # with plain JSON. Naming both is what makes one client work against a
+            # simple server and a gateway.
+            "Accept": "application/json, text/event-stream",
+        }
         if conn.config.auth_token:
             headers["Authorization"] = f"Bearer {conn.config.auth_token}"
         async with httpx.AsyncClient(timeout=30) as client:

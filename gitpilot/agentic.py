@@ -2196,15 +2196,13 @@ async def dispatch_request(
             "lite_mode": True,
         }
 
-    _active_topology = None
-    if _resolved_tid:
-        _active_topology = get_topology(_resolved_tid)
-
     # ---------- Topology-aware routing (additive) ----------
-    _active_topology = None
-    _resolved_tid = topology_id or get_saved_topology_preference()
-    if _resolved_tid:
-        _active_topology = get_topology(_resolved_tid)
+    # ``_resolved_tid`` was already resolved above — explicit ``topology_id``
+    # wins over the saved preference — so this reuses it rather than reading
+    # the preference file a second time.  Batch V4-0A removed a duplicated
+    # pair of blocks here: the first computed ``_active_topology`` and the
+    # second immediately overwrote it with the same value.
+    _active_topology = get_topology(_resolved_tid) if _resolved_tid else None
 
     if _active_topology and _active_topology.routing_policy.strategy == RoutingStrategy.fixed_sequence:
         # Pipeline topologies (T3-T7): build a multi-task sequential crew
@@ -2456,7 +2454,12 @@ async def _dispatch_pipeline(
         "category": "topology_pipeline",
         "topology_id": topology.id,
         "topology_name": topology.name,
-        "execution_style": topology.execution_style.value,
+        # What ran, not what the topology declares.  Since Batch V4-G3 a migrated
+        # pipeline's document says ``agentic_loop`` while this legacy dispatcher
+        # still serves it until the flip (§15.4), and a response describing a run
+        # that just happened has to name the engine that actually ran it.
+        "execution_style": ExecutionStyle.crew_pipeline.value,
+        "declared_execution_style": topology.execution_style.value,
         "agents_used": sequence,
         "result": result_text,
     }
