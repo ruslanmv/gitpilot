@@ -1,7 +1,7 @@
 {
   "name": "gitpilot-vscode",
-  "displayName": "GitPilot \u2014 Multi-Agent AI Coding Assistant",
-  "description": "The first multi-agent AI pair programmer for VS Code. Ten specialized agents \u2014 Explorer, Planner, Coder, Reviewer and more \u2014 collaborate on every task, and you approve every change. Works with OllaBridge, Ollama, Open WebUI, OpenAI, Claude, watsonx, or any OpenAI-compatible endpoint.",
+  "displayName": "GitPilot — Multi-Agent AI Coding Assistant",
+  "description": "The first multi-agent AI pair programmer for VS Code. Ten specialized agents — Explorer, Planner, Coder, Reviewer and more — collaborate on every task, and you approve every change. Works with OllaBridge, Ollama, Open WebUI, OpenAI, Claude, watsonx, or any OpenAI-compatible endpoint.",
   "version": "0.2.8",
   "preview": false,
   "publisher": "ruslanmv",
@@ -301,13 +301,13 @@
       },
       {
         "command": "gitpilot.openPhaseRunbooks",
-        "title": "Open Phase Runbook\u2026",
+        "title": "Open Phase Runbook…",
         "category": "GitPilot",
         "icon": "$(notebook)"
       },
       {
         "command": "gitpilot.showFeatureFlags",
-        "title": "Copy Feature Flag\u2026",
+        "title": "Copy Feature Flag…",
         "category": "GitPilot",
         "icon": "$(beaker)"
       },
@@ -586,7 +586,7 @@
           "default": "normal",
           "enumDescriptions": [
             "Ask before risky operations (recommended)",
-            "Read-only mode \u2014 all writes blocked",
+            "Read-only mode — all writes blocked",
             "Allow all operations without confirmation"
           ],
           "description": "Agent permission mode",
@@ -655,7 +655,7 @@
           ],
           "enumDescriptions": [
             "Detect what the gateway accepts (recommended)",
-            "Send no credential \u2014 for a gateway with authentication disabled",
+            "Send no credential — for a gateway with authentication disabled",
             "Send a Forge API token",
             "Sign in with an admin email and password"
           ],
@@ -666,7 +666,7 @@
         "gitpilot.mcp.adminEmail": {
           "type": "string",
           "default": "",
-          "description": "Admin email used to sign in to the MCP gateway. The password is NOT a setting: run 'GitPilot: Configure MCP Gateway' to enter it \u2014 it is stored by the GitPilot server, never in VS Code.",
+          "description": "Admin email used to sign in to the MCP gateway. The password is NOT a setting: run 'GitPilot: Configure MCP Gateway' to enter it — it is stored by the GitPilot server, never in VS Code.",
           "order": 22
         },
         "gitpilot.mcp.forgePort": {
