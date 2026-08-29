@@ -7,7 +7,8 @@ future change can't silently regress the production behaviour:
 - env override: GITPILOT_SANDBOX leaks into /status.env_override
 - token redaction: GET /settings never returns matrixlab_token
 - snippet execution: POST /run with the default subprocess backend
-  produces stdout the agent can read
+  produces stdout the agent can read — through plan → approve → run, since
+  Batch V4-D6 made the server require proof of approval (F7)
 - language whitelist: unknown languages return 400 not 500
 - MatrixLab routing: backend=matrixlab POSTs to /code/run (verified
   with httpx.MockTransport rather than a live runner)
@@ -117,12 +118,38 @@ def test_env_var_surfaces_as_override(client: TestClient, monkeypatch) -> None:
     assert r.json()["env_override"] == "GITPILOT_SANDBOX"
 
 
+def _approved_run(
+    client: TestClient, language: str, code: str, **extra,
+) -> httpx.Response:
+    """POST /run the way a client has to since Batch V4-D6 (F7).
+
+    Plan, approve, then run with the token. Before this the endpoint executed
+    whatever it was handed and the approval card was decoration; these tests
+    passed by sending the third request only.
+    """
+    plan = client.post(
+        "/api/sandbox/plan",
+        json={"language": language, "code": code, "source": "code_block"},
+    )
+    assert plan.status_code == 200, plan.text
+    plan_id = plan.json()["plan"]["plan_id"]
+
+    approval = client.post("/api/sandbox/approve", json={"plan_id": plan_id})
+    assert approval.status_code == 200, approval.text
+
+    return client.post(
+        "/api/sandbox/run",
+        json={
+            "language": language, "code": code,
+            "approval_token": approval.json()["approval_token"],
+            **extra,
+        },
+    )
+
+
 def test_run_python_via_subprocess_backend(client: TestClient) -> None:
     """Default backend executes a snippet and surfaces stdout."""
-    r = client.post(
-        "/api/sandbox/run",
-        json={"language": "python", "code": "print('it works'); print(7 + 5)"},
-    )
+    r = _approved_run(client, "python", "print('it works'); print(7 + 5)")
     assert r.status_code == 200
     data = r.json()
     assert data["backend"] == "subprocess"
@@ -135,10 +162,7 @@ def test_run_surfaces_python_traceback(client: TestClient) -> None:
     """Error retrieval contract: stderr comes back verbatim, exit
     code non-zero.  This is what the agent's run_in_sandbox tool
     reads to plan a fix."""
-    r = client.post(
-        "/api/sandbox/run",
-        json={"language": "python", "code": "raise ValueError('boom')"},
-    )
+    r = _approved_run(client, "python", "raise ValueError('boom')")
     assert r.status_code == 200
     data = r.json()
     assert data["exit_code"] != 0
@@ -146,7 +170,10 @@ def test_run_surfaces_python_traceback(client: TestClient) -> None:
     assert "boom" in data["stderr"]
 
 
-def test_run_rejects_unknown_language(client: TestClient) -> None:
+def test_run_rejects_unknown_language(client: TestClient, monkeypatch) -> None:
+    """A language check is not an authorisation check, so it must not need a
+    token to report a 400 — but it must not run anything either."""
+    monkeypatch.setenv("GITPILOT_SANDBOX_REQUIRE_APPROVAL", "0")
     r = client.post(
         "/api/sandbox/run",
         json={"language": "ruby", "code": "puts 'hi'"},
@@ -156,7 +183,8 @@ def test_run_rejects_unknown_language(client: TestClient) -> None:
     assert "ruby" in detail
 
 
-def test_run_rejects_empty_code(client: TestClient) -> None:
+def test_run_rejects_empty_code(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setenv("GITPILOT_SANDBOX_REQUIRE_APPROVAL", "0")
     r = client.post("/api/sandbox/run", json={"language": "python", "code": "   "})
     assert r.status_code == 400
 
@@ -190,10 +218,7 @@ def test_matrixlab_backend_calls_code_run(client: TestClient, monkeypatch) -> No
     monkeypatch.setattr(httpx, "AsyncClient", _patched)
 
     client.put("/api/sandbox/config", json={"backend": "matrixlab"})
-    r = client.post(
-        "/api/sandbox/run",
-        json={"language": "py", "code": "print('hi')"},
-    )
+    r = _approved_run(client, "py", "print('hi')")
     assert r.status_code == 200, r.text
     data = r.json()
     assert data["backend"] == "matrixlab"

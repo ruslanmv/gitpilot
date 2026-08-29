@@ -34,16 +34,25 @@ invocation at a time.
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import json
 import logging
 import os
 import shlex
+import signal
 import time
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import httpx
+
+from .shell_safety import BLOCKED_PATTERNS as _SHARED_BLOCKED_PATTERNS
+from .shell_safety import NETWORK_ENV_KEYS as _SHARED_NETWORK_ENV_KEYS
+from .shell_safety import SECRET_ENV_KEYS as _SHARED_SECRET_ENV_KEYS
+from .shell_safety import blocked_reason, strip_secret_env
 
 logger = logging.getLogger(__name__)
 
@@ -67,15 +76,17 @@ MAX_OUTPUT_BYTES = 512_000
 # GITPILOT_MATRIXLAB_URL or via Settings → Sandbox.
 DEFAULT_MATRIXLAB_URL = "http://localhost:8765"
 
-# Conservative deny patterns reused across backends.
-BLOCKED_PATTERNS: Tuple[str, ...] = (
-    "rm -rf /",
-    "mkfs",
-    "dd if=/dev/zero",
-    ":(){ :|:& };:",
-    "shutdown -h",
-    "shutdown -r",
-)
+# Directories never worth shipping to the Runner in a workspace zip.
+_WORKSPACE_ZIP_SKIP = frozenset({
+    ".git", ".venv", "venv", "node_modules", "__pycache__",
+    ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", "dist", "build",
+})
+
+# Conservative deny patterns reused across backends.  Defined in
+# :mod:`gitpilot.shell_safety` so the terminal executor cannot drift from it
+# (Batch V4-0C); re-exported here because this name is part of the module's
+# established surface.
+BLOCKED_PATTERNS: Tuple[str, ...] = _SHARED_BLOCKED_PATTERNS
 
 
 # ----------------------------------------------------------------------
@@ -116,10 +127,10 @@ class SandboxPolicy:
     image: Optional[str] = None  # MatrixLab image override
 
     def validate(self, command_str: str) -> None:
+        matched = blocked_reason(command_str, self.blocked_patterns)
+        if matched is not None:
+            raise PermissionError(f"command blocked by sandbox policy: {matched!r}")
         lower = command_str.lower().strip()
-        for pattern in self.blocked_patterns:
-            if pattern in lower:
-                raise PermissionError(f"command blocked by sandbox policy: {pattern!r}")
         if self.allowed_commands is not None and lower:
             base = lower.split()[0]
             if base not in self.allowed_commands:
@@ -169,6 +180,113 @@ class Sandbox:
         return data.decode("utf-8", errors="replace"), False
 
 
+def _kill_process_tree(proc: "asyncio.subprocess.Process") -> None:
+    """Kill the whole process group the command was started in.
+
+    ``create_subprocess_shell`` runs ``/bin/sh -c <command>``, and on the
+    shells that fork rather than exec, killing that shell leaves the real
+    program running: it keeps the host busy forever *and* holds the
+    stdout/stderr pipes open, so the sandbox could not even tell that the
+    run had ended.  Because the launch asks for ``start_new_session``,
+    the whole tree is one process group and one signal reaches all of it.
+    """
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (ProcessLookupError, PermissionError, OSError):
+        pgid = None
+    # Never signal our own group — that would take the server down with it.
+    if pgid is not None and pgid != os.getpgid(0):
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+            return
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+    try:
+        proc.kill()
+    except ProcessLookupError:
+        pass
+
+
+async def _drain(
+    stream: Optional[asyncio.StreamReader], buf: bytearray, cap: int,
+) -> None:
+    """Accumulate *stream* into *buf*, keeping at most *cap* bytes.
+
+    Reading into a buffer the caller owns is what makes partial output
+    survivable: when the run is killed at the timeout the bytes already
+    read are still in ``buf``, whereas ``communicate()`` loses everything
+    it had buffered when :func:`asyncio.wait_for` cancels it.
+
+    Past the cap the stream is still drained, just discarded — a process
+    whose output nobody reads blocks on a full pipe and would then be
+    killed as a timeout, turning a merely chatty script into a failure.
+    Keeping one chunk past the cap is what marks the result truncated.
+    """
+    if stream is None:
+        return
+    while True:
+        chunk = await stream.read(65_536)
+        if not chunk:
+            return
+        if len(buf) <= cap:
+            buf.extend(chunk)
+
+
+async def _communicate(
+    proc: "asyncio.subprocess.Process",
+    stdin: Optional[str],
+    timeout: float,
+    cap: int,
+) -> Tuple[bytes, bytes, bool]:
+    """Run *proc* to completion, returning ``(stdout, stderr, timed_out)``.
+
+    Replaces ``asyncio.wait_for(proc.communicate(), timeout)``, which
+    discarded every byte the process had produced whenever it hit the
+    timeout — so a script that printed thirty lines and then blocked
+    showed the user an empty result and no clue where it stopped.
+    """
+    out, err = bytearray(), bytearray()
+
+    if stdin is not None and proc.stdin is not None:
+        try:
+            proc.stdin.write(stdin.encode())
+            await proc.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            try:
+                proc.stdin.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    tasks = [
+        asyncio.ensure_future(_drain(proc.stdout, out, cap)),
+        asyncio.ensure_future(_drain(proc.stderr, err, cap)),
+        asyncio.ensure_future(proc.wait()),
+    ]
+
+    # ``asyncio.wait`` rather than ``wait_for``: it reports the timeout
+    # without cancelling anything.  A cancelled ``proc.wait()`` leaves the
+    # subprocess transport unreaped — the process is gone but its
+    # destructor still fires later, on a loop that has since closed
+    # ("Event loop is closed" from a __del__ nobody can trace).
+    _, pending = await asyncio.wait(tasks, timeout=timeout)
+    timed_out = bool(pending)
+
+    if timed_out:
+        _kill_process_tree(proc)
+        # The pipes reach EOF once the process dies, so the same tasks
+        # finish on their own; a bounded second wait collects them
+        # (and the exit status) without re-hanging the call.
+        _, still_pending = await asyncio.wait(pending, timeout=5)
+        for task in still_pending:
+            task.cancel()
+        if still_pending:
+            await asyncio.gather(*still_pending, return_exceptions=True)
+
+    return bytes(out), bytes(err), timed_out
+
+
 # ----------------------------------------------------------------------
 # NullSandbox  — explicit passthrough (legacy)
 # ----------------------------------------------------------------------
@@ -202,22 +320,24 @@ class NullSandbox(Sandbox):
             cwd=str(cwd or self.policy.workspace or Path.cwd()),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            stdin=asyncio.subprocess.PIPE if stdin else None,
+            # DEVNULL, never the parent's stdin: a server started from a
+            # terminal would otherwise hand the sandboxed process its tty,
+            # so an ``input()`` call blocks until the timeout instead of
+            # raising EOFError immediately.
+            stdin=(asyncio.subprocess.PIPE if stdin is not None
+                   else asyncio.subprocess.DEVNULL),
             env=full_env,
+            # Its own session/process group, so a timeout can kill the
+            # whole tree rather than just the ``sh -c`` wrapper, and so
+            # the command never shares the server's controlling terminal.
+            start_new_session=True,
         )
-        timed_out = False
-        try:
-            stdout_b, stderr_b = await asyncio.wait_for(
-                proc.communicate(input=stdin.encode() if stdin else None),
-                timeout=timeout or self.policy.timeout_sec,
-            )
-        except asyncio.TimeoutError:
-            timed_out = True
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-            stdout_b, stderr_b = b"", b""
+        stdout_b, stderr_b, timed_out = await _communicate(
+            proc,
+            stdin,
+            timeout or self.policy.timeout_sec,
+            self.policy.max_output_bytes,
+        )
         stdout, truncated_out = self._truncate(stdout_b)
         stderr, truncated_err = self._truncate(stderr_b)
         return SandboxResult(
@@ -251,15 +371,9 @@ class SubprocessSandbox(Sandbox):
     backend = BACKEND_SUBPROCESS
 
     # Keys removed from the environment when ``allow_network`` is False.
-    _NETWORK_ENV_KEYS = (
-        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
-        "http_proxy", "https_proxy", "all_proxy", "no_proxy",
-    )
+    _NETWORK_ENV_KEYS = _SHARED_NETWORK_ENV_KEYS
     # Always stripped — secrets that shouldn't leak into sandboxed runs.
-    _STRIP_ALWAYS = (
-        "GITHUB_TOKEN", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
-        "WATSONX_API_KEY", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
-    )
+    _STRIP_ALWAYS = _SHARED_SECRET_ENV_KEYS
 
     async def run(
         self,
@@ -283,22 +397,24 @@ class SubprocessSandbox(Sandbox):
             cwd=str(target_cwd),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            stdin=asyncio.subprocess.PIPE if stdin else None,
+            # DEVNULL, never the parent's stdin: a server started from a
+            # terminal would otherwise hand the sandboxed process its tty,
+            # so an ``input()`` call blocks until the timeout instead of
+            # raising EOFError immediately.
+            stdin=(asyncio.subprocess.PIPE if stdin is not None
+                   else asyncio.subprocess.DEVNULL),
             env=full_env,
+            # Its own session/process group, so a timeout can kill the
+            # whole tree rather than just the ``sh -c`` wrapper, and so
+            # the command never shares the server's controlling terminal.
+            start_new_session=True,
         )
-        timed_out = False
-        try:
-            stdout_b, stderr_b = await asyncio.wait_for(
-                proc.communicate(input=stdin.encode() if stdin else None),
-                timeout=timeout or self.policy.timeout_sec,
-            )
-        except asyncio.TimeoutError:
-            timed_out = True
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-            stdout_b, stderr_b = b"", b""
+        stdout_b, stderr_b, timed_out = await _communicate(
+            proc,
+            stdin,
+            timeout or self.policy.timeout_sec,
+            self.policy.max_output_bytes,
+        )
         stdout, truncated_out = self._truncate(stdout_b)
         stderr, truncated_err = self._truncate(stderr_b)
         return SandboxResult(
@@ -313,10 +429,7 @@ class SubprocessSandbox(Sandbox):
         )
 
     def _build_env(self, overrides: Optional[Mapping[str, str]]) -> Dict[str, str]:
-        env: Dict[str, str] = {k: v for k, v in os.environ.items() if k not in self._STRIP_ALWAYS}
-        if not self.policy.allow_network:
-            for key in self._NETWORK_ENV_KEYS:
-                env.pop(key, None)
+        env = strip_secret_env(allow_network=self.policy.allow_network)
         env.update(self.policy.extra_env)
         if overrides:
             env.update(overrides)
@@ -339,14 +452,27 @@ class MatrixLabSandbox(Sandbox):
     via the ``GITPILOT_MATRIXLAB_URL`` environment variable or by
     passing ``base_url`` to the constructor.
 
-    The protocol used here is the simple Runner API documented for
-    MatrixLab: ``POST /repo/run`` with a JSON body ``{cmd, cwd, env,
-    timeout, image, stdin}`` and a response containing ``exit_code``,
+    The protocol is the Runner's **native** contract: ``POST /run`` with
+    a JSON body ``{cmd, cwd, workspace, env, timeout, image,
+    allow_network, stdin}`` and a response containing ``exit_code``,
     ``stdout``, ``stderr``, ``artifacts`` and ``sandbox_id``.  When
     MatrixLab is unreachable, callers should pick a different backend
     (this class deliberately surfaces a clear error instead of silently
     falling back, so security-sensitive runs are never mis-routed).
+
+    This used to POST ``/repo/run`` with ``mount_workspace``.  That is a
+    different endpoint on the Runner — it clones a **git repository**
+    and its request model requires ``repo_url``, so every workspace
+    command came back ``422 Unprocessable Entity`` and the backend
+    looked broken rather than misaddressed.  The Runner has no host
+    mount either: a workspace travels as a zip, which is what
+    :meth:`_workspace_payload` builds.
     """
+
+    #: Cap on the zipped workspace shipped to the Runner.  Well under the
+    #: Runner's own limit; a workspace larger than this is a sign the
+    #: caller meant to run against a repo checkout, not a snippet dir.
+    max_workspace_bytes = 32 * 1024 * 1024
 
     backend = BACKEND_MATRIXLAB
 
@@ -365,13 +491,82 @@ class MatrixLabSandbox(Sandbox):
         self._owns_http = http_client is None
 
     async def health(self) -> Dict[str, Any]:
+        """Probe ``GET /health`` and report the Runner's *own* verdict.
+
+        A 200 is not enough to call the backend usable: the Runner
+        answers while its Docker daemon is down, and reporting that as
+        healthy sent users to a green pill in Settings followed by a
+        failure on every run.  ``ok`` now means "the Runner says it can
+        execute", and the reason travels with it.
+        """
         try:
             client = await self._client()
             resp = await client.get(f"{self.base_url}/health", timeout=5.0)
             resp.raise_for_status()
-            return {"backend": self.backend, "ok": True, "remote": resp.json()}
+            remote = resp.json()
         except Exception as exc:
             return {"backend": self.backend, "ok": False, "error": str(exc)}
+
+        if isinstance(remote, dict) and remote.get("ok") is False:
+            docker = remote.get("docker") or {}
+            detail = ""
+            if isinstance(docker, dict):
+                detail = str(docker.get("error") or docker.get("detail") or "")
+            return {
+                "backend": self.backend,
+                "ok": False,
+                "remote": remote,
+                "error": (
+                    "MatrixLab Runner is reachable but reports it cannot "
+                    "execute (its Docker daemon is unavailable)"
+                    + (f": {detail}" if detail else "")
+                ),
+            }
+        return {"backend": self.backend, "ok": True, "remote": remote}
+
+    def _workspace_payload(self) -> Optional[Dict[str, Any]]:
+        """Zip ``policy.workspace`` into the Runner's workspace ref.
+
+        Returns ``None`` when there is nothing to ship (no workspace, an
+        empty one, or one over :attr:`max_workspace_bytes`) so the command
+        still runs — just against the image's bare filesystem.
+        """
+        workspace = self.policy.workspace
+        if workspace is None:
+            return None
+        root = Path(workspace)
+        if not root.is_dir():
+            return None
+
+        buf = io.BytesIO()
+        total = 0
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for path in sorted(root.rglob("*")):
+                if not path.is_file() or path.is_symlink():
+                    continue
+                rel = path.relative_to(root)
+                if any(part in _WORKSPACE_ZIP_SKIP for part in rel.parts):
+                    continue
+                try:
+                    size = path.stat().st_size
+                except OSError:
+                    continue
+                total += size
+                if total > self.max_workspace_bytes:
+                    logger.warning(
+                        "workspace %s exceeds %d bytes — running without it",
+                        root, self.max_workspace_bytes,
+                    )
+                    return None
+                zf.write(path, arcname=str(rel))
+
+        payload = buf.getvalue()
+        if len(payload) <= 22:  # an empty zip is just the end-of-archive record
+            return None
+        return {
+            "type": "zip",
+            "zip_base64": base64.b64encode(payload).decode("ascii"),
+        }
 
     async def run(
         self,
@@ -384,18 +579,40 @@ class MatrixLabSandbox(Sandbox):
     ) -> SandboxResult:
         command_str, _ = self._resolve_command(command)
         self.policy.validate(command_str)
+        # ``cwd`` is a path *inside the container*, and the workspace is
+        # unpacked at its root — so a host path here (what this used to
+        # send) named a directory the container does not have.  An
+        # explicit cwd is honoured only when it is relative.
+        rel_cwd = "."
+        if cwd is not None:
+            candidate = Path(cwd)
+            if candidate.is_absolute() and self.policy.workspace is not None:
+                try:
+                    rel_cwd = str(candidate.resolve().relative_to(
+                        Path(self.policy.workspace).resolve()
+                    )) or "."
+                except ValueError:
+                    rel_cwd = "."
+            elif not candidate.is_absolute():
+                rel_cwd = str(candidate)
+
         body: Dict[str, Any] = {
             "cmd": command_str,
-            "cwd": str(cwd or self.policy.workspace or "/workspace"),
+            "cwd": rel_cwd,
             "env": {**self.policy.extra_env, **(env or {})},
             "timeout": timeout or self.policy.timeout_sec,
-            "image": self.policy.image or os.environ.get(ENV_MATRIXLAB_IMAGE),
             "allow_network": self.policy.allow_network,
         }
+        # ``image`` is a non-nullable string on the Runner with a working
+        # default — send it only when we actually have an override.
+        image = self.policy.image or os.environ.get(ENV_MATRIXLAB_IMAGE)
+        if image:
+            body["image"] = image
         if stdin is not None:
             body["stdin"] = stdin
-        if self.policy.workspace is not None:
-            body["mount_workspace"] = str(self.policy.workspace)
+        workspace_ref = self._workspace_payload()
+        if workspace_ref is not None:
+            body["workspace"] = workspace_ref
 
         headers = {"Content-Type": "application/json"}
         if self.token:
@@ -405,7 +622,7 @@ class MatrixLabSandbox(Sandbox):
         start = time.monotonic()
         try:
             resp = await client.post(
-                f"{self.base_url}/repo/run",
+                f"{self.base_url}/run",
                 json=body,
                 headers=headers,
                 timeout=(timeout or self.policy.timeout_sec) + 5,
@@ -418,7 +635,17 @@ class MatrixLabSandbox(Sandbox):
             resp.raise_for_status()
             data = resp.json()
         except (httpx.HTTPStatusError, json.JSONDecodeError) as exc:
-            raise SandboxRunError(f"MatrixLab returned an error: {exc}") from exc
+            # Carry the Runner's own body into the message: a bare
+            # "422 Unprocessable Entity" tells the operator nothing about
+            # which field the Runner rejected.
+            detail = ""
+            try:
+                detail = f" — {resp.text[:400]}"
+            except Exception:  # noqa: BLE001
+                pass
+            raise SandboxRunError(
+                f"MatrixLab returned an error: {exc}{detail}"
+            ) from exc
 
         return SandboxResult(
             backend=self.backend,

@@ -310,8 +310,24 @@ export type ExtensionToWebviewMessage =
   // ── V2 streaming events (additive) ──
   | { type: "CHAT_STREAM_CHUNK"; payload: { content: string } }
   | { type: "CHAT_STREAM_END"; payload: { id?: string; usage?: { prompt_tokens: number; completion_tokens: number } } }
-  | { type: "AGENT_TOOL_ACTIVITY"; payload: { id: string; name: string; status: "running" | "completed" | "failed"; args?: Record<string, unknown>; result?: string; is_error?: boolean } }
-  | { type: "TOOL_APPROVAL_REQUEST"; payload: { id: string; tool: string; args: Record<string, unknown>; summary: string; diffPreview?: string; riskLevel: "low" | "medium" | "high" } }
+  //: `durationMs` and `parentCallId` arrive with the agentic engine (Batch
+  //: V4-E5): the first turns a list of tool names into a readable trace, the
+  //: second is what lets a subagent's activity nest under the call that spawned
+  //: it rather than appearing as the parent's own work.
+  | { type: "AGENT_TOOL_ACTIVITY"; payload: { id: string; name: string; status: "running" | "completed" | "failed"; args?: Record<string, unknown>; result?: string; is_error?: boolean; durationMs?: number; parentCallId?: string; subagent?: string } }
+  //: `commandClass` and `sandbox` say *what kind of thing* is being approved.
+  //: "Run a shell command?" left the user to read the string themselves.
+  | { type: "TOOL_APPROVAL_REQUEST"; payload: { id: string; tool: string; args: Record<string, unknown>; summary: string; diffPreview?: string; riskLevel: "low" | "medium" | "high"; commandClass?: string; sandbox?: { backend?: string; network?: boolean; timeoutSec?: number; workspace?: string } } }
+  //: The checklist the model maintains (Batch V4-E1). For a small model the
+  //: engine maintains it instead, so the panel looks the same either way.
+  | { type: "AGENT_TODO_UPDATE"; payload: { items: Array<{ id: string; text: string; status: string }>; source?: string } }
+  //: A subagent's lifecycle, so the trace can show a nested block rather than a
+  //: gap where the parent appeared to stall (Batch V4-E2).
+  | { type: "AGENT_DELEGATION"; payload: { parentCallId: string; agent: string; title?: string; status: "running" | "completed" | "partial" | "failed" } }
+  //: A run that changed files without a passing test run (Batch V4-E3).
+  | { type: "AGENT_VERIFICATION"; payload: { cycle: number; maxCycles: number; command: string } }
+  //: An interrupted run that could be picked up again (active once V4-F1 lands).
+  | { type: "AGENT_RESUMABLE"; payload: { runId: string; sessionId: string; reason: string } }
   | { type: "PLAN_STEP_UPDATE"; payload: { stepIndex: number; stepTitle: string; action: string; status: string } }
   | { type: "TERMINAL_OUTPUT"; payload: { stream: "stdout" | "stderr" | "exit"; text: string; exitCode?: number } }
   | { type: "DIAGNOSTICS_RESULT"; payload: { file?: string; errors: number; warnings: number; entries: Array<{ file: string; line: number; severity: string; message: string }> } }

@@ -172,7 +172,10 @@ async def test_matrixlab_posts_run_and_parses_response(workspace: Path) -> None:
     assert result.artifacts == ["build.log"]
     assert result.sandbox_id == "sb-abc"
     assert transport.last_request is not None
-    assert transport.last_request.url.path == "/repo/run"
+    # The Runner's *native* command contract.  ``/repo/run`` is a
+    # different endpoint — it clones a git repo and requires ``repo_url``,
+    # so posting a workspace command there returned 422 every time.
+    assert transport.last_request.url.path == "/run"
     await sb.aclose()
 
 

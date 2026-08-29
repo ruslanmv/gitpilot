@@ -143,6 +143,20 @@ from gitpilot.sandbox import (
     get_sandbox,
 )
 
+# Streaming framing (Batch V4-E4).  ``StreamMetrics`` is already exported from
+# `streaming` below; the bus's implementation is the one the loop uses, so it is
+# aliased rather than exported twice — two names for one concept is the drift this
+# batch removed.
+from gitpilot.agent_events import HEARTBEAT_INTERVAL_SEC
+from gitpilot.agent_events import StreamMetrics as BusStreamMetrics
+
+# Sandbox approval tokens (Batch V4-D6) --------------------------------
+from gitpilot.sandbox_tokens import (
+    ApprovalToken,
+    SandboxApprovalStore,
+    get_store as get_sandbox_approval_store,
+)
+
 # Trusted folders ------------------------------------------------------
 from gitpilot.trusted_folders import (
     TrustEntry,
@@ -181,6 +195,175 @@ from gitpilot.context_cache import (
     build_cached as build_context_cached,
     clear_cache as clear_context_cache,
     get_cache_stats as get_context_cache_stats,
+)
+from gitpilot.agent import AgentTurn, Dialect, Finality
+from gitpilot.agent.model_profile import (
+    FLAG_MODEL_PROBE,
+    FLAG_MODEL_PROFILES,
+    ModelProfile,
+    profile_for_settings,
+    resolve_profile,
+)
+from gitpilot.agent.providers import ProviderError, build_provider
+
+# v4 phase C — the loop.  The permission stubs (``Decision``,
+# ``PermissivePolicy``, ``Approvals``, ``Hooks``) are deliberately *not* exported:
+# Batches V4-D1/D3/D5 replace their bodies, and a stable-contract promise over a
+# placeholder would be a promise we intend to break.
+from gitpilot.agent.context import (
+    AgentContext,
+    AgentResult,
+    BudgetExceeded,
+    BudgetState,
+    LedgerEntry,
+    State as RunState,
+    TodoItem,
+    ToolLedger,
+)
+from gitpilot.agent.headless import HeadlessResult, run_loop_headless
+from gitpilot.agent.journal import (
+    LineType,
+    RunJournal,
+    SeedContext,
+    list_runs as list_journal_runs,
+    project_events,
+    read_journal,
+    read_seed,
+    read_spill,
+    terminal_status as journal_terminal_status,
+)
+from gitpilot.agent.approvals import (
+    ApprovalRegistry,
+    LoopApprovals,
+    PendingApproval,
+    get_registry as get_approval_registry,
+)
+from gitpilot.agent.checkpointing import SessionCheckpointer
+from gitpilot.agent.command_class import (
+    CommandVerdict,
+    classify as classify_command_class,
+    classify_command,
+    describe as describe_command,
+)
+from gitpilot.agent.delegation import (
+    TEMPLATES as SUBAGENT_TEMPLATES,
+    SubagentResult,
+    SubagentTemplate,
+    template_for as subagent_template,
+    template_names as subagent_template_names,
+)
+from gitpilot.agent.compaction import (
+    CompactionReport,
+    compact as compact_transcript,
+    threshold as compaction_threshold,
+)
+from gitpilot.agent.hook_bridge import LoopHooks
+from gitpilot.agent.replay_events import (
+    parse_last_event_id,
+    replay_events,
+    sse_lines as replay_sse_lines,
+)
+from gitpilot.agent.resume import (
+    FLAG_AGENT_RESUME,
+    ReplayedRun,
+    ResumeError,
+    replay as replay_journal,
+    resumable_runs,
+)
+from gitpilot.agent.system_payload import (
+    FLAG_AGENT_SYSTEM_PAYLOAD,
+    ActiveMode,
+    build_payload as build_agent_system_payload,
+    build_system_text as build_agent_system_text,
+    mask_for_mode,
+    resolve_mode,
+)
+from gitpilot.toolkit.mcp import (
+    FLAG_MCP_TOOLS,
+    MCPRegistration,
+    MCPToolBinding,
+    build_binding as build_mcp_binding,
+    prune_for_profile as prune_mcp_for_profile,
+    register_from_store as register_mcp_tools,
+    risk_for as mcp_risk_for,
+)
+from gitpilot.yaml_lite import load_yaml_or_json
+from gitpilot.topology.schema import (
+    ApprovalMode as TopologyApprovalMode,
+    ApprovalSpec,
+    DialectChoice as TopologyDialect,
+    Engine as TopologyEngine,
+    LimitsSpec,
+    SchemaError as TopologySchemaError,
+    Topology,
+    TopologyPolicy,
+    VerificationSpec,
+    build_flow_graph as build_topology_graph,
+    parse_document as parse_topology_document,
+)
+from gitpilot.topology.registry import (
+    get_policy as topology_policy,
+    registry_for as topologies_for,
+    resolve_id as resolve_topology_id,
+)
+from gitpilot.agent.loop import (
+    FLAG_AGENT_LOOP,
+    AgentLoop,
+    LoopEvents,
+    Verification,
+    new_run_id,
+)
+from gitpilot.agent.policy import (
+    FLAG_AGENT_POLICY,
+    CapabilityMask,
+    Decision as PolicyDecision,
+    PolicyEngine,
+    Qualifier as CapabilityQualifier,
+    ResolvedPolicy,
+    mask_from_tool_policy,
+    resolve_policy,
+    restrict_mode,
+)
+from gitpilot.agent.prompts import build_system_prompt
+from gitpilot.agent.runner import (
+    AGENT_LOOP_DEFAULT_ON,
+    CLASSIC_TOPOLOGY_ID,
+    DEFAULT_AGENTIC_TOPOLOGY_ID,
+    FLAG_AGENT_LOOP_DEFAULT,
+    FLAG_LEGACY_CREW_ENGINES,
+    PILOT_TOPOLOGY_ID,
+    AgentRunner,
+    RunRequest,
+    apply_topology_policy,
+    should_use_loop,
+)
+from gitpilot.toolkit import (
+    ALL_CAPABILITIES,
+    LEGACY_ALIASES,
+    Effect as ToolEffect,
+    LocalWorkspace,
+    PrunedTool,
+    RepoBinding,
+    Risk as ToolRisk,
+    SchemaProfile,
+    SchemaRender,
+    ToolCall,
+    ToolError,
+    ToolExecutionContext,
+    ToolRegistry,
+    ToolResult,
+    ToolSpec,
+    validate_arguments as validate_tool_arguments,
+)
+from gitpilot.toolkit.builtins import (
+    FLAG_TOOL_REGISTRY,
+    build_default_registry,
+)
+from gitpilot.toolkit.todo import (
+    TODO_STATUSES,
+    TodoTransition,
+    normalise as normalise_todo,
+    phase_todo,
 )
 from gitpilot.streaming import (
     FLAG_STREAM_V2_SERVER,
@@ -290,4 +473,60 @@ __all__ = [
     "starter_mode_slugs", "supported_provider_slugs",
     # phase 4 — deprecation helper (used by future removals)
     "deprecated_alias",
+    # v4 phase A — canonical tool surface
+    "ALL_CAPABILITIES", "FLAG_TOOL_REGISTRY", "LEGACY_ALIASES",
+    "LocalWorkspace", "PrunedTool", "RepoBinding",
+    "SchemaProfile", "SchemaRender",
+    "ToolCall", "ToolEffect", "ToolError", "ToolExecutionContext",
+    "ToolRegistry", "ToolResult", "ToolRisk", "ToolSpec",
+    "build_default_registry", "validate_tool_arguments",
+    # v4 phase B — model layer
+    "AgentTurn", "Dialect", "Finality",
+    "FLAG_MODEL_PROBE", "FLAG_MODEL_PROFILES", "ModelProfile",
+    "ProviderError", "build_provider", "profile_for_settings", "resolve_profile",
+    # v4 phase C — the loop
+    "FLAG_AGENT_LOOP", "PILOT_TOPOLOGY_ID",
+    "AgentContext", "AgentLoop", "AgentResult", "AgentRunner",
+    "BudgetExceeded", "BudgetState", "HeadlessResult", "LedgerEntry",
+    "LineType", "LoopEvents", "RunJournal", "RunRequest", "RunState",
+    "SeedContext", "TodoItem", "ToolLedger",
+    "build_system_prompt", "journal_terminal_status", "list_journal_runs",
+    "new_run_id", "project_events", "read_journal", "read_seed", "read_spill",
+    "run_loop_headless", "should_use_loop",
+    # v4 phase D — safety wiring
+    "FLAG_AGENT_POLICY",
+    "ApprovalRegistry", "ApprovalToken", "CapabilityMask", "CapabilityQualifier",
+    "CommandVerdict", "LoopApprovals", "LoopHooks", "PendingApproval",
+    "PolicyDecision", "PolicyEngine", "ResolvedPolicy", "SandboxApprovalStore",
+    "SessionCheckpointer",
+    "classify_command", "classify_command_class", "describe_command",
+    "get_approval_registry", "get_sandbox_approval_store",
+    "mask_from_tool_policy", "resolve_policy", "restrict_mode",
+    # v4 phase E — Claude-Code UX
+    "SUBAGENT_TEMPLATES", "SubagentResult", "SubagentTemplate",
+    "TODO_STATUSES", "TodoTransition", "Verification",
+    "normalise_todo", "phase_todo",
+    "subagent_template", "subagent_template_names",
+    "BusStreamMetrics", "HEARTBEAT_INTERVAL_SEC",
+    # v4 phase F — resume & context
+    "FLAG_AGENT_RESUME", "CompactionReport", "ReplayedRun", "ResumeError",
+    "compact_transcript", "compaction_threshold", "parse_last_event_id",
+    "replay_events", "replay_journal", "replay_sse_lines", "resumable_runs",
+    # v4 phase G — topology schema v2 and the flip
+    "AGENT_LOOP_DEFAULT_ON", "CLASSIC_TOPOLOGY_ID", "DEFAULT_AGENTIC_TOPOLOGY_ID",
+    "FLAG_AGENT_LOOP_DEFAULT", "FLAG_LEGACY_CREW_ENGINES",
+    "ApprovalSpec", "LimitsSpec", "Topology", "TopologyApprovalMode",
+    "TopologyDialect", "TopologyEngine", "TopologyPolicy", "TopologySchemaError",
+    "VerificationSpec",
+    "apply_topology_policy", "build_topology_graph", "load_yaml_or_json",
+    "parse_topology_document", "resolve_topology_id", "topologies_for",
+    "topology_policy",
+    # v4 phase H — MCP unification
+    "FLAG_MCP_TOOLS", "MCPRegistration", "MCPToolBinding",
+    "build_mcp_binding", "mcp_risk_for", "prune_mcp_for_profile",
+    "register_mcp_tools",
+    # v4 phase H — the live system payload
+    "FLAG_AGENT_SYSTEM_PAYLOAD", "ActiveMode",
+    "build_agent_system_payload", "build_agent_system_text",
+    "mask_for_mode", "resolve_mode",
 ]

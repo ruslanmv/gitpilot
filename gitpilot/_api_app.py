@@ -1,7 +1,8 @@
 # gitpilot/api.py
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from fastapi import FastAPI, Query, Path as FPath, Header, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse
@@ -2664,38 +2665,6 @@ async def api_update_session_context(session_id: str, payload: dict):
 from dataclasses import asdict as _asdict_cp
 
 
-def _auto_checkpoint_hook(session):
-    """A callback that snapshots before each mutating tool call.
-
-    Returns ``None`` when the session has no local workspace, which turns the
-    whole mechanism off rather than recording checkpoints that could never be
-    restored.
-    """
-    if session is None or _session_workspace(session) is None:
-        return None
-
-    def hook(tool_name: str, tool_args: dict) -> None:
-        target = (
-            tool_args.get("path")
-            or tool_args.get("file_path")
-            or tool_args.get("filename")
-        )
-        # Reloaded each time: the conversation has moved on since the gate was
-        # built, and a checkpoint's whole value is the transcript it carries.
-        try:
-            current = _session_mgr.load(session.id) or session
-        except FileNotFoundError:
-            current = session
-        _session_mgr.create_checkpoint(
-            current,
-            workspace_path=_session_workspace(current),
-            description=f"Before {tool_name}" + (f" \u00b7 {target}" if target else ""),
-            tool_name=tool_name,
-            target_path=str(target) if target else None,
-        )
-
-    return hook
-
 
 def _load_session_or_404(session_id: str):
     """Load a session, or answer 404.
@@ -2840,20 +2809,53 @@ async def api_unregister_hook(event: str, name: str):
 # ============================================================================
 
 @app.get("/api/permissions")
-async def api_get_permissions():
-    """Get current permission policy."""
-    return _perm_mgr.to_dict()
+async def api_get_permissions(session_id: str = ""):
+    """Get the current permission policy.
+
+    With a ``session_id`` the mode comes from that session's record, which is
+    where it lives (Batch V4-D1, F11). Without one you get the process default,
+    which is what a client with no session should see.
+    """
+    payload = _perm_mgr.to_dict()
+    if session_id:
+        try:
+            payload["mode"] = _session_mgr.load(session_id).permission_mode
+            payload["session_id"] = session_id
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Session not found") from None
+    return payload
 
 
 @app.put("/api/permissions/mode")
 async def api_set_permission_mode(payload: dict):
-    """Set the permission mode (normal, plan, auto)."""
+    """Set the permission mode (normal, plan, auto).
+
+    This is the **only** way a session reaches ``auto`` — an explicit, deliberate
+    user action (§8.1, F11). A ``permission_mode`` on a chat request may only
+    restrict, because a request body is not an authorisation channel; before this
+    the mode was tracked in three places at once and the body was the one that
+    won.
+    """
     mode_str = payload.get("mode", "normal")
+    session_id = payload.get("session_id") or ""
     try:
-        _perm_mgr.policy.mode = PermissionMode(mode_str)
-        return {"mode": _perm_mgr.policy.mode.value}
+        mode = PermissionMode(mode_str)
     except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid mode: {mode_str}")
+        raise HTTPException(status_code=400, detail=f"Invalid mode: {mode_str}") from None
+
+    if session_id:
+        try:
+            session = _session_mgr.load(session_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Session not found") from None
+        session.permission_mode = mode.value
+        _session_mgr.save(session)
+        return {"mode": mode.value, "session_id": session_id}
+
+    # No session named: the process default, for a client that has not made one
+    # yet. It is the fallback a new session inherits, not a live override.
+    _perm_mgr.policy.mode = mode
+    return {"mode": mode.value}
 
 
 # ============================================================================
@@ -3737,6 +3739,44 @@ async def _safe_ws_send_json(websocket: WebSocket, data: dict) -> bool:
         raise
 
 
+def _ws_github_token(websocket: WebSocket) -> Optional[str]:
+    """Resolve the caller's GitHub token for a WebSocket connection.
+
+    Batch V4-0D.  The HTTP routes take the token from the ``Authorization``
+    header via :func:`get_github_token`; this socket took none at all, so
+    repo-mode chat over it fell through to whatever ``GITHUB_TOKEN`` the server
+    process happened to hold — the operator's credentials, for every caller.
+
+    Both carriers are accepted because browsers cannot set headers on a
+    WebSocket handshake: native clients (VS Code, CLI, proxies) send
+    ``Authorization``, browsers append ``?token=``.  A token in a query string
+    can land in access logs, so the header wins when both are present, and the
+    query form goes away with this route (Batch V4-H4 retires it).
+    """
+    def _as_text(value: Any) -> Optional[str]:
+        # Headers and query params are strings in production; test doubles and
+        # exotic ASGI servers are not required to be, and a non-string token
+        # would sail silently into the agent's tools.
+        return value if isinstance(value, str) and value.strip() else None
+
+    def _lookup(container: Any, key: str) -> Optional[str]:
+        # Starlette's Headers and QueryParams are both Mappings.  The isinstance
+        # guard (rather than a bare ``.get``) keeps mock objects from answering
+        # with something truthy that isn't a token.
+        if not isinstance(container, Mapping):
+            return None
+        return _as_text(container.get(key))
+
+    header = _lookup(websocket.headers, "authorization")
+    if header:
+        if header.startswith("Bearer "):
+            return _as_text(header[7:])
+        if header.startswith("token "):
+            return _as_text(header[6:])
+        return header
+    return _lookup(websocket.query_params, "token")
+
+
 @app.websocket("/ws/sessions/{session_id}")
 async def session_websocket(websocket: WebSocket, session_id: str):
     """
@@ -3755,6 +3795,10 @@ async def session_websocket(websocket: WebSocket, session_id: str):
       { type: "cancel" }
     """
     await websocket.accept()
+
+    # Per-connection credentials (may be None — the env fallback in
+    # ``github_api._github_token`` still applies for single-user installs).
+    ws_token = _ws_github_token(websocket)
 
     # Verify session exists
     try:
@@ -3811,12 +3855,17 @@ async def session_websocket(websocket: WebSocket, session_id: str):
                     repo_full = session.repo_full_name or ""
                     parts = repo_full.split("/", 1)
                     if len(parts) == 2 and content.strip():
-                        # Use canonical dispatcher signature
-                        result = await dispatch_request(
-                            user_request=content,
-                            repo_full_name=f"{parts[0]}/{parts[1]}",
-                            branch_name=session.branch,
-                        )
+                        # Use canonical dispatcher signature.  ``execution_context``
+                        # is what makes ``github_api._github_token()`` resolve the
+                        # caller's token inside the agent's tools, exactly as the
+                        # HTTP chat routes do (Batch V4-0D).
+                        with execution_context(ws_token, ref=session.branch):
+                            result = await dispatch_request(
+                                user_request=content,
+                                repo_full_name=f"{parts[0]}/{parts[1]}",
+                                token=ws_token,
+                                branch_name=session.branch,
+                            )
                         answer = ""
                         if isinstance(result, dict):
                             answer = (
@@ -4531,6 +4580,186 @@ from gitpilot.workspace import WorkspaceManager as _V2WorkspaceManager
 # Track active executors for cancellation
 _active_executors: dict[str, _StreamingExecutor] = {}
 
+# Live approval gates, per session — Batch V4-D3 (F1). Gates used to be local
+# variables inside the two stream handlers, so `POST /api/v2/approval/respond`
+# had nothing to resolve against and could only emit an event nobody consumed.
+_approval_gates: dict[str, _ApprovalGate] = {}
+
+# ── Agentic loop (Batch V4-C3) ────────────────────────────────────────────
+# One runner per process, holding the live loops so /api/v2/agent/cancel can
+# reach them. Imported lazily inside the helpers below so a stripped runtime
+# without the agent package still serves the legacy path.
+_agent_runner = None
+
+
+#: The id a request falls back to when it names no topology and the user has saved
+#: no preference.  Since Batch V4-G5 this topology carries a policy document, so it
+#: is also what ``should_use_loop`` is asked about.
+_DEFAULT_TOPOLOGY_ID = "default"
+
+#: Kept as the fallback for a loop run that somehow reached the engine without a
+#: resolved id — the pilot is the one topology guaranteed to have a document.
+_PILOT_TOPOLOGY_ID = "tool_augmented_react"
+
+
+def _get_saved_topology_pref() -> str:
+    from .topology_registry import get_saved_topology_preference
+
+    try:
+        return get_saved_topology_preference() or ""
+    except Exception:  # noqa: BLE001 - a preference read must not fail a request
+        return ""
+
+
+def _should_use_loop(topology_id: str) -> bool:
+    """Whether this request goes to the agentic engine.
+
+    Any failure — a stripped runtime without the agent package, an unreadable
+    flags file — answers "no". Falling back to the path that has always worked
+    is the right failure mode for engine selection.
+    """
+    try:
+        from .agent.runner import should_use_loop
+
+        return bool(should_use_loop(topology_id))
+    except Exception:  # noqa: BLE001 - selection must never fail a request
+        logger.debug("agentic engine unavailable; using the legacy path", exc_info=True)
+        return False
+
+
+def _runner():
+    global _agent_runner
+    if _agent_runner is None:
+        from .agent.runner import AgentRunner
+
+        _agent_runner = AgentRunner()
+    return _agent_runner
+
+
+async def _stream_agent_loop(
+    *,
+    bus,
+    session,
+    session_id: str,
+    user_message: str,
+    workspace,
+    repo_full_name: str,
+    branch,
+    token,
+    requested_mode: str = "",
+    topology_id: str = "",
+):
+    """Stream one agentic run as SSE.
+
+    Note what is *absent*: the repo-name validation the legacy executor applies
+    before it will start. A folder-only or local-git session has always been shown
+    an empty stream and told to fall back to batch chat — which is exactly the
+    local-model case this engine is for, so here such a session simply runs
+    against its checkout with no GitHub binding.
+    """
+    from pathlib import Path as _Path
+
+    from .agent.runner import RunRequest
+
+    runner = _runner()
+
+    repo_binding = None
+    if repo_full_name and "/" in repo_full_name:
+        from .agent.runner import RepoBinding as _RepoBinding
+
+        owner, repo = repo_full_name.split("/", 1)
+        repo_binding = _RepoBinding(owner=owner, repo=repo, token=token, branch=branch)
+
+    workspace_root = None
+    if workspace is not None and getattr(workspace, "path", None):
+        workspace_root = _Path(workspace.path)
+    elif session is not None:
+        local = getattr(session, "repo_root", None) or getattr(session, "folder_path", None)
+        if local:
+            workspace_root = _Path(local)
+
+    prior: list[dict] = []
+    transcript_index = 0
+    if session is not None:
+        messages = list(getattr(session, "messages", []) or [])
+        transcript_index = len(messages)
+        for message in messages[-8:]:
+            role = getattr(message, "role", None) or "user"
+            content = getattr(message, "content", "") or ""
+            if role in ("user", "assistant") and content:
+                prior.append({"role": role, "content": content})
+
+    request = RunRequest(
+        task=user_message,
+        session_id=session_id,
+        # Batch V4-G5: whichever topology the request resolved to. Its document
+        # supplies the capabilities, limits and verification policy via
+        # ``apply_topology_policy`` inside ``AgentRunner.run``.
+        topology_id=topology_id or _PILOT_TOPOLOGY_ID,
+        workspace_root=workspace_root,
+        repo=repo_binding,
+        transcript_index=transcript_index,
+        prior_messages=prior,
+        # The session record is the mode's home; the request may only restrict
+        # it (Batch V4-D1, §8.1). `resolve_policy` enforces the asymmetry — this
+        # side just supplies both values rather than choosing between them.
+        session_mode=getattr(session, "permission_mode", None) if session else None,
+        requested_mode=requested_mode,
+        session_manager=_session_mgr if session is not None else None,
+    )
+
+    sub_id, _queue = bus.subscribe()
+
+    async def event_generator():
+        from gitpilot.agent_events import StreamMetrics
+
+        metrics = StreamMetrics()
+        run_task = _asyncio.create_task(runner.run(request, bus=bus))
+        try:
+            # Batch V4-E4: metrics and the 15-second heartbeat come from the bus
+            # itself now, rather than from the parallel `streaming.py` writer that
+            # had them and no caller.
+            async for event in bus.stream(sub_id, metrics=metrics):
+                yield event.to_sse()
+                if event.type in (_EvType.DONE, _EvType.ERROR):
+                    logger.info(
+                        "agent stream for %s: first byte %sms, total %sms, %d events",
+                        session_id, metrics.first_byte_ms, metrics.total_ms,
+                        metrics.event_count,
+                    )
+                    break
+        finally:
+            bus.unsubscribe(sub_id)
+            if not run_task.done():
+                # A disconnected client should stop the work, not orphan it.
+                runner.cancel(session_id)
+                run_task.cancel()
+                try:
+                    await run_task
+                except (_asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
+
+            if session is not None and run_task.done() and not run_task.cancelled():
+                try:
+                    result = run_task.result()
+                    if result is not None and result.answer:
+                        session.add_message("assistant", result.answer[:5000])
+                        _session_mgr.save(session)
+                except Exception:  # noqa: BLE001 - persistence is best effort
+                    pass
+
+            _remove_bus(session_id)
+
+    return _StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
 
 @app.post("/api/v2/chat/stream", tags=["v2-streaming"])
 async def v2_chat_stream(request: _Request):
@@ -4570,9 +4799,8 @@ async def v2_chat_stream(request: _Request):
             return JSONResponse({"error": "Session not found"}, status_code=404)
 
     bus = _get_bus(session_id or "ephemeral")
-    gate = _ApprovalGate(
-        bus, mode=permission_mode, on_checkpoint=_auto_checkpoint_hook(session)
-    )
+    gate = _ApprovalGate(bus, mode=permission_mode)
+    _approval_gates[session_id or "ephemeral"] = gate
 
     # Resolve workspace (if session has a local workspace)
     workspace = None
@@ -4587,6 +4815,33 @@ async def v2_chat_stream(request: _Request):
                 )
         except Exception as ws_err:
             logger.warning("Could not resolve workspace: %s", ws_err)
+
+    # ── Engine selection (Batches V4-C3, V4-G5) ───────────────────────────
+    # The agentic loop runs when a flag is on AND the resolved topology asked for
+    # it: `agent_loop` for the pilot, `agent_loop_default` for any topology whose
+    # v2 document declares `engine: agentic_loop`. Every other combination takes
+    # the path below unchanged.
+    _topology_id = (
+        body.get("topology_id")
+        or _get_saved_topology_pref()
+        or _DEFAULT_TOPOLOGY_ID
+    )
+    if _should_use_loop(_topology_id):
+        return await _stream_agent_loop(
+            bus=bus,
+            session=session,
+            session_id=session_id or "ephemeral",
+            user_message=user_message,
+            # The topology the request resolved to — not a constant. Running a
+            # `default` request under the pilot's policy would apply a policy
+            # nobody selected, which is the whole thing the documents are for.
+            topology_id=_topology_id,
+            workspace=workspace,
+            repo_full_name=repo_full_name,
+            branch=branch,
+            token=token,
+            requested_mode=permission_mode,
+        )
 
     executor = _StreamingExecutor(
         bus=bus, gate=gate, workspace=workspace,
@@ -4664,13 +4919,155 @@ async def v2_approval_respond(request: _Request):
     if not request_id:
         return JSONResponse({"error": "request_id is required"}, status_code=400)
 
-    # The approval gate is created per-stream, so we emit an event
-    # that the gate's listener will pick up
+    # Batch V4-D3 (F1). This used to emit an `approval_resolved` event and return
+    # "resolved" — but nothing consumed that event, so the run's future waited out
+    # its 120-second timeout and denied while the client had been told its answer
+    # landed. A WebSocket client worked because it calls `gate.resolve` directly;
+    # every other client did not. The registry is transport-blind, so both paths
+    # now resolve the same future.
+    resolved = False
+    try:
+        from .agent.approvals import get_registry
+
+        resolved = get_registry().resolve(request_id, bool(approved), scope)
+    except ImportError:  # pragma: no cover - stripped runtime without the agent pkg
+        logger.debug("agent package unavailable; falling back to the gate")
+
+    if not resolved:
+        gate = _approval_gates.get(session_id)
+        if gate is not None:
+            gate.resolve(request_id, bool(approved), scope)
+            resolved = True
+
     bus = _get_bus(session_id)
     from gitpilot.agent_events import approval_resolved
     await bus.emit(approval_resolved(request_id, approved))
 
+    if not resolved:
+        # Saying "resolved" for a request nobody is waiting on is how this
+        # defect stayed invisible; the client is told the truth instead.
+        return JSONResponse(
+            {
+                "error": "no pending approval with that request_id",
+                "request_id": request_id,
+                "hint": "it may have already been answered, or timed out",
+            },
+            status_code=404,
+        )
+
     return {"status": "resolved", "request_id": request_id, "approved": approved}
+
+
+@app.get("/api/v2/agent/runs", tags=["v2-streaming"])
+async def v2_agent_runs(session_id: str):
+    """Runs in this session that can be picked up again — Batch V4-F1.
+
+    Resumable means the journal never reached a terminal state, which is the
+    absence of a finish line rather than a stored flag: a flag would have to be
+    written by the process that died.
+    """
+    try:
+        from .agent.resume import resumable_runs
+    except ImportError:  # pragma: no cover - stripped runtime
+        return {"runs": []}
+
+    return {"runs": [run.summary() for run in resumable_runs(session_id)]}
+
+
+@app.post("/api/v2/agent/resume", tags=["v2-streaming"])
+async def v2_agent_resume(request: _Request):
+    """Resume an interrupted run — Batch V4-F1."""
+    body = await request.json()
+    session_id = body.get("session_id") or ""
+    run_id = body.get("run_id") or ""
+
+    if not session_id or not run_id:
+        return JSONResponse(
+            {"error": "session_id and run_id are required"}, status_code=400,
+        )
+
+    try:
+        from .agent.journal import list_runs
+        from .agent.resume import ResumeError
+    except ImportError:  # pragma: no cover - stripped runtime
+        return JSONResponse({"error": "resume is unavailable"}, status_code=501)
+
+    journal = next(
+        (path for path in list_runs(session_id) if path.stem == run_id), None,
+    )
+    if journal is None:
+        return JSONResponse(
+            {"error": f"no run {run_id!r} in session {session_id!r}"}, status_code=404,
+        )
+
+    session = None
+    try:
+        session = _session_mgr.load(session_id)
+    except FileNotFoundError:
+        pass
+
+    workspace_root = None
+    if session is not None:
+        local = getattr(session, "repo_root", None) or getattr(session, "folder_path", None)
+        if local:
+            from pathlib import Path as _Path
+
+            workspace_root = _Path(local)
+
+    bus = _get_bus(session_id)
+    sub_id, _queue = bus.subscribe()
+    runner = _runner()
+
+    async def event_generator():
+        # The missed events first, then the live ones: a client resuming a run it
+        # was watching should not have to reconcile a gap.
+        try:
+            from .agent.replay_events import sse_lines
+
+            for frame in sse_lines(journal):
+                yield frame
+        except Exception as exc:  # noqa: BLE001 - a replay failure must not block the resume
+            logger.warning("could not replay %s: %s", journal, exc)
+
+        task = _asyncio.create_task(runner.resume(
+            journal, bus=bus, session_id=session_id,
+            workspace_root=workspace_root, session_manager=_session_mgr,
+        ))
+        try:
+            async for event in bus.stream(sub_id):
+                yield event.to_sse()
+                if event.type in (_EvType.DONE, _EvType.ERROR):
+                    break
+        finally:
+            bus.unsubscribe(sub_id)
+            if not task.done():
+                runner.cancel(session_id)
+                task.cancel()
+                try:
+                    await task
+                except (_asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
+            elif not task.cancelled():
+                try:
+                    result = task.result()
+                    if session is not None and result is not None and result.answer:
+                        session.add_message("assistant", result.answer[:5000])
+                        _session_mgr.save(session)
+                except ResumeError as exc:
+                    logger.info("resume refused for %s: %s", run_id, exc)
+                except Exception:  # noqa: BLE001 - persistence is best effort
+                    pass
+            _remove_bus(session_id)
+
+    return _StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/api/v2/agent/cancel", tags=["v2-streaming"])
@@ -4683,6 +5080,12 @@ async def v2_agent_cancel(request: _Request):
     if executor:
         executor.cancel()
         return {"status": "cancelled", "session_id": session_id}
+
+    # An agentic run is held by the runner rather than _active_executors
+    # (Batch V4-C3). Its cancel is cooperative between tool calls and a real
+    # cancellation point inside provider streaming.
+    if _agent_runner is not None and _agent_runner.cancel(session_id):
+        return {"status": "cancelled", "session_id": session_id, "engine": "agent_loop"}
 
     return JSONResponse({"error": "No active executor for this session"}, status_code=404)
 
@@ -4720,7 +5123,8 @@ async def v2_session_websocket(websocket: WebSocket, session_id: str):
         return
 
     bus = _get_bus(session_id)
-    gate = _ApprovalGate(bus, on_checkpoint=_auto_checkpoint_hook(session))
+    gate = _ApprovalGate(bus)
+    _approval_gates[session_id] = gate
     sub_id, _queue = bus.subscribe()
 
     # Forward bus events -> WebSocket
@@ -4803,5 +5207,12 @@ async def v2_session_websocket(websocket: WebSocket, session_id: str):
         forwarder.cancel()
         bus.unsubscribe(sub_id)
         _active_executors.pop(session_id, None)
+        _approval_gates.pop(session_id, None)
         gate.cancel_all()
+        try:
+            from .agent.approvals import get_registry
+
+            get_registry().deny_session(session_id, reason="client disconnected")
+        except ImportError:  # pragma: no cover - stripped runtime
+            pass
         _remove_bus(session_id)

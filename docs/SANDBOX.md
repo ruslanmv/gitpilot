@@ -57,6 +57,11 @@ taking effect.
 - The **agent's `run_command` tool** routes through the same endpoint:
   `bash` → `language=bash, code=<command>` against the configured backend.
 
+On the Runner, snippets go to `POST /code/run` and workspace commands
+(`MatrixLabSandbox.run`) to `POST /run`, which takes the workspace as a
+zip. Neither is `POST /repo/run` — that endpoint clones a git repository
+and requires a `repo_url`.
+
 ## Configuration
 
 ### From the UI
@@ -71,7 +76,7 @@ display as bullets), default image, network egress toggle, timeout, and a
 | Var                                       | Effect                                                            |
 | ----------------------------------------- | ----------------------------------------------------------------- |
 | `GITPILOT_SANDBOX`                        | Pins backend (`subprocess` \| `matrixlab` \| `off`)               |
-| `GITPILOT_MATRIXLAB_URL`                  | MatrixLab Runner base URL (default `http://localhost:8000`)       |
+| `GITPILOT_MATRIXLAB_URL`                  | MatrixLab Runner base URL (default `http://localhost:8765`)       |
 | `GITPILOT_MATRIXLAB_TOKEN`                | Bearer token sent on every request                                |
 | `GITPILOT_MATRIXLAB_IMAGE`                | Default image override (e.g. `matrix-lab-sandbox-python:latest`)  |
 | `GITPILOT_ENABLE_MATRIXLAB_LIFECYCLE`     | Set to `1` to enable the Install / Start / Stop buttons           |
@@ -82,7 +87,7 @@ display as bullets), default image, network egress toggle, timeout, and a
 {
   "sandbox": {
     "backend": "matrixlab",
-    "matrixlab_url": "http://localhost:8000",
+    "matrixlab_url": "http://localhost:8765",
     "matrixlab_token": "",
     "matrixlab_image": "",
     "allow_network": false,
@@ -202,17 +207,47 @@ sandbox_id: db3e427d-…
 1. `make install && make run` — defaults to `subprocess`, hello-world works.
 2. Switch to MatrixLab once you need real isolation:
    ```bash
-   curl -X PUT http://localhost:8765/api/sandbox/config \
+   curl -X PUT http://localhost:8000/api/sandbox/config \
      -H 'content-type: application/json' \
-     -d '{"backend": "matrixlab", "matrixlab_url": "http://localhost:8000"}'
+     -d '{"backend": "matrixlab", "matrixlab_url": "http://localhost:8765"}'
    ```
    …or click the radio in **Settings → Sandbox runtime**.
-3. Run a snippet:
+3. Run a snippet — plan, approve, then run (the endpoint refuses a run
+   nobody approved):
    ```bash
-   curl -X POST http://localhost:8765/api/sandbox/run \
+   PLAN=$(curl -sX POST http://localhost:8000/api/sandbox/plan \
      -H 'content-type: application/json' \
-     -d '{"language": "python", "code": "print(2 + 2)"}'
+     -d '{"language": "python", "code": "print(2 + 2)", "source": "code_block"}' \
+     | jq -r .plan.plan_id)
+   TOKEN=$(curl -sX POST http://localhost:8000/api/sandbox/approve \
+     -H 'content-type: application/json' \
+     -d "{\"plan_id\": \"$PLAN\"}" | jq -r .approval_token)
+   curl -X POST http://localhost:8000/api/sandbox/run \
+     -H 'content-type: application/json' \
+     -d "{\"language\": \"python\", \"code\": \"print(2 + 2)\", \
+          \"approval_token\": \"$TOKEN\"}"
    ```
+
+## Troubleshooting
+
+`make sandbox-debug` walks the whole path on your machine — settings,
+the local backend, stdin handling, the approval gate, "run \<file\>"
+routing, and the Runner — and prints which stage breaks plus the command
+that fixes it. `make sandbox-debug MATRIXLAB=1` probes the Runner even
+when the local backend is selected. It is read-only and exits non-zero on
+failure, so CI can gate on it.
+`tests/test_sandbox_run_file_e2e.py` is its offline counterpart.
+
+Symptoms worth recognising:
+
+| Symptom                                                     | Cause                                                                                                                  |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| "Run demo.py" gets an *explanation* of how to run it         | The goal never classified as `execute`, so the LLM planner answered it. `make sandbox-debug` stage 5 checks this.        |
+| The execution card says the run was not approved             | The apply path called `/api/sandbox/run` without minting an approval token. Stage 4.                                     |
+| A run produces no output and ends at the timeout             | The script is waiting on stdin. Sandboxed processes get `DEVNULL`, so `input()` raises `EOFError` — anything else is a bug. |
+| Output appears empty even though the script printed          | Output produced before a timeout must survive the kill. Stage 3.                                                         |
+| "MatrixLab is installed, but GitPilot cannot connect"        | Wrong port (Runner is on host **8765**, GitPilot on **8000**), the Runner's Docker is down, or a stale `matrixlab_url` — `make fix-matrixlab-url`. |
+| MatrixLab runs snippets but not files                        | Workspace commands go to `POST /run` (native contract, workspace shipped as a zip), **not** `POST /repo/run`, which clones a git repo and requires `repo_url`. |
 
 ## See also
 
@@ -222,4 +257,7 @@ sandbox_id: db3e427d-…
 - `gitpilot/local_tools.py` — agent `run_command` + `run_in_sandbox` tools
 - `frontend/components/SettingsModal.jsx` — Sandbox runtime panel
 - `frontend/components/RunnableCodeBlock.jsx` — chat ▶ Run button
-- `tests/test_sandbox.py`, `tests/test_sandbox_api.py` — 28 unit tests
+- `tests/test_sandbox.py`, `tests/test_sandbox_api.py` — unit tests
+- `tests/test_sandbox_run_file_e2e.py` — end-to-end regression suite for
+  "run this file", offline (no Docker, no Ollama, no GitHub)
+- `scripts/sandbox_debug.py` — live diagnostics (`make sandbox-debug`)

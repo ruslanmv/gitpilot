@@ -1096,9 +1096,22 @@ _ACTION_PATTERNS = [
 
 
 def _classify_lite_intent(goal: str) -> str:
-    """Classify user intent as 'question' or 'action' using regex only."""
+    """Classify user intent as 'execute', 'action' or 'question' (regex only).
+
+    ``execute`` is checked first, delegating to the deterministic router:
+    "run demo.py" reads as a *question* to the patterns below — no action
+    verb, and "run" is not one of them — so a run request came back as
+    prose explaining how the user could run the file themselves.
+    """
     import re as _re
     goal_lower = goal.strip().lower()
+
+    try:
+        from .query_router import _detect_intent as _router_intent
+        if _router_intent(goal) == "execute":
+            return "execute"
+    except Exception:  # noqa: BLE001 - never fail planning over a hint
+        pass
 
     action_score = sum(1 for p in _ACTION_PATTERNS if _re.search(p, goal_lower))
     question_score = sum(1 for p in _QUESTION_PATTERNS if _re.search(p, goal_lower))
@@ -1107,6 +1120,19 @@ def _classify_lite_intent(goal: str) -> str:
     if action_score > 0 and action_score >= question_score:
         return "action"
     return "question"
+
+
+async def _lite_repo_files(
+    owner: str, repo: str, token: str | None, branch: str,
+) -> List[str]:
+    """Flat list of repo paths for the EXECUTE short-circuit, or ``[]``."""
+    try:
+        from .github_api import get_repo_tree
+
+        tree = await get_repo_tree(owner, repo, token=token, ref=branch)
+        return [t["path"] for t in (tree or []) if t.get("path")]
+    except Exception:  # noqa: BLE001 - the short-circuit copes with []
+        return []
 
 
 async def _lite_prefetch_context(
@@ -1201,8 +1227,31 @@ async def generate_plan_lite(
     active_ref = branch_name or "HEAD"
     _tools()["set_repo_context"](owner, repo, token=token, branch=active_ref)
 
-    intent = _classify_lite_intent(goal)
+    # The caller's routing intent wins when it is one the Lite planner can
+    # act on deterministically; otherwise fall back to the local
+    # classifier.  This parameter used to be overwritten unconditionally,
+    # which threw away the router's decision on every Lite request.
+    if (intent or "").lower() != "execute":
+        intent = _classify_lite_intent(goal)
     logger.info("[GitPilot Lite] Intent: %s | Goal: %s", intent, goal[:80])
+
+    if intent == "execute":
+        # Deterministic: no small model in the loop for "run this file".
+        short = try_execute_short_circuit(
+            goal=goal,
+            intent="execute",
+            target_files=list(_extract_runnable_paths_from_goal(goal)),
+            repo_files=await _lite_repo_files(owner, repo, token, active_ref),
+        )
+        if short is not None:
+            logger.info(
+                "[GitPilot Lite] EXECUTE short-circuit: %s",
+                short.steps[0].files[0].path,
+            )
+            return short
+        # No single unambiguous target — fall through and let the model
+        # answer rather than guessing which file the user meant.
+        intent = "question"
 
     # PRE-FETCH: real data from GitHub API
     logger.info("[GitPilot Lite] Pre-fetching context for %s (ref=%s)...", repo_full_name, active_ref)
@@ -1847,8 +1896,25 @@ async def execute_plan(
                                 SandboxRunRequest,
                                 api_sandbox_run,
                             )
+                            from .sandbox_routing import _mint_internal_approval
+
+                            # /api/sandbox/run refuses a run nobody approved
+                            # (Batch V4-D6, F7).  This EXECUTE step *is* the
+                            # approved plan — the user approved it in chat
+                            # before apply started — but the endpoint has no
+                            # way to know that, so it answered 403 for every
+                            # run the user had just approved.  Record the
+                            # approval properly rather than adding an
+                            # internal-caller bypass.
+                            approval_token = _mint_internal_approval(
+                                language, shipped_code,
+                            )
                             result = await api_sandbox_run(
-                                SandboxRunRequest(language=language, code=shipped_code),
+                                SandboxRunRequest(
+                                    language=language,
+                                    code=shipped_code,
+                                    approval_token=approval_token or None,
+                                ),
                             )
                             execution_card.update(
                                 status="completed" if result.exit_code == 0 else "failed",
@@ -2196,15 +2262,13 @@ async def dispatch_request(
             "lite_mode": True,
         }
 
-    _active_topology = None
-    if _resolved_tid:
-        _active_topology = get_topology(_resolved_tid)
-
     # ---------- Topology-aware routing (additive) ----------
-    _active_topology = None
-    _resolved_tid = topology_id or get_saved_topology_preference()
-    if _resolved_tid:
-        _active_topology = get_topology(_resolved_tid)
+    # ``_resolved_tid`` was already resolved above — explicit ``topology_id``
+    # wins over the saved preference — so this reuses it rather than reading
+    # the preference file a second time.  Batch V4-0A removed a duplicated
+    # pair of blocks here: the first computed ``_active_topology`` and the
+    # second immediately overwrote it with the same value.
+    _active_topology = get_topology(_resolved_tid) if _resolved_tid else None
 
     if _active_topology and _active_topology.routing_policy.strategy == RoutingStrategy.fixed_sequence:
         # Pipeline topologies (T3-T7): build a multi-task sequential crew
@@ -2456,7 +2520,12 @@ async def _dispatch_pipeline(
         "category": "topology_pipeline",
         "topology_id": topology.id,
         "topology_name": topology.name,
-        "execution_style": topology.execution_style.value,
+        # What ran, not what the topology declares.  Since Batch V4-G3 a migrated
+        # pipeline's document says ``agentic_loop`` while this legacy dispatcher
+        # still serves it until the flip (§15.4), and a response describing a run
+        # that just happened has to name the engine that actually ran it.
+        "execution_style": ExecutionStyle.crew_pipeline.value,
+        "declared_execution_style": topology.execution_style.value,
         "agents_used": sequence,
         "result": result_text,
     }

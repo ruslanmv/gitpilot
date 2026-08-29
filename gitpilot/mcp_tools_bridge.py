@@ -26,12 +26,31 @@ Design contract (best practices applied)
 * **No global state.** No imports of CrewAI at module top-level so
   this module is testable without crewai installed; we import it
   lazily inside :func:`build_mcp_agent_tools`.
+
+.. deprecated:: Batch V4-H1
+   The **transport** in this module is superseded by
+   :mod:`gitpilot.toolkit.mcp`, which reaches MCP servers through
+   :class:`gitpilot.mcp_client.MCPClient` — real JSON-RPC over stdio, HTTP or SSE —
+   and registers each tool with the server's own ``inputSchema``. This module's
+   ``{"method": "tools/call"}`` HTTP POST predates that client and never had a
+   schema to offer, so the model was handed a generic ``**kwargs`` and left to
+   guess.
+
+   What survives is the layer above it, and it is the reason this file is not
+   simply deleted: :func:`_select_enabled_tools`, :func:`_classify` and
+   :func:`describe_available_tools` encode which servers the user installed and
+   enabled, which tools they switched off, and how a tool name maps to a risk.
+   :mod:`gitpilot.toolkit.mcp` calls into exactly that.
+
+   :func:`invoke_remote_tool` and :func:`build_mcp_agent_tools` are the transport
+   and its CrewAI wrapper. They still work and warn; Batch V4-H5 removes them.
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -43,6 +62,23 @@ logger = logging.getLogger(__name__)
 
 ENV_MAX_TOOLS = "GITPILOT_MCP_BRIDGE_MAX_TOOLS"
 DEFAULT_MAX_TOOLS = 32
+
+#: Entry points that have already warned, so a run that calls one in a loop does
+#: not fill the log with the same sentence.
+_WARNED: set[str] = set()
+
+
+def _warn_retired(name: str, guidance: str) -> None:
+    """Warn once per process that this entry point is on its way out."""
+    if name in _WARNED:
+        return
+    _WARNED.add(name)
+    warnings.warn(
+        f"gitpilot.mcp_tools_bridge.{name} is deprecated since Batch V4-H1 and is "
+        f"removed in Batch V4-H5: {guidance}.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +201,15 @@ async def invoke_remote_tool(
 
     Pure async; never raises -- returns ``{"ok": False, "error": "..."}``
     on failure so the agent-facing wrapper can present a string.
+
+    .. deprecated:: Batch V4-H1
+       Use :mod:`gitpilot.toolkit.mcp`, which calls through
+       :class:`gitpilot.mcp_client.MCPClient`. Removed in Batch V4-H5.
     """
+    _warn_retired(
+        "invoke_remote_tool",
+        "call MCP tools through gitpilot.toolkit.mcp, which uses MCPClient",
+    )
     headers: dict[str, str] = {
         "content-type": "application/json",
         "x-gitpilot-origin": "agent",
@@ -269,6 +313,10 @@ def build_mcp_agent_tools(
     prompt.  When ``policy`` is ``None`` or the flag is off, behaviour
     is identical to the legacy code path.
     """
+    _warn_retired(
+        "build_mcp_agent_tools",
+        "register MCP tools with gitpilot.toolkit.mcp.register_from_store instead",
+    )
     s = store or MCPStore()
     snap = s.load()
     descriptors = _select_enabled_tools(snap, include_mutation=include_mutation)

@@ -1,9 +1,18 @@
-"""Checkpoint and rewind over HTTP, plus the gate that takes them automatically.
+"""Checkpoint and rewind over HTTP.
 
-These cover the wiring rather than the store: that the routes exist at all
-(the create route used to raise TypeError on every call), that a rewind puts
-both the files and the conversation back, and that a snapshot is taken before
-each mutating tool without ever blocking the tool itself.
+These cover the wiring rather than the store: that the routes exist at all (the
+create route used to raise TypeError on every call) and that a rewind puts both
+the files and the conversation back.
+
+**The automatic-snapshot tests moved in Batch V4-D4** to
+``tests/agent/test_checkpointing_hooks.py``, because the thing they exercised
+moved. They drove ``ApprovalGate.on_checkpoint`` — a hook on a gate whose
+``check()`` has never had a caller, so the behaviour they proved correct has
+never actually run in production. The loop owns snapshots now, which is also what
+stops the ``ask`` path from taking two of them. The same intents are asserted
+there against the real owner: a mutating call snapshots, a read does not, a
+failure never blocks the tool, no workspace means no snapshots, and the
+transcript is the current one.
 """
 from __future__ import annotations
 
@@ -15,8 +24,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gitpilot import _api_app as api_app
-from gitpilot.agent_events import AgentEventBus
-from gitpilot.approval_protocol import ApprovalGate
 from gitpilot.session import SessionManager
 
 
@@ -146,83 +153,20 @@ def test_a_session_with_no_workspace_still_checkpoints_the_conversation(
     assert body["message_index"] == 1
 
 
-# ── The gate snapshots before every write ────────────────────────────────
+# ── Where the automatic snapshots went ───────────────────────────────────
 
 
-def _check(gate: ApprovalGate, tool: str, args: dict) -> bool:
-    return asyncio.run(gate.check(tool, args))
+def test_the_gate_no_longer_owns_checkpointing():
+    """A guard on the move, not a behaviour test.
 
+    If ``ApprovalGate`` regrows an ``on_checkpoint`` hook, there are two owners
+    again and the ``ask`` path can snapshot twice — which is the bug Batch V4-D4
+    removed. The loop-owned checkpointer is tested in
+    ``tests/agent/test_checkpointing_hooks.py``.
+    """
+    from gitpilot.approval_protocol import ApprovalGate
 
-def test_auto_mode_checkpoints_before_a_mutating_tool(session, session_mgr, workspace):
-    """Auto mode is the one that most needs an undo: nobody saw the edit coming."""
-    gate = ApprovalGate(
-        AgentEventBus(), mode="auto", on_checkpoint=api_app._auto_checkpoint_hook(session)
-    )
-
-    assert _check(gate, "write_file", {"path": "app.py"}) is True
-
-    checkpoints = session_mgr.load(session.id).checkpoints
-    assert len(checkpoints) == 1
-    assert checkpoints[0].tool_name == "write_file"
-    assert checkpoints[0].target_path == "app.py"
-    assert "app.py" in checkpoints[0].description
-
-
-def test_reading_does_not_checkpoint(session, session_mgr):
-    gate = ApprovalGate(
-        AgentEventBus(), mode="auto", on_checkpoint=api_app._auto_checkpoint_hook(session)
-    )
-
-    assert _check(gate, "read_file", {"path": "app.py"}) is True
-    assert session_mgr.load(session.id).checkpoints == [], (
-        "snapshotting before a read would fill the history with nothing"
-    )
-
-
-def test_plan_mode_blocks_and_does_not_checkpoint(session, session_mgr):
-    gate = ApprovalGate(
-        AgentEventBus(), mode="plan", on_checkpoint=api_app._auto_checkpoint_hook(session)
-    )
-
-    assert _check(gate, "write_file", {"path": "app.py"}) is False
-    assert session_mgr.load(session.id).checkpoints == []
-
-
-def test_a_failing_checkpoint_never_blocks_the_tool():
-    """A safety net that stops the show is worse than one with a hole in it."""
-
-    def explode(tool_name: str, args: dict) -> None:
-        raise RuntimeError("disk full")
-
-    gate = ApprovalGate(AgentEventBus(), mode="auto", on_checkpoint=explode)
-
-    assert _check(gate, "write_file", {"path": "app.py"}) is True
-
-
-def test_a_session_without_a_workspace_gets_no_hook(session_mgr):
-    """Recording checkpoints that could never be restored helps nobody."""
-    s = session_mgr.create(name="no workspace")
-    session_mgr.save(s)
-
-    assert api_app._auto_checkpoint_hook(s) is None
-    assert api_app._auto_checkpoint_hook(None) is None
-
-
-def test_the_checkpoint_carries_the_conversation_as_it_is_now(
-    session, session_mgr, workspace
-):
-    """The hook must reload the session: a checkpoint's value is its transcript."""
-    gate = ApprovalGate(
-        AgentEventBus(), mode="auto", on_checkpoint=api_app._auto_checkpoint_hook(session)
-    )
-
-    live = session_mgr.load(session.id)
-    live.add_message("assistant", "I'll edit app.py")
-    session_mgr.save(live)
-
-    _check(gate, "write_file", {"path": "app.py"})
-
-    checkpoints = session_mgr.load(session.id).checkpoints
-    assert checkpoints[0].message_index == 2, (
-        "the gate was built before this message, so a stale session would say 1"
+    assert "on_checkpoint" not in ApprovalGate.__init__.__code__.co_varnames
+    assert not hasattr(api_app, "_auto_checkpoint_hook"), (
+        "the API module's gate hook should be gone with its only caller"
     )

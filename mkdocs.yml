@@ -71,10 +71,11 @@ nav:
   - Contributing:
       - Packaging: contributing/packaging.md
       - Frontend reference: contributing/frontend-code-reference.md
-  - Phase history:
-      - Phase 1 — Foundations: PHASE1.md
-      - Phase 2 — Performance: PHASE2.md
-      - Phase 3-G — First-run wizard: PHASE3_G.md
+  - Shipped history: history.md
+  - Ecosystem compatibility: matrix-ecosystem-compatibility.md
+  - The v4 engine:
+      - Design: upgrade-plan-v4-agentic-runtime.md
+      - Batch plan: upgrade-v4-batches.md
   - Other:
       - GitHub setup: GITHUB_SETUP.md
       - Enterprise login: ENTERPRISE_LOGIN.md

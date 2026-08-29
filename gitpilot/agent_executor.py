@@ -27,7 +27,7 @@ from .agent_events import AgentEventBus
 from .approval_protocol import ApprovalGate
 from .terminal import TerminalExecutor, TerminalSession
 from .workspace import WorkspaceManager, WorkspaceInfo
-from .test_detection import detect_test_command, detect_framework_name
+from .test_detection import detect_framework_name, detect_test_command, parse_test_counts
 from .diagnostics_runner import run_linter, parse_diagnostics
 
 logger = logging.getLogger(__name__)
@@ -157,14 +157,20 @@ class StreamingAgentExecutor:
 
             result = await self._execute_plan(plan, repo_full_name, token, branch)
 
-            # Stream result text in chunks (simulate token streaming from batch)
+            # The answer, in one event — Batch V4-E4.
+            #
+            # This used to slice the finished text into 80-character pieces with a
+            # 15 ms sleep between them, which made a batch result *look* like token
+            # streaming. It was a costume: the model had already finished, the
+            # first "token" arrived only after the whole run, and the timing
+            # signature was a giveaway (every chunk exactly 80 chars, exactly 15 ms
+            # apart). Worse, it set the expectation that streaming worked, so the
+            # absence of real streaming was invisible. The agentic engine streams
+            # provider tokens for real; this path sends what it has, once, and is
+            # honest about being a batch executor.
             answer = self._extract_answer(result)
-            chunk_size = 80
-            for i in range(0, len(answer), chunk_size):
-                if self._cancelled:
-                    break
-                await self._bus.emit(evt.text_delta(answer[i : i + chunk_size]))
-                await asyncio.sleep(0.015)
+            if answer and not self._cancelled:
+                await self._bus.emit(evt.text_delta(answer))
 
             if self._cancelled:
                 await self._bus.emit(evt.agent_error("Cancelled by user", recoverable=True))
@@ -320,35 +326,13 @@ class StreamingAgentExecutor:
 
     @staticmethod
     def _parse_test_counts(output: str) -> tuple[int, int, int]:
-        """Best-effort extraction of pass/fail/skip counts from test output."""
-        passed = failed = skipped = 0
+        """Best-effort extraction of pass/fail/skip counts from test output.
 
-        # Jest / Vitest: "Tests: 3 passed, 1 failed, 4 total"
-        m = re.search(r"(\d+)\s+passed", output)
-        if m:
-            passed = int(m.group(1))
-        m = re.search(r"(\d+)\s+failed", output)
-        if m:
-            failed = int(m.group(1))
-        m = re.search(r"(\d+)\s+skipped", output)
-        if m:
-            skipped = int(m.group(1))
-
-        # pytest: "3 passed, 1 failed, 2 skipped"
-        m = re.search(r"(\d+)\s+passed", output)
-        if m:
-            passed = int(m.group(1))
-        m = re.search(r"(\d+)\s+failed", output)
-        if m:
-            failed = int(m.group(1))
-
-        # go test: "ok" or "FAIL"
-        if "FAIL" in output and failed == 0:
-            failed = output.count("FAIL")
-        if "ok" in output and passed == 0:
-            passed = output.count("\nok")
-
-        return passed, failed, skipped
+        The implementation moved to :func:`gitpilot.test_detection.parse_test_counts`
+        in Batch V4-A6 so the ``test.run`` tool reports the same numbers this
+        validation phase does.  Kept as a method because tests reference it.
+        """
+        return parse_test_counts(output)
 
 
     # ---------------------------------------------------------------------

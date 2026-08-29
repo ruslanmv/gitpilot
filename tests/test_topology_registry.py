@@ -70,13 +70,23 @@ class TestRegistryIntegrity:
         assert len(TOPOLOGY_REGISTRY) == 9
 
     def test_all_expected_ids_present(self):
+        # ``gitpilot_code`` retired into ``autonomous_engineer`` in Batch V4-G2
+        # (§15.3): it was a flow graph promising a ReAct loop with no executor,
+        # and the id survives as an alias rather than as an entry.
         expected = {
-            "default", "gitpilot_code",
+            "default", "classic",
             "feature_builder", "bug_hunter", "code_inspector",
             "architect_mode", "quick_fix", "lite_mode",
             "tool_augmented_react",
         }
         assert set(TOPOLOGY_REGISTRY.keys()) == expected
+
+    def test_the_retired_ids_are_aliases_not_entries(self):
+        # Batch V4-G5 moved the agentic document onto ``default``, so both the id
+        # T2 used and the id the document shipped under resolve there.
+        for retired in ("gitpilot_code", "autonomous_engineer"):
+            assert retired not in TOPOLOGY_REGISTRY
+            assert get_topology(retired).id == "default"
 
     def test_default_topology_exists(self):
         assert DEFAULT_TOPOLOGY_ID in TOPOLOGY_REGISTRY
@@ -106,27 +116,37 @@ class TestRegistryIntegrity:
         systems = [t for t in TOPOLOGY_REGISTRY.values() if t.category == TopologyCategory.system]
         assert len(systems) == 4
         ids = {t.id for t in systems}
-        assert ids == {"default", "gitpilot_code", "lite_mode", "tool_augmented_react"}
+        assert ids == {
+            "default", "classic", "lite_mode", "tool_augmented_react",
+        }
 
     def test_pipeline_topologies(self):
         pipelines = [t for t in TOPOLOGY_REGISTRY.values() if t.category == TopologyCategory.pipeline]
         assert len(pipelines) == 5
         for p in pipelines:
-            assert p.execution_style == ExecutionStyle.crew_pipeline
+            # Batch V4-G3 migrated all five to policy documents, so the declared
+            # engine is now the loop.  What has to keep holding is the *dispatch*
+            # property: `agentic.py` selects a CrewAI pipeline on the strategy, and
+            # with `agent_loop_default` off that is still the path they take.
+            assert p.execution_style == ExecutionStyle.agentic_loop
             assert p.routing_policy.strategy == RoutingStrategy.fixed_sequence
             assert p.routing_policy.sequence is not None
             assert len(p.routing_policy.sequence) > 0
 
-    def test_default_uses_classify_and_dispatch(self):
-        t = TOPOLOGY_REGISTRY["default"]
+    def test_classic_still_uses_classify_and_dispatch(self):
+        """The pre-v4 architecture, under the name a user can ask for it by
+        (Batch V4-G5, §15.4)."""
+        t = TOPOLOGY_REGISTRY["classic"]
         assert t.execution_style == ExecutionStyle.single_task
         assert t.routing_policy.strategy == RoutingStrategy.classify_and_dispatch
 
-    def test_gitpilot_code_uses_react_loop(self):
-        t = TOPOLOGY_REGISTRY["gitpilot_code"]
-        assert t.execution_style == ExecutionStyle.react_loop
+    def test_the_default_runs_the_agentic_loop(self):
+        """T2's ``react_loop`` was a label on a picture. Its successor names an
+        engine that exists, and as of Batch V4-G5 it is the default."""
+        t = TOPOLOGY_REGISTRY["default"]
+        assert t.execution_style == ExecutionStyle.agentic_loop
         assert t.routing_policy.strategy == RoutingStrategy.always_main_agent
-        assert t.routing_policy.primary_agent == "main_react_agent"
+        assert t.routing_policy.primary_agent == "software_engineer"
 
 
 # ===========================================================================
@@ -283,10 +303,10 @@ class TestListAndGet:
         assert t is None
 
     def test_get_topology_graph_returns_expected_shape(self):
-        g = get_topology_graph("gitpilot_code")
+        g = get_topology_graph("default")
         assert "nodes" in g
         assert "edges" in g
-        assert g["topology_id"] == "gitpilot_code"
+        assert g["topology_id"] == "default"
         assert g["topology_name"]
         assert g["topology_icon"]
         assert g["execution_style"]
@@ -310,14 +330,14 @@ class TestListAndGet:
         m = t.to_meta()
         assert isinstance(m, TopologyMeta)
         assert m.id == "bug_hunter"
-        assert m.execution_style == ExecutionStyle.crew_pipeline
+        assert m.execution_style == ExecutionStyle.agentic_loop
 
     def test_to_dict(self):
         t = TOPOLOGY_REGISTRY["quick_fix"]
         d = t.to_dict()
         assert d["id"] == "quick_fix"
         assert d["category"] == "pipeline"
-        assert d["execution_style"] == "crew_pipeline"
+        assert d["execution_style"] == "agentic_loop"
         assert d["routing_policy"]["strategy"] == "fixed_sequence"
         assert d["routing_policy"]["sequence"] == ["developer", "git_agent"]
 
@@ -459,7 +479,10 @@ class TestDispatchPipeline:
 
         # Verify result structure
         assert result["topology_id"] == "feature_builder"
+        # The dispatcher reports the engine that ran, which is still CrewAI until
+        # the flip; the document's declared engine rides alongside it.
         assert result["execution_style"] == "crew_pipeline"
+        assert result["declared_execution_style"] == "agentic_loop"
         assert result["agents_used"] == ["explorer", "planner", "developer", "reviewer", "git_agent"]
         assert result["result"] == "Pipeline completed successfully"
 
@@ -629,11 +652,21 @@ class TestGetFlowDefinitionCompat:
     async def test_topology_id_returns_registry_graph(self):
         from gitpilot.agentic import get_flow_definition
 
+        flow = await get_flow_definition(topology_id="default")
+
+        assert flow["topology_id"] == "default"
+        node_ids = {n["id"] for n in flow["nodes"]}
+        assert "main_agent" in node_ids
+
+    @pytest.mark.asyncio
+    async def test_a_retired_id_returns_its_successors_graph(self):
+        """Asking for an alias answers with the topology it resolves to, rather
+        than 404ing on an id a client may have had saved for months."""
+        from gitpilot.agentic import get_flow_definition
+
         flow = await get_flow_definition(topology_id="gitpilot_code")
 
-        assert flow["topology_id"] == "gitpilot_code"
-        node_ids = {n["id"] for n in flow["nodes"]}
-        assert "main_react_agent" in node_ids
+        assert flow["topology_id"] == "default"
 
     @pytest.mark.asyncio
     async def test_saved_pref_is_used_when_no_id_provided(self):
@@ -667,7 +700,7 @@ class TestAPIEndpoints:
         assert len(data) == 9
         ids = {t["id"] for t in data}
         assert "default" in ids
-        assert "gitpilot_code" in ids
+        assert "classic" in ids
         assert "feature_builder" in ids
         assert "tool_augmented_react" in ids
 
@@ -768,13 +801,12 @@ class TestTopologyGraphSizes:
     """Verify expected node/edge counts as a regression guard."""
 
     EXPECTED_SIZES = {
-        "default":         (15, 25),   # 15 nodes (user, router, 10 agents, 2 tools, output), 25 edges
-        "gitpilot_code":     (13, 17),   # 13 nodes, 17 edges
-        "feature_builder": (7, 6),     # 7 nodes, 6 edges
-        "bug_hunter":      (6, 5),     # 6 nodes, 5 edges
-        "code_inspector":  (4, 3),     # 4 nodes, 3 edges
-        "architect_mode":  (4, 3),     # 4 nodes, 3 edges
-        "quick_fix":       (4, 3),     # 4 nodes, 3 edges
+        # ``classic`` is the last hand-drawn graph left: 15 nodes (user, router,
+        # 10 agents, 2 tools, output) and 25 edges.  Every other topology's graph
+        # is generated from its policy document as of Batches V4-G1/G2/G3/G5, so
+        # its size belongs to the document rather than to a picture — the shape is
+        # asserted in tests/topology instead.
+        "classic":         (15, 25),
     }
 
     @pytest.mark.parametrize("tid,expected", list(EXPECTED_SIZES.items()))
@@ -808,7 +840,7 @@ class TestClassifierHintCoverage:
     def test_system_topologies_have_empty_hints(self):
         """System topologies don't use hints (they're fallbacks)."""
         assert len(TOPOLOGY_REGISTRY["default"].routing_policy.classifier_hints) == 0
-        assert len(TOPOLOGY_REGISTRY["gitpilot_code"].routing_policy.classifier_hints) == 0
+        assert len(TOPOLOGY_REGISTRY["classic"].routing_policy.classifier_hints) == 0
 
     def test_no_duplicate_hints_across_topologies(self):
         """Warn about overlapping hints that could cause ambiguity."""

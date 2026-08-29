@@ -535,3 +535,37 @@ def wrap_if_reasoning_model(llm: Any, model_name: str) -> Any:
             return llm
 
     return ReasoningAwareLLM(llm)
+
+
+def visible_answer(answer: str, model_name: str) -> str:
+    """Drop a reasoning model's private thinking from a visible answer.
+
+    Extracted from ``direct_chat._without_reasoning`` in Batch V4-B1 so the
+    provider clients and the folder-mode chat path share one implementation.
+
+    Tags rather than the model name decide it: a local ``ollama create`` name
+    need not mention deepseek, and a model that emitted no reasoning is
+    unaffected either way.
+
+    A model that spends its whole budget thinking leaves nothing after the close
+    tag.  Returning "" there would surface as "returned an empty response",
+    which is both unhelpful and untrue, so the raw text is kept instead —
+    partial output beats a wrong diagnosis.
+    """
+    if not answer:
+        return answer
+
+    if "<think" not in answer and not is_reasoning_model(model_name or ""):
+        return answer
+
+    cleaned, reasoning = strip_reasoning_content(answer)
+    cleaned = (cleaned or "").strip()
+    if not cleaned:
+        logger.debug(
+            "%s produced only reasoning (%d chars); showing it unmodified "
+            "rather than reporting an empty response",
+            model_name,
+            len(reasoning or ""),
+        )
+        return answer
+    return cleaned

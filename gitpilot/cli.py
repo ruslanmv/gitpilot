@@ -561,12 +561,25 @@ def free_port(
     print(chosen)
 @cli.command()
 def run(
-    repo: str = typer.Option(..., "--repo", "-r", help="Repository as owner/repo"),
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository as owner/repo"),
     message: str = typer.Option("", "--message", "-m", help="User request message"),
     branch: str = typer.Option(None, "--branch", "-b", help="Target branch"),
     auto_pr: bool = typer.Option(False, "--auto-pr", help="Create PR after execution"),
     from_pr: int = typer.Option(None, "--from-pr", help="Fetch context from PR number"),
     headless: bool = typer.Option(False, "--headless", help="Non-interactive JSON output"),
+    engine: str = typer.Option(
+        "legacy", "--engine",
+        help="Execution engine: 'legacy' (plan+execute) or 'loop' (agentic, Batch V4-C4)",
+    ),
+    workspace: str = typer.Option(
+        ".", "--workspace", "-w", help="Local checkout the loop engine works in",
+    ),
+    max_iterations: int = typer.Option(
+        None, "--max-iterations", help="Cap the loop's iterations",
+    ),
+    read_only: bool = typer.Option(
+        False, "--read-only", help="Refuse to modify anything (loop engine)",
+    ),
 ):
     """Run GitPilot non-interactively (headless mode for CI/CD)."""
     import asyncio
@@ -577,6 +590,36 @@ def run(
 
     if not message:
         console.print("[red]Error:[/red] --message is required (or pipe via stdin)")
+        raise typer.Exit(code=1)
+
+    if engine == "loop":
+        # The agentic engine works against a local checkout and needs no GitHub
+        # token: one JSON object per event on stdout, so a trace is inspectable
+        # without a server.
+        from pathlib import Path as _Path
+
+        from .agent.headless import run_loop_headless
+
+        loop_result = asyncio.run(run_loop_headless(
+            message,
+            workspace=_Path(workspace),
+            max_iterations=max_iterations,
+            read_only=read_only,
+            # The trajectory is the point of this engine, so `--headless` streams
+            # every event as JSONL.  Interactively that would bury the answer, so
+            # the events are collected and only the summary is printed.
+            emit=None if headless else (lambda _payload: None),
+        ))
+        if headless:
+            console.print(loop_result.to_json())
+        elif loop_result.success:
+            console.print(f"[green]Done:[/green] {loop_result.answer[:500]}")
+        else:
+            console.print(f"[red]{loop_result.status}:[/red] {loop_result.answer[:500]}")
+        raise typer.Exit(code=0 if loop_result.success else 1)
+
+    if not repo:
+        console.print("[red]Error:[/red] --repo is required for the legacy engine")
         raise typer.Exit(code=1)
 
     token = os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")

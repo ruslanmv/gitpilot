@@ -1,0 +1,19 @@
+{
+  "id": "chatcmpl-1",
+  "object": "chat.completion",
+  "model": "gpt-4o-mini",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "The tests live in tests/."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 120,
+    "completion_tokens": 9
+  }
+}

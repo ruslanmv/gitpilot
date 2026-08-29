@@ -32,12 +32,78 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Dict
+from typing import Any, AsyncIterator, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+#: Seconds of silence before a heartbeat.  15 rather than 25 (Batch V4-E4): the
+#: usual proxy idle timeout is 30–60s, and 25 leaves no margin for one late beat.
+HEARTBEAT_INTERVAL_SEC = 15.0
+
+
+@dataclass
+class StreamMetrics:
+    """First-byte and total timing for one stream — Batch V4-E4.
+
+    Adopted from ``streaming.py`` rather than reimplemented: that module had the
+    right framing (named events, heartbeats, back-pressure, timing) and no
+    caller, while this bus had every caller and none of the framing. Keeping both
+    would have meant two answers to "how long until the user saw something?".
+    """
+
+    started_at: float = field(default_factory=time.monotonic)
+    first_byte_at: Optional[float] = None
+    finished_at: Optional[float] = None
+    event_count: int = 0
+
+    #: Events that do not count as "the user saw something".
+    _SILENT = ("keepalive",)
+
+    def observe(self, event: "AgentEvent") -> None:
+        self.event_count += 1
+        if event.data.get("status") in self._SILENT:
+            return
+        if self.first_byte_at is None:
+            self.first_byte_at = time.monotonic()
+        if event.type in (EventType.DONE, EventType.ERROR):
+            self.finished_at = time.monotonic()
+
+    @property
+    def first_byte_ms(self) -> Optional[int]:
+        if self.first_byte_at is None:
+            return None
+        return int((self.first_byte_at - self.started_at) * 1000)
+
+    @property
+    def total_ms(self) -> Optional[int]:
+        if self.finished_at is None:
+            return None
+        return int((self.finished_at - self.started_at) * 1000)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "first_byte_ms": self.first_byte_ms,
+            "total_ms": self.total_ms,
+            "event_count": self.event_count,
+        }
+
 
 class EventType(str, enum.Enum):
+    # Batch V4-C2 additions.  The loop needs to say what it is doing between
+    # tool calls; before these, a client could only see plan steps and a final
+    # answer, which is why the UI had nothing to render for an iterative run.
+    RUN_STARTED = "run_started"
+    RUN_RESUMED = "run_resumed"
+    ITERATION = "iteration"
+    AGENT_MESSAGE = "agent_message"
+    TODO_UPDATED = "todo_updated"
+    CHECKPOINT_CREATED = "checkpoint_created"
+    COMPACTION = "compaction"
+    DIALECT_DOWNGRADED = "dialect_downgraded"
+    TOOLS_PRUNED = "tools_pruned"
+    AGENT_DELEGATED = "agent_delegated"
+    AGENT_DELEGATE_DONE = "agent_delegate_done"
+
     TEXT_DELTA = "text_delta"
     TOOL_START = "tool_start"
     TOOL_RESULT = "tool_result"
@@ -259,15 +325,36 @@ class AgentEventBus:
             except asyncio.QueueFull:
                 logger.warning("AgentEventBus: subscriber queue full, dropping event")
 
-    async def stream(self, sub_id: str) -> AsyncIterator[AgentEvent]:
-        """Yield events for a subscriber. Sends keepalive every 25s."""
+    async def stream(
+        self,
+        sub_id: str,
+        *,
+        heartbeat_interval: float = HEARTBEAT_INTERVAL_SEC,
+        metrics: Optional["StreamMetrics"] = None,
+    ) -> AsyncIterator[AgentEvent]:
+        """Yield events for a subscriber, with a heartbeat while it is quiet.
+
+        The heartbeat interval came down from 25s to 15s in Batch V4-E4: proxies
+        and load balancers commonly idle-timeout a connection at 30 or 60 seconds,
+        and a 25-second beat leaves no room for one late beat. ``streaming.py``
+        had already worked this out and used 15; it just had no way to tell this
+        bus, because the two were parallel implementations of the same job.
+
+        *metrics* records first-byte and total timing when a caller wants it,
+        which is what makes "did streaming actually get faster?" answerable
+        instead of asserted.
+        """
         queue = self._subscribers.get(sub_id)
         if not queue:
             return
         try:
             while sub_id in self._subscribers:
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=25.0)
+                    event = await asyncio.wait_for(
+                        queue.get(), timeout=heartbeat_interval,
+                    )
+                    if metrics is not None:
+                        metrics.observe(event)
                     yield event
                 except asyncio.TimeoutError:
                     yield AgentEvent(

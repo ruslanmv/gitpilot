@@ -1,0 +1,82 @@
+# T6 Architect Mode, as a policy — Batch V4-G3, §15.3/§10.
+#
+# Was explore → plan, two agents. The deliverable is unchanged: a plan document
+# the user approves before anything runs, rendered by the existing plan-approval
+# card. What changes is how the plan is *produced* — a read-only agentic run that
+# can actually go and look, instead of a planner agent working from one explorer's
+# summary.
+#
+# That difference is the point of §10. A plan is only worth approving if it names
+# real files, and a planner that never opened the repository names plausible ones.
+# This topology reads as much as it needs to, then writes the plan and stops.
+#
+# Read-only, like code_inspector, and for the same reason: a plan is a proposal.
+# An "architect" that edited while planning would be answering a question nobody
+# asked.
+id: architect_mode
+name: Architect Mode
+icon: "📐"
+category: pipeline
+description: >-
+  Read-only planning: explore the code, then produce a plan that names real files,
+  real seams and a real order of work. Nothing is changed.
+
+execution:
+  engine: agentic_loop
+  dialect: auto
+
+agent:
+  role: architect
+  subagents: [explorer, researcher]
+
+capabilities:
+  fs.read: true
+  fs.list: true
+  fs.glob: true
+  fs.grep: true
+  terminal.run: { network: false, classes: [READ_ONLY] }
+  terminal.which: true
+  test.detect: true
+  git.status: true
+  git.diff: true
+  git.log: true
+  github.issue.get: true
+  github.issue.list: true
+  github.search.code: true
+  web.search: true
+  web.fetch: true
+  todo.write: true
+  agent.delegate: { max_depth: 1 }
+
+approval:
+  mode: plan
+
+verification:
+  # Quoted on purpose: YAML 1.1 reads a bare `off` as the boolean False. The
+  # schema accepts both, but the file should say what it means.
+  tests: "off"
+  max_fix_cycles: 0
+
+limits:
+  max_iterations: 30
+  max_tool_calls: 90
+  max_runtime_seconds: 1800
+
+classifier_hints:
+  - plan
+  - design
+  - architect
+  - strategy
+  - how should
+  - approach
+  - migration
+  - refactor plan
+  - proposal
+  - trade-offs
+  - options
+  - recommend
+  - evaluate
+
+sequence: [explorer, planner]
+
+visualization: auto

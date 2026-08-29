@@ -21,7 +21,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiUrl } from "../utils/api.js";
-import { fetchExecutionPlan } from "./ExecutionPlanCard.jsx";
+import { approveAndBuildRunBody, fetchExecutionPlan } from "./ExecutionPlanCard.jsx";
 
 const BACKEND_LABELS = {
   subprocess: "Local",
@@ -258,11 +258,7 @@ function CodeCanvas({
       const res = await fetch(apiUrl("/api/sandbox/run"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          language: plan.language,
-          code: plan.inline_code,
-          timeout_sec: plan.timeout_sec,
-        }),
+        body: JSON.stringify(await approveAndBuildRunBody(plan)),
       });
       const data = await res.json();
       if (!res.ok) {

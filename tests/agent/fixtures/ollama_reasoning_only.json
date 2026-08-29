@@ -1,0 +1,13 @@
+{
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "",
+        "reasoning": "<think>I should look at the Makefile first.</think>"
+      },
+      "finish_reason": "stop"
+    }
+  ]
+}

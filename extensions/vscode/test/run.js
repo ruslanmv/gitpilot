@@ -27,8 +27,10 @@ const SUITES = [
   ["Chat panel presentation", "chatPanel.test.js"],
   ["Composer and transcript", "composer.test.js"],
   ["Command wiring", "commandWiring.test.js"],
+  ["Agent console event router", "agentEventRouter.test.js"],
   ["Settings webview", "settingsWebview.test.js"],
   ["Settings panel host", "settingsPanel.test.js"],
+  ["No dead in-extension agent tree", "noDeadLocalTree.test.js"],
 ];
 
 // The suites exercise what ships, so they need a build. Failing here with a
