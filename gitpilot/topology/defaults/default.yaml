@@ -1,0 +1,85 @@
+# The Autonomous Engineer — the default topology (Batches V4-G2/G5, §15.1/§15.3).
+#
+# This is the topology the whole programme is for: one agent in a while(tool_use)
+# loop over the real tool registry, with the full-safe capability set, subagents
+# on demand, and verification when the project has tests.
+#
+# Batch V4-G5 made it `default`. It supersedes two ids, both kept as aliases so a
+# saved preference still resolves and the picker shows one card:
+#
+#   * T1 `default`, the CrewAI fan-out router. Still reachable by name as
+#     `classic` for one release cycle (§15.4) — and still what actually runs until
+#     `agent_loop_default` is on, because a document declares policy and the flag
+#     decides who executes it.
+#   * T2 `gitpilot_code`, a flow graph promising a ReAct loop with no executor.
+#   * `autonomous_engineer`, the id this document shipped under in Batch V4-G2.
+#
+# The capability set is "full-safe": everything that only reads is granted
+# outright, everything that writes to the workspace is granted (that is the job),
+# and everything that leaves a mark someone else sees — a commit, a push, a PR, a
+# comment, a deletion — asks first. `git.push` is the one outright refusal: an
+# autonomous run that can push can publish a mistake before anyone reads it, and
+# a topology that wants that says so explicitly.
+id: default
+name: Autonomous Engineer
+icon: "🧠"
+category: system
+aliases: [autonomous_engineer, gitpilot_code]
+description: >-
+  One agent in a while(tool_use) loop with the full tool registry, subagents on
+  demand, and test verification. The v4 execution engine.
+
+execution:
+  engine: agentic_loop
+  dialect: auto
+
+agent:
+  role: software_engineer
+  subagents: [explorer, reviewer, researcher, test_analyst]
+
+capabilities:
+  fs.read: true
+  fs.list: true
+  fs.glob: true
+  fs.grep: true
+  fs.write: true
+  fs.edit: true
+  fs.delete: ask
+  terminal.run: { network: false }
+  terminal.run_snippet: ask
+  terminal.which: true
+  terminal.env: true
+  test.detect: true
+  test.run: true
+  git.status: true
+  git.diff: true
+  git.log: true
+  git.branch: true
+  git.stash: true
+  git.commit: ask
+  git.push: false
+  github.issue.get: true
+  github.issue.list: true
+  github.issue.create: ask
+  github.issue.comment: ask
+  github.pr.get: true
+  github.pr.list: true
+  github.pr.create: ask
+  github.search.code: true
+  github.search.issues: true
+  todo.write: true
+  agent.delegate: { max_depth: 1 }
+
+approval:
+  mode: session_default
+
+verification:
+  tests: auto
+  max_fix_cycles: 3
+
+limits:
+  max_iterations: 40
+  max_tool_calls: 120
+  max_runtime_seconds: 1800
+
+visualization: auto

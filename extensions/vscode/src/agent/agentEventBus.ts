@@ -8,7 +8,7 @@
  * These are ADDITIVE — the existing AgentEvent union from
  * providers/interface.ts is preserved and re-exported.
  */
-import type { AgentEvent } from "../local/providers/interface";
+import type { AgentEvent } from "./agentEvents";
 
 // Re-export the base events for convenience
 export type { AgentEvent };

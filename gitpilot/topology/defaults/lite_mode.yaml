@@ -1,0 +1,70 @@
+# T8 Lite Mode, as a policy over the one engine — Batch V4-G2, §6.4/§15.3.
+#
+# Lite Mode used to be a separate universe: its own planner, its own prompt
+# builder, its own idea of what a step was. That is why a sub-7B model could only
+# ever produce a plan for a human to approve — nothing downstream could execute
+# what it emitted.
+#
+# Here it is the same loop with `dialect: lite`: the constrained line protocol,
+# a prefetched file list, and every path the model names validated against it.
+# The model does not have to hold a JSON schema list to be useful.
+#
+# Two things follow from the model being small, and both are limits rather than
+# capabilities:
+#
+#   - No delegation. A 1.5B model spawning subagents multiplies the failure
+#     surface rather than dividing the work, and a child that summarises badly
+#     poisons the parent's context.
+#   - Tight budgets. A small model that has not converged in twelve turns is
+#     looping, not thinking, and every extra turn is another chance to lose the
+#     file list.
+#
+# Auto-activation lives in the ModelProfile (§6.2): a model under the LITE
+# threshold gets this dialect whatever topology is selected. This topology is the
+# *explicit override* — how a user pins LITE on a model that would not have
+# chosen it.
+id: lite_mode
+name: Lite Mode (Small LLMs)
+icon: "💡"
+category: system
+description: >-
+  The agentic loop spoken in the LITE dialect: a constrained line protocol with a
+  prefetched file list, for models under 7B. No delegation, tight budgets.
+
+execution:
+  engine: agentic_loop
+  dialect: lite          # pinned, not inferred — that is what this topology is for
+
+agent:
+  role: lite_agent
+  subagents: []          # see the note above: delegation multiplies failure here
+
+capabilities:
+  fs.read: true
+  fs.list: true
+  fs.glob: true
+  fs.grep: true
+  fs.write: true
+  fs.edit: true
+  terminal.run: { network: false }
+  test.detect: true
+  test.run: true
+  git.status: true
+  git.diff: true
+  git.commit: ask
+  # No todo.write: the LITE dialect drives its own three-phase plan
+  # (toolkit.todo.LITE_PHASES) rather than asking the model to maintain one.
+
+approval:
+  mode: session_default
+
+verification:
+  tests: auto
+  max_fix_cycles: 1      # a small model rarely fixes a failure it just caused
+
+limits:
+  max_iterations: 12
+  max_tool_calls: 30
+  max_runtime_seconds: 600
+
+visualization: auto

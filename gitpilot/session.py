@@ -50,6 +50,12 @@ class Checkpoint:
     #: The tool call this checkpoint was taken in front of.
     tool_name: str = "manual"
     target_path: str | None = None
+    #: The agentic run this snapshot belongs to, and where in that run's journal
+    #: it sits (Batch V4-D4).  Without these a checkpoint can only rewind files;
+    #: with them the run state can be truncated to the same point, so the two do
+    #: not end up describing different histories.
+    run_id: str | None = None
+    journal_seq: int = 0
 
 
 @dataclass
@@ -98,6 +104,14 @@ class Session:
     pr_number: int | None = None
     status: str = "active"  # active | paused | completed
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    #: The permission mode, and the only place it lives — Batch V4-D1 (F11).
+    #: It used to be tracked in three places at once: a process-global
+    #: ``PermissionManager`` in the API module, a ``permission_mode`` field on
+    #: every chat request, and the approval gate's own copy. A request body may
+    #: now only *restrict* this value for one request; raising it to ``auto``
+    #: takes the authenticated ``PUT /api/permissions/mode``.
+    permission_mode: str = "normal"
 
     # Session mode fields
     mode: str | None = None        # "folder" | "local_git" | "github"
@@ -397,6 +411,9 @@ class SessionManager:
         description: str = "",
         tool_name: str = "manual",
         target_path: str | None = None,
+        arguments: dict[str, Any] | None = None,
+        run_id: str = "",
+        journal_seq: int = 0,
     ) -> Checkpoint:
         """Snapshot the workspace and the conversation up to this point.
 
@@ -412,6 +429,8 @@ class SessionManager:
         checkpoint = Checkpoint(
             message_index=len(session.messages),
             description=description or f"Checkpoint at message {len(session.messages)}",
+            run_id=run_id or None,
+            journal_seq=journal_seq,
         )
 
         if workspace_path and workspace_path.exists():
@@ -420,6 +439,11 @@ class SessionManager:
                 record = store.snapshot(
                     ToolCallDescriptor(
                         name=tool_name,
+                        # Populated for the first time in Batch V4-D4. The field
+                        # has existed since checkpoints landed and every caller
+                        # left it empty, so "what was this snapshot for?" could
+                        # only be answered by a tool name and a path.
+                        arguments=dict(arguments or {}),
                         target_path=target_path,
                         note=checkpoint.description,
                     ),
@@ -444,12 +468,19 @@ class SessionManager:
         session: Session,
         checkpoint_id: str,
         workspace_path: Path | None = None,
+        truncate_journal: bool = False,
     ) -> Session:
         """Put the files and the conversation back as they were.
 
         Both halves, or it is not a rewind: restoring files under a transcript
         that still describes the work would leave the model reasoning about
         edits that no longer exist.
+
+        *truncate_journal* extends that to the third half — an agentic run's
+        journal (Batch V4-D4). Off by default because the journal is also the
+        audit record: a caller rewinding files mid-run wants the run state to
+        move with them, but a caller inspecting history afterwards does not want
+        the evidence rewritten.
         """
         checkpoint = None
         for cp in session.checkpoints:
@@ -477,7 +508,29 @@ class SessionManager:
                     checkpoint.store_id,
                 )
 
+        if truncate_journal and checkpoint.run_id and checkpoint.journal_seq:
+            self._truncate_run_journal(
+                session.id, checkpoint.run_id, checkpoint.journal_seq,
+            )
+
         idx = session.checkpoints.index(checkpoint)
         session.checkpoints = session.checkpoints[: idx + 1]
         self.save(session)
         return session
+
+    def _truncate_run_journal(self, session_id: str, run_id: str, seq: int) -> int:
+        """Move an agentic run's journal back to *seq* (Batch V4-D4).
+
+        Best effort: the journal is a separate store, and a rewind that half
+        succeeded is still better than one that raised after restoring the files.
+        """
+        try:
+            from .agent.journal import RunJournal
+
+            journal = RunJournal(run_id=run_id, session_id=session_id)
+            if not journal.path.exists():
+                return 0
+            return journal.reopen().truncate_after(seq)
+        except Exception as exc:  # noqa: BLE001 - files are already restored
+            logger.warning("could not truncate journal for run %s: %s", run_id, exc)
+            return 0

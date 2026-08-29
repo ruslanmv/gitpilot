@@ -1,0 +1,73 @@
+# T7 Quick Fix, as a policy — Batch V4-G3, §15.3.
+#
+# Was edit → commit. The value was the *narrowness*, and narrowness is a limit,
+# not an engine: twelve iterations, no delegation, and a role prompt that says to
+# stop rather than refactor around the change.
+#
+# Twelve is chosen, not rounded. A one-line change that has taken twelve turns is
+# not a quick fix any more, and the useful behaviour at that point is to say so —
+# which is exactly what the loop does when it exhausts its budget (it degrades and
+# reports, rather than failing silently).
+#
+# No delegation: spawning an explorer to find a typo costs more than finding it.
+id: quick_fix
+name: Quick Fix
+icon: "⚡"
+category: pipeline
+description: >-
+  A small, well-defined change: find the one place it belongs, make it, stop. No
+  delegation, twelve iterations.
+
+execution:
+  engine: agentic_loop
+  dialect: auto
+
+agent:
+  role: quick_fixer
+  subagents: []
+
+capabilities:
+  fs.read: true
+  fs.list: true
+  fs.glob: true
+  fs.grep: true
+  fs.write: true
+  fs.edit: true
+  terminal.run: { network: false }
+  test.detect: true
+  test.run: true
+  git.status: true
+  git.diff: true
+  git.commit: ask
+  git.push: false
+  # No todo.write: a task list for a one-line change is ceremony.
+
+approval:
+  mode: session_default
+
+verification:
+  tests: auto
+  max_fix_cycles: 1
+
+limits:
+  max_iterations: 12
+  max_tool_calls: 30
+  max_runtime_seconds: 600
+
+classifier_hints:
+  - typo
+  - rename
+  - update readme
+  - config
+  - small change
+  - one-liner
+  - documentation
+  - comment
+  - formatting
+  - version bump
+  - update dependency
+  - quick
+
+sequence: [developer, git_agent]
+
+visualization: auto

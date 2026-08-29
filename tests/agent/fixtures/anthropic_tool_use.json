@@ -1,0 +1,25 @@
+{
+  "id": "msg_2",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-sonnet-4-5",
+  "content": [
+    {
+      "type": "text",
+      "text": "Let me read that file."
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_01",
+      "name": "fs.read",
+      "input": {
+        "path": "Makefile"
+      }
+    }
+  ],
+  "stop_reason": "tool_use",
+  "usage": {
+    "input_tokens": 400,
+    "output_tokens": 40
+  }
+}

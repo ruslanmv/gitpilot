@@ -12,7 +12,7 @@ Ten specialized agents — Explorer, Planner, Coder, Reviewer and six more — c
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-D95C3D?style=flat-square&labelColor=1C1C1F)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-D95C3D?style=flat-square&labelColor=1C1C1F)](LICENSE)
 [![VS Code](https://img.shields.io/badge/VS%20Code-Extension-D95C3D?style=flat-square&labelColor=1C1C1F)](https://marketplace.visualstudio.com/)
-[![Tests](https://img.shields.io/badge/tests-854%20passing-D95C3D?style=flat-square&labelColor=1C1C1F)](#contributing)
+[![Tests](https://img.shields.io/badge/tests-2218%20passing-D95C3D?style=flat-square&labelColor=1C1C1F)](#contributing)
 
 [**Get Started**](#get-started) &nbsp;·&nbsp; [VS Code](#vs-code-extension) &nbsp;·&nbsp; [Web App](#web-app) &nbsp;·&nbsp; [How It Works](#how-it-works) &nbsp;·&nbsp; [Providers](#supported-ai-providers)
 
@@ -69,7 +69,7 @@ Diffs are shown before they're applied. Tests run before anything is committed. 
 - 🧭 **Works where you work** — VS Code, web app, and CLI share one login, one history, and one set of approvals.
 - 🧠 **Any LLM, zero lock-in** — OpenAI, Anthropic Claude, IBM Watsonx, Ollama (local & free) or OllaBridge. Switch in settings, no code change.
 - 🔐 **Private by default** — run the entire stack locally with Ollama. No telemetry, no data leaves your machine.
-- 🏢 **Enterprise-ready, Apache 2.0 open source** — 854 passing tests, Docker & Hugging Face deployment recipes, audit the code yourself.
+- 🏢 **Enterprise-ready, Apache 2.0 open source** — 2,218 passing tests, Docker & Hugging Face deployment recipes, audit the code yourself.
 - 🌍 **Runs anywhere** — laptop, private cloud, air-gapped environments, or managed hosting. Your repo, your rules.
 
 ---

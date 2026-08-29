@@ -1,0 +1,18 @@
+{
+  "id": "chat-1",
+  "model_id": "ibm/granite-13b-chat-v2",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "watsonx answer"
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 50,
+    "completion_tokens": 4
+  }
+}

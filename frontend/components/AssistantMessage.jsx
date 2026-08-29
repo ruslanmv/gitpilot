@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { apiUrl } from "../utils/api.js";
 import PlanView from "./PlanView.jsx";
 import RunnableCodeBlock, { splitFences } from "./RunnableCodeBlock.jsx";
-import ExecutionPlanCard from "./ExecutionPlanCard.jsx";
+import ExecutionPlanCard, { approveAndBuildRunBody } from "./ExecutionPlanCard.jsx";
 
 export default function AssistantMessage({
   answer,
@@ -33,9 +33,7 @@ export default function AssistantMessage({
     setRunError(null);
     setRunResult(null);
     try {
-      const body = ep.file
-        ? { language: ep.language, code: null }
-        : { language: ep.language, code: ep.inline_code, timeout_sec: ep.timeout_sec };
+      const body = await approveAndBuildRunBody(ep);
       const res = await fetch(apiUrl("/api/sandbox/run"), {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),

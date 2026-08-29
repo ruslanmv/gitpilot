@@ -6,6 +6,14 @@ import { resolveBackendUrl } from "./backend.js";
  * Falls back gracefully — callers should always have an HTTP fallback.
  */
 
+function readGithubToken() {
+  try {
+    return localStorage.getItem('github_token') || '';
+  } catch {
+    return '';   // storage may be blocked
+  }
+}
+
 const WS_RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 16000];
 const HEARTBEAT_INTERVAL = 30000;
 const MAX_RECONNECT_ATTEMPTS = 5;
@@ -36,6 +44,15 @@ export class SessionWebSocket {
     } else {
       // Dev: same host (Vite proxy forwards /ws to backend)
       wsUrl = `${protocol}//${window.location.host}/ws/sessions/${this._sessionId}`;
+    }
+
+    // Carry the GitHub token so repo-mode chat runs as *this* user. The
+    // browser WebSocket API cannot set an Authorization header, so it rides in
+    // the query string; the server prefers the header when a native client
+    // sends one.
+    const githubToken = readGithubToken();
+    if (githubToken) {
+      wsUrl += `?token=${encodeURIComponent(githubToken)}`;
     }
 
     try {

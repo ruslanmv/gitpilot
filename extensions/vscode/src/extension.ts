@@ -24,6 +24,7 @@ import { ChatClient } from "./api/chatClient";
 import { SettingsClient } from "./api/settingsClient";
 import { RepoClient } from "./api/repoClient";
 
+import { ROUTED_TYPES, createRouterState, routeAgentEvent } from "./agent/eventRouter";
 import { getConfig, onConfigChange } from "./utils/config";
 import { getWorkspaceContext, ensureGitRepo } from "./utils/context";
 import { StatusBarManager } from "./utils/statusBar";
@@ -1223,6 +1224,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
+    const routerState = createRouterState();
     let fullText = "";
     let buffer = "";
 
@@ -1247,93 +1249,23 @@ export function activate(context: vscode.ExtensionContext): void {
           const type = String(event.type || "");
           seen[type] = (seen[type] || 0) + 1;
 
-          if (type === "text_delta") {
-            fullText += String(event.text || "");
-            postMessageToPanel({
-              type: "CHAT_STREAM_CHUNK",
-              payload: { content: String(event.text || "") },
-            } as ExtensionToWebviewMessage);
-          } else if (type === "tool_start") {
-            postMessageToPanel({
-              type: "AGENT_TOOL_ACTIVITY",
-              payload: {
-                id: String(event.tool_id || event.id || ""),
-                name: String(event.name || ""),
-                status: "running" as const,
-                args: (event.arguments || {}) as Record<string, unknown>,
-              },
-            } as ExtensionToWebviewMessage);
-          } else if (type === "tool_result") {
-            postMessageToPanel({
-              type: "AGENT_TOOL_ACTIVITY",
-              payload: {
-                id: String(event.tool_id || event.id || ""),
-                name: String(event.name || ""),
-                status: event.is_error ? "failed" as const : "completed" as const,
-                result: String(event.result || "").slice(0, 500),
-                is_error: Boolean(event.is_error),
-              },
-            } as ExtensionToWebviewMessage);
-          } else if (type === "approval_needed") {
-            postMessageToPanel({
-              type: "TOOL_APPROVAL_REQUEST",
-              payload: {
-                id: String(event.request_id || ""),
-                tool: String(event.tool || ""),
-                args: (event.arguments || {}) as Record<string, unknown>,
-                summary: String(event.summary || ""),
-                diffPreview: event.diff_preview ? String(event.diff_preview) : undefined,
-                riskLevel: (String(event.risk_level || "medium")) as "low" | "medium" | "high",
-              },
-            } as ExtensionToWebviewMessage);
-          } else if (type === "plan_step") {
-            postMessageToPanel({
-              type: "PLAN_STEP_UPDATE",
-              payload: {
-                stepIndex: Number(event.step_index || 0),
-                stepTitle: String(event.title || ""),
-                action: String(event.action || ""),
-                status: String(event.status || "pending"),
-              },
-            } as ExtensionToWebviewMessage);
-          } else if (type === "terminal_output") {
-            postMessageToPanel({
-              type: "TERMINAL_OUTPUT",
-              payload: {
-                stream: String(event.stream || "stdout") as "stdout" | "stderr" | "exit",
-                text: String(event.text || ""),
-              },
-            } as ExtensionToWebviewMessage);
-          } else if (type === "terminal_exit") {
-            postMessageToPanel({
-              type: "TERMINAL_OUTPUT",
-              payload: {
-                stream: "exit" as const,
-                text: `\n[Process exited with code ${event.exit_code ?? -1}]`,
-                exitCode: Number(event.exit_code ?? -1),
-              },
-            } as ExtensionToWebviewMessage);
-          } else if (type === "test_result") {
-            postMessageToPanel({
-              type: "TEST_RESULT",
-              payload: {
-                framework: String(event.framework || "unknown"),
-                passed: Number(event.passed || 0),
-                failed: Number(event.failed || 0),
-                skipped: Number(event.skipped || 0),
-                exitCode: Number(event.exit_code || 0),
-              },
-            } as ExtensionToWebviewMessage);
-          } else if (type === "diagnostics") {
-            postMessageToPanel({
-              type: "DIAGNOSTICS_RESULT",
-              payload: {
-                errors: Number(event.errors || 0),
-                warnings: Number(event.warnings || 0),
-                entries: Array.isArray(event.entries) ? event.entries as Array<{ file: string; line: number; severity: string; message: string }> : [],
-              },
-            } as ExtensionToWebviewMessage);
-          } else if (type === "status_change" && event.status !== "keepalive") {
+          // Batch V4-E5: the mapping lives in `agent/eventRouter.ts` now.
+          // It used to be ~120 lines of `else if` inside this loop, which put a
+          // live server and a webview in the way of testing any render path —
+          // exactly when the engine's events (durations, TODO lists, nested
+          // subagents, command classes) made those paths worth testing.
+          for (const message of routeAgentEvent(event, routerState)) {
+            if (message.type === "CHAT_STREAM_CHUNK") {
+              fullText += message.payload.content;
+            }
+            postMessageToPanel(message);
+          }
+
+          if (ROUTED_TYPES.has(type)) {
+            continue;
+          }
+
+          if (type === "status_change" && event.status !== "keepalive") {
             // Update task status in state store
             const statusMap: Record<string, string> = {
               planning: "planning",
@@ -1925,8 +1857,29 @@ export function activate(context: vscode.ExtensionContext): void {
             return;
           }
 
-          case "CANCEL_TASK":
+          case "CANCEL_TASK": {
             output.appendLine("[GitPilot] Cancel task requested");
+            // Batch V4-E5. Aborting the local fetch stopped us *listening*; the
+            // run carried on server-side, still writing files and spending
+            // tokens, and a reconnect would find it mid-flight. The server has
+            // had a cancel endpoint since Batch V4-C3 — the loop's cancel is
+            // cooperative between tool calls and a real cancellation point inside
+            // provider streaming — so tell it, then stop listening.
+            const cancelSession = stateStore.state.session?.sessionId;
+            if (cancelSession) {
+              try {
+                const base = getConfig().serverUrl.replace(/\/$/, "");
+                await fetch(`${base}/api/v2/agent/cancel`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ session_id: cancelSession }),
+                });
+              } catch (err) {
+                // Best effort: the user asked to stop, so stopping locally still
+                // happens even when the server cannot be reached.
+                output.appendLine(`[GitPilot] Server cancel failed: ${err}`);
+              }
+            }
             if (activeStreamAbort) {
               activeStreamAbort.abort();
               activeStreamAbort = null;
@@ -1937,6 +1890,7 @@ export function activate(context: vscode.ExtensionContext): void {
               error: "Cancelled by user",
             });
             return;
+          }
 
           case "NEW_SESSION": {
             output.appendLine("[GitPilot] New session requested — clearing state");

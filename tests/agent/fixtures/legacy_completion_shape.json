@@ -1,0 +1,9 @@
+{
+  "choices": [
+    {
+      "index": 0,
+      "text": "legacy answer",
+      "finish_reason": "stop"
+    }
+  ]
+}

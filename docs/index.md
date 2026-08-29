@@ -22,8 +22,14 @@ Open [http://localhost:8000](http://localhost:8000).
 * **[Deploy](deploy/)** — Docker, Render, Vercel, MCP stack, production.
 * **[Contributing](contributing/packaging.md)** — packaging, frontend
   reference, hacking on GitPilot itself.
-* **Phase history** — [Phase 1](PHASE1.md), [Phase 2](PHASE2.md),
-  [Phase 3-G](PHASE3_G.md).
+* **Shipped history** — what each phase put in the repository:
+  [history](history.md).
+* **Ecosystem compatibility** — how matrix-builder, matrix-designer and SelfRepair
+  fit together, and where they do not:
+  [assessment](matrix-ecosystem-compatibility.md).
+* **The v4 engine** — the agentic execution engine currently landing:
+  [design](upgrade-plan-v4-agentic-runtime.md),
+  [batch plan](upgrade-v4-batches.md).
 * **[Upgrade catalogue](UPGRADES.md)** — every feature introduced via
   the Phase plan.
 

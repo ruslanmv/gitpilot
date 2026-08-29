@@ -1,0 +1,21 @@
+{
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "part one "
+          },
+          {
+            "type": "text",
+            "text": "part two"
+          }
+        ]
+      },
+      "finish_reason": "stop"
+    }
+  ]
+}

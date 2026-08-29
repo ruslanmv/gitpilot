@@ -85,6 +85,33 @@ _INTENT_TRIGGERS: list[tuple[str, tuple[str, ...]]] = [
                 "overview", "what do you think")),
 ]
 
+# Runnable extensions — a goal that names one of these files after a run
+# verb is an execute request, whatever the surrounding phrasing.  Kept in
+# sync with ``agentic._RUNNABLE_EXTENSIONS`` (the short-circuit rejects
+# anything else, so a wider list here would only produce dead intents).
+_RUNNABLE_EXTS_RE = "py|js|mjs|cjs|sh|bash"
+
+# "run nuclear_shell_demo.py", "please execute src/main.py", "launch
+# `build.sh`" — the literal-substring table below cannot express "a run
+# verb followed by a filename", so it used to miss every run request that
+# named a file it had not been taught by name ("run demo", "run main").
+# That is the defect this regex closes: the verb and the file matter, the
+# words in between do not.
+_RUN_VERB_FILE_RE = re.compile(
+    r"\b(?:run|runs|running|execute|exec|launch|invoke|start|interpret|evaluate)\b"
+    r"(?:\s+(?:the|this|that|my|our|a|an|it|file|script|program|code|again))*"
+    r"\s+[`'\"]?[\w./\-]+\.(?:" + _RUNNABLE_EXTS_RE + r")\b",
+    re.IGNORECASE,
+)
+
+# "python nuclear_shell_demo.py", "node server.js", "bash install.sh" —
+# naming the interpreter is a run request even with no verb at all.
+_INTERPRETER_FILE_RE = re.compile(
+    r"\b(?:python3?|py|node|nodejs|bash|sh|zsh)\s+[`'\"]?[\w./\-]+\.(?:"
+    + _RUNNABLE_EXTS_RE + r")\b",
+    re.IGNORECASE,
+)
+
 # Repo-file extension whitelist for path extraction — every match
 # must end in a "real" extension OR be a well-known extensionless
 # file.  Keeps the extractor from grabbing words like "asyncio" that
@@ -162,6 +189,11 @@ class RouterDecision:
 # ----------------------------------------------------------------------
 
 def _detect_intent(goal: str) -> Intent:
+    # Regex first: "<run verb> <runnable file>" and "<interpreter> <file>"
+    # are execute requests no matter how the rest of the sentence reads,
+    # and no substring table can enumerate every filename a user may type.
+    if _RUN_VERB_FILE_RE.search(goal) or _INTERPRETER_FILE_RE.search(goal):
+        return "execute"
     q = " " + goal.lower() + " "
     for intent, triggers in _INTENT_TRIGGERS:
         for t in triggers:

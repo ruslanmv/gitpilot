@@ -1,0 +1,5 @@
+{
+  "id": "chatcmpl-bad",
+  "object": "chat.completion",
+  "choices": []
+}

@@ -109,11 +109,7 @@ export default function RunnableCodeBlock({ language, code, owner, repo }) {
       const res = await fetch(apiUrl("/api/sandbox/run"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          language: plan.language,
-          code: plan.inline_code,
-          timeout_sec: plan.timeout_sec,
-        }),
+        body: JSON.stringify(await approveAndBuildRunBody(plan)),
       });
       const data = await res.json();
       if (!res.ok) {

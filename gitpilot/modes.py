@@ -42,15 +42,14 @@ opt in by instantiating :class:`ModeRegistry` and asking for the
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .tool_groups import ToolPolicy
+from .yaml_lite import load_yaml_or_json, scalar, split_flow, tiny_yaml
 
 logger = logging.getLogger(__name__)
 
@@ -263,7 +262,7 @@ def activate_mode(registry: ModeRegistry, slug: str) -> Optional[ActiveModeConte
 
 
 # ----------------------------------------------------------------------
-# Minimal YAML loader (no PyYAML dependency)
+# YAML loading
 # ----------------------------------------------------------------------
 
 def _expand_env(value: Any) -> str:
@@ -272,222 +271,10 @@ def _expand_env(value: Any) -> str:
     return str(value)
 
 
-def _load_yaml_or_json(text: str) -> Dict[str, Any]:
-    """Parse YAML or JSON text.  Prefers ``yaml`` when installed.
-
-    Falls back to ``json`` for ``.yaml`` files that happen to be JSON
-    and to a tiny in-tree YAML subset otherwise.  The subset supports
-    the shape used by ``modes.yaml``: nested mappings, lists, and
-    folded/block scalars.
-    """
-    try:
-        import yaml
-
-        loaded = yaml.safe_load(text)
-        if isinstance(loaded, dict):
-            return loaded
-        return {}
-    except ImportError:
-        pass
-    # Fast path: JSON masquerading as YAML.
-    stripped = text.strip()
-    if stripped.startswith("{"):
-        try:
-            parsed_json = json.loads(stripped)
-            if isinstance(parsed_json, dict):
-                return parsed_json
-        except Exception:
-            pass
-    return _tiny_yaml(text)
-
-
-# --- in-tree minimal YAML parser ---------------------------------------
-# Supports: scalars, lists ("- foo"), nested maps via indentation, block
-# scalars ("|" and ">-"), and inline ``{a: 1, b: 2}`` / ``[a, b]`` flows.
-# Sufficient for ``modes.yaml`` examples shipped with GitPilot.
-
-_BLOCK_SCALAR_RE = re.compile(r"^(?P<key>[^:#\s][^:]*):\s*(?P<style>[|>][-+]?)\s*$")
-_KEY_VAL_RE = re.compile(r"^(?P<key>[^:#\s][^:]*?):\s*(?P<value>.*)$")
-_LIST_ITEM_RE = re.compile(r"^- ?(?P<rest>.*)$")
-
-
-def _tiny_yaml(text: str) -> Dict[str, Any]:
-    lines = text.splitlines()
-    pos = [0]
-
-    def parse_block(indent: int) -> Any:
-        # Decide list vs map by first non-blank child.
-        while pos[0] < len(lines) and not lines[pos[0]].strip():
-            pos[0] += 1
-        if pos[0] >= len(lines):
-            return None
-        first = lines[pos[0]]
-        cur_indent = len(first) - len(first.lstrip(" "))
-        if cur_indent < indent:
-            return None
-        stripped = first[cur_indent:]
-        if stripped.startswith("- "):
-            return parse_list(cur_indent)
-        return parse_map(cur_indent)
-
-    def parse_map(indent: int) -> Dict[str, Any]:
-        result: Dict[str, Any] = {}
-        while pos[0] < len(lines):
-            raw = lines[pos[0]]
-            if not raw.strip() or raw.lstrip().startswith("#"):
-                pos[0] += 1
-                continue
-            cur_indent = len(raw) - len(raw.lstrip(" "))
-            if cur_indent < indent:
-                break
-            if cur_indent > indent:
-                break
-            stripped = raw[cur_indent:]
-            block = _BLOCK_SCALAR_RE.match(stripped)
-            if block:
-                key = block.group("key").strip()
-                pos[0] += 1
-                result[key] = _read_block_scalar(cur_indent + 1, block.group("style"))
-                continue
-            m = _KEY_VAL_RE.match(stripped)
-            if not m:
-                pos[0] += 1
-                continue
-            key = m.group("key").strip()
-            value = m.group("value").strip()
-            pos[0] += 1
-            if value == "" or value is None:
-                # Nested block (map or list)
-                nested = parse_block(cur_indent + 1)
-                result[key] = nested if nested is not None else None
-            else:
-                result[key] = _scalar(value)
-        return result
-
-    def parse_list(indent: int) -> List[Any]:
-        result: List[Any] = []
-        while pos[0] < len(lines):
-            raw = lines[pos[0]]
-            if not raw.strip() or raw.lstrip().startswith("#"):
-                pos[0] += 1
-                continue
-            cur_indent = len(raw) - len(raw.lstrip(" "))
-            if cur_indent < indent:
-                break
-            if cur_indent > indent:
-                break
-            stripped = raw[cur_indent:]
-            lm = _LIST_ITEM_RE.match(stripped)
-            if not lm:
-                break
-            rest = lm.group("rest").rstrip()
-            pos[0] += 1
-            if not rest:
-                # Next line is a nested map or list
-                nested = parse_block(cur_indent + 2)
-                result.append(nested)
-                continue
-            # ``- key: value`` form starts an inline map.
-            inline = _KEY_VAL_RE.match(rest)
-            if inline:
-                key = inline.group("key").strip()
-                value = inline.group("value").strip()
-                item: Dict[str, Any] = {}
-                if value:
-                    item[key] = _scalar(value)
-                else:
-                    nested = parse_block(cur_indent + 2)
-                    item[key] = nested
-                # Continue collecting remaining map keys at the same
-                # indent as the dash continuation (cur_indent + 2).
-                child_indent = cur_indent + 2
-                extra = parse_map(child_indent)
-                item.update(extra)
-                result.append(item)
-            else:
-                result.append(_scalar(rest))
-        return result
-
-    def _read_block_scalar(indent: int, style: str) -> str:
-        buf: List[str] = []
-        while pos[0] < len(lines):
-            raw = lines[pos[0]]
-            if not raw.strip():
-                buf.append("")
-                pos[0] += 1
-                continue
-            cur_indent = len(raw) - len(raw.lstrip(" "))
-            if cur_indent < indent:
-                break
-            buf.append(raw[indent:])
-            pos[0] += 1
-        joined = "\n".join(buf)
-        if style.startswith(">"):
-            joined = joined.replace("\n\n", "\f").replace("\n", " ").replace("\f", "\n\n")
-        if style.endswith("-"):
-            joined = joined.rstrip("\n")
-        return joined
-
-    root = parse_map(0)
-    if not isinstance(root, dict):
-        return {}
-    return root
-
-
-def _scalar(raw: str) -> Any:
-    s = raw.strip()
-    if s.startswith('"') and s.endswith('"'):
-        return s[1:-1]
-    if s.startswith("'") and s.endswith("'"):
-        return s[1:-1]
-    if s.startswith("[") and s.endswith("]"):
-        inner = s[1:-1].strip()
-        if not inner:
-            return []
-        return [_scalar(x) for x in _split_flow(inner)]
-    if s.startswith("{") and s.endswith("}"):
-        inner = s[1:-1].strip()
-        if not inner:
-            return {}
-        out: Dict[str, Any] = {}
-        for piece in _split_flow(inner):
-            if ":" in piece:
-                k, v = piece.split(":", 1)
-                out[k.strip()] = _scalar(v)
-        return out
-    low = s.lower()
-    if low in {"true", "yes"}:
-        return True
-    if low in {"false", "no"}:
-        return False
-    if low in {"null", "~", ""}:
-        return None
-    try:
-        return int(s)
-    except ValueError:
-        pass
-    try:
-        return float(s)
-    except ValueError:
-        pass
-    return s
-
-
-def _split_flow(text: str) -> List[str]:
-    """Split a flow sequence on commas, respecting nested [] and {}."""
-    out: List[str] = []
-    depth = 0
-    buf: List[str] = []
-    for ch in text:
-        if ch in "[{":
-            depth += 1
-        elif ch in "]}":
-            depth -= 1
-        if ch == "," and depth == 0:
-            out.append("".join(buf).strip())
-            buf = []
-        else:
-            buf.append(ch)
-    if buf:
-        out.append("".join(buf).strip())
-    return out
+#: The loader lives in :mod:`gitpilot.yaml_lite` since Batch V4-G1, when the
+#: topology documents became its second consumer.  These aliases keep the names
+#: this module has always exported.
+_load_yaml_or_json = load_yaml_or_json
+_tiny_yaml = tiny_yaml
+_scalar = scalar
+_split_flow = split_flow

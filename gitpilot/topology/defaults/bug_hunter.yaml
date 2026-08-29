@@ -1,0 +1,87 @@
+# T4 Bug Hunter, as a policy — Batch V4-G3, §15.3.
+#
+# Was a four-agent pipeline: explore → fix → verify → PR. The ordering is the
+# whole value and it survives in the role prompt: reproduce, diagnose, fix,
+# re-test. What does not survive is doing it in four contexts — the agent that
+# "verifies" in a pipeline never saw the failure it is verifying against, which is
+# why a pipeline could report a green suite for a bug it had not fixed.
+#
+# `git.commit: ask` rather than forbidden: §15.3 leaves that to the team, and a
+# fix you cannot commit is a fix you have to re-apply by hand. `verification.tests:
+# required` is not negotiable here — a bug fix that has not been re-tested is a
+# guess with extra steps.
+id: bug_hunter
+name: Bug Hunter
+icon: "🐛"
+category: pipeline
+description: >-
+  Reproduce the failure, diagnose the cause, fix it, and re-run the tests. In that
+  order, in one context.
+
+execution:
+  engine: agentic_loop
+  dialect: auto
+
+agent:
+  role: bug_hunter
+  subagents: [explorer, test_analyst]
+
+capabilities:
+  fs.read: true
+  fs.list: true
+  fs.glob: true
+  fs.grep: true
+  fs.write: true
+  fs.edit: true
+  terminal.run: { network: false }
+  terminal.which: true
+  test.detect: true
+  test.run: true
+  git.status: true
+  git.diff: true
+  git.log: true
+  git.commit: ask
+  git.push: false
+  github.issue.get: true
+  github.issue.list: true
+  github.issue.comment: ask
+  github.search.issues: true
+  todo.write: true
+  agent.delegate: { max_depth: 1 }
+
+approval:
+  mode: session_default
+
+verification:
+  tests: required
+  max_fix_cycles: 3
+
+limits:
+  max_iterations: 40
+  max_tool_calls: 120
+  max_runtime_seconds: 1800
+
+classifier_hints:
+  - fix
+  - bug
+  - error
+  - broken
+  - failing
+  - crash
+  - exception
+  - debug
+  - traceback
+  - "500"
+  - "403"
+  - "404"
+  - timeout
+  - leak
+  - regression
+  - hotfix
+  - patch
+  - not working
+  - tests failing
+
+sequence: [explorer, developer, reviewer, git_agent]
+
+visualization: auto

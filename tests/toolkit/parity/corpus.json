@@ -1,0 +1,177 @@
+[
+  {
+    "legacy": "File 'docs/guide.md' deleted. Commit: fixtures",
+    "matched": true,
+    "name": "fs.delete/github",
+    "registry": "File 'docs/guide.md' deleted. Commit: fixtures",
+    "tool": "fs.delete"
+  },
+  {
+    "legacy": "Deleted: False",
+    "matched": true,
+    "name": "fs.delete/local-absent",
+    "registry": "Deleted: False",
+    "tool": "fs.delete"
+  },
+  {
+    "legacy": "File 'src/util.py' edited (1 occurrence(s) replaced, 27 \u2192 27 bytes). Commit: fixtures",
+    "matched": true,
+    "name": "fs.edit/github",
+    "registry": "File 'src/util.py' edited (1 occurrence(s) replaced, 27 \u2192 27 bytes). Commit: fixtures",
+    "tool": "fs.edit"
+  },
+  {
+    "legacy": "Error: apply_edit: old_string occurs 2 time(s) in the file, but expected_occurrences was 1. Widen old_string to include more surrounding context, or set expected_occurrences to the correct number.",
+    "matched": true,
+    "name": "fs.edit/github-conflict",
+    "registry": "Error: apply_edit: old_string occurs 2 time(s) in the file, but expected_occurrences was 1. Widen old_string to include more surrounding context, or set expected_occurrences to the correct number.",
+    "tool": "fs.edit"
+  },
+  {
+    "legacy": "Repository: fixture/repo (Branch: main)\nMatching: **/*.py\n  - src/app.py\n  - src/util.py\n  - tests/test_app.py",
+    "matched": true,
+    "name": "fs.glob/github",
+    "registry": "Repository: fixture/repo (Branch: main)\nMatching: **/*.py\n  - src/app.py\n  - src/util.py\n  - tests/test_app.py",
+    "tool": "fs.glob"
+  },
+  {
+    "legacy": "No files matched pattern: **/*.rs\n(Branch: main, total files: 6)",
+    "matched": true,
+    "name": "fs.glob/github-no-match",
+    "registry": "No files matched pattern: **/*.rs\n(Branch: main, total files: 6)",
+    "tool": "fs.glob"
+  },
+  {
+    "legacy": "Found 1 match(es) for: def greet\n  src/app.py:4: def greet(name):",
+    "matched": true,
+    "name": "fs.grep/github",
+    "registry": "Found 1 match(es) for: def greet\n  src/app.py:4: def greet(name):",
+    "tool": "fs.grep"
+  },
+  {
+    "legacy": "No files matched path_pattern: **/*.rs\n(Branch: main, total files: 6)",
+    "matched": true,
+    "name": "fs.grep/github-path-miss",
+    "registry": "No files matched path_pattern: **/*.rs\n(Branch: main, total files: 6)",
+    "tool": "fs.grep"
+  },
+  {
+    "legacy": "src/app.py:4: def greet(name):",
+    "matched": true,
+    "name": "fs.grep/local",
+    "registry": "src/app.py:4: def greet(name):",
+    "tool": "fs.grep"
+  },
+  {
+    "legacy": "No matches found.",
+    "matched": true,
+    "name": "fs.grep/local-no-match",
+    "registry": "No matches found.",
+    "tool": "fs.grep"
+  },
+  {
+    "legacy": "Repository: fixture/repo (Branch: main)\nFiles:\n  - README.md\n  - docs/guide.md\n  - pyproject.toml\n  - src/app.py\n  - src/util.py\n  - tests/test_app.py\n",
+    "matched": true,
+    "name": "fs.list/github",
+    "registry": "Repository: fixture/repo (Branch: main)\nFiles:\n  - README.md\n  - docs/guide.md\n  - pyproject.toml\n  - src/app.py\n  - src/util.py\n  - tests/test_app.py\n",
+    "tool": "fs.list"
+  },
+  {
+    "legacy": "README.md\ndocs/guide.md\npyproject.toml\nsrc/app.py\nsrc/util.py\ntests/test_app.py",
+    "matched": true,
+    "name": "fs.list/local",
+    "registry": "README.md\ndocs/guide.md\npyproject.toml\nsrc/app.py\nsrc/util.py\ntests/test_app.py",
+    "tool": "fs.list"
+  },
+  {
+    "legacy": "src/app.py\nsrc/util.py",
+    "matched": true,
+    "name": "fs.list/local-subdir",
+    "registry": "src/app.py\nsrc/util.py",
+    "tool": "fs.list"
+  },
+  {
+    "legacy": "Content of src/app.py:\n---\nimport os\n\n\ndef greet(name):\n    \"\"\"Say hello.\"\"\"\n    return f\"hello {name}\"\n\n\ndef farewell(name):\n    return f\"bye {name}\"\n\n---",
+    "matched": true,
+    "name": "fs.read/github",
+    "registry": "Content of src/app.py:\n---\nimport os\n\n\ndef greet(name):\n    \"\"\"Say hello.\"\"\"\n    return f\"hello {name}\"\n\n\ndef farewell(name):\n    return f\"bye {name}\"\n\n---",
+    "tool": "fs.read"
+  },
+  {
+    "legacy": "Error reading file absent.py: 404 Not Found: absent.py",
+    "matched": true,
+    "name": "fs.read/github-missing",
+    "registry": "Error reading file absent.py: 404 Not Found: absent.py",
+    "tool": "fs.read"
+  },
+  {
+    "legacy": "Content of src/app.py:\n---\nimport os\n\n\ndef greet(name):\n    \"\"\"Say hello.\"\"\"\n    return f\"hello {name}\"\n\n\ndef farewell(name):\n    return f\"bye {name}\"\n\n---",
+    "matched": true,
+    "name": "fs.read/local",
+    "registry": "Content of src/app.py:\n---\nimport os\n\n\ndef greet(name):\n    \"\"\"Say hello.\"\"\"\n    return f\"hello {name}\"\n\n\ndef farewell(name):\n    return f\"bye {name}\"\n\n---",
+    "tool": "fs.read"
+  },
+  {
+    "legacy": "Error reading absent.py: [Errno 2] No such file or directory: '/tmp/pytest-of-root/pytest-25/test_every_case_matches_and_th0/local-1/absent.py'",
+    "matched": true,
+    "name": "fs.read/local-missing",
+    "registry": "Error reading absent.py: [Errno 2] No such file or directory: '/tmp/pytest-of-root/pytest-25/test_every_case_matches_and_th0/local-1/absent.py'",
+    "tool": "fs.read"
+  },
+  {
+    "legacy": "File 'added.py' written successfully. Commit: fixtures",
+    "matched": true,
+    "name": "fs.write/github",
+    "registry": "File 'added.py' written successfully. Commit: fixtures",
+    "tool": "fs.write"
+  },
+  {
+    "legacy": "Written 8 bytes to written.txt",
+    "matched": true,
+    "name": "fs.write/local",
+    "registry": "Written 8 bytes to written.txt",
+    "tool": "fs.write"
+  },
+  {
+    "legacy": "No changes.",
+    "matched": true,
+    "name": "git.diff/clean",
+    "registry": "No changes.",
+    "tool": "git.diff"
+  },
+  {
+    "legacy": "[\n  {\n    \"sha\": \"5c4c2286b806dab4fa87aa3cd9c51e6cb98295a5\",\n    \"author\": \"Parity Fixture\",\n    \"email\": \"parity@example.invalid\",\n    \"message\": \"Fixture commit\",\n    \"date\": \"2024-01-01T00:00:00+00:00\"\n  }\n]",
+    "matched": true,
+    "name": "git.log/default",
+    "registry": "[\n  {\n    \"sha\": \"5c4c2286b806dab4fa87aa3cd9c51e6cb98295a5\",\n    \"author\": \"Parity Fixture\",\n    \"email\": \"parity@example.invalid\",\n    \"message\": \"Fixture commit\",\n    \"date\": \"2024-01-01T00:00:00+00:00\"\n  }\n]",
+    "tool": "git.log"
+  },
+  {
+    "legacy": "{\n  \"branch\": \"main\",\n  \"modified\": [],\n  \"added\": [],\n  \"deleted\": [],\n  \"untracked\": [],\n  \"clean\": true\n}",
+    "matched": true,
+    "name": "git.status/clean",
+    "registry": "{\n  \"branch\": \"main\",\n  \"modified\": [],\n  \"added\": [],\n  \"deleted\": [],\n  \"untracked\": [],\n  \"clean\": true\n}",
+    "tool": "git.status"
+  },
+  {
+    "legacy": "Permission denied by sandbox policy: command blocked by sandbox policy: 'mkfs'\n",
+    "matched": true,
+    "name": "terminal.run/denied",
+    "registry": "Permission denied by sandbox policy: command blocked by sandbox policy: 'mkfs'\n",
+    "tool": "terminal.run"
+  },
+  {
+    "legacy": "Sandbox: local subprocess\nCommand: echo parity\nExit code: 0\n--- stdout ---\nparity\n",
+    "matched": true,
+    "name": "terminal.run/echo",
+    "registry": "Sandbox: local subprocess\nCommand: echo parity\nExit code: 0\n--- stdout ---\nparity\n",
+    "tool": "terminal.run"
+  },
+  {
+    "legacy": "Sandbox: local subprocess\nCommand: sh -c 'echo out; echo err >&2; exit 4'\nExit code: 4\n--- stdout ---\nout\n\n--- stderr ---\nerr\n",
+    "matched": true,
+    "name": "terminal.run/nonzero-exit",
+    "registry": "Sandbox: local subprocess\nCommand: sh -c 'echo out; echo err >&2; exit 4'\nExit code: 4\n--- stdout ---\nout\n\n--- stderr ---\nerr\n",
+    "tool": "terminal.run"
+  }
+]

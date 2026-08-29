@@ -8,24 +8,25 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import signal
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
+from .shell_safety import BLOCKED_PATTERNS as _SHARED_BLOCKED_PATTERNS
+from .shell_safety import blocked_reason, strip_secret_env
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_SEC = 120
 MAX_OUTPUT_BYTES = 512_000
 
-BLOCKED_PATTERNS = [
-    "rm -rf /",
-    "mkfs",
-    "dd if=/dev/zero",
-    ":(){ :|:& };:",
-]
+# Shared with the sandbox backends via :mod:`gitpilot.shell_safety` (Batch
+# V4-0C).  This module used to carry its own shorter copy, so ``shutdown -h``
+# was refused by the sandbox and accepted here.  Kept as a list because the
+# name is part of this module's established surface.
+BLOCKED_PATTERNS = list(_SHARED_BLOCKED_PATTERNS)
 
 
 @dataclass
@@ -76,9 +77,8 @@ class TerminalExecutor:
 
     def _validate_command(self, command: str):
         cmd_lower = command.lower().strip()
-        for blocked in self.blocked_patterns:
-            if blocked in cmd_lower:
-                raise PermissionError(f"Command blocked: {command}")
+        if blocked_reason(command, tuple(self.blocked_patterns)) is not None:
+            raise PermissionError(f"Command blocked: {command}")
         if self.allowed_commands is not None:
             base_cmd = cmd_lower.split()[0] if cmd_lower else ""
             if base_cmd not in self.allowed_commands:
@@ -99,7 +99,11 @@ class TerminalExecutor:
         if not str(resolved_cwd).startswith(str(ws_resolved)):
             session.cwd = session.workspace_path
 
-        full_env = {**os.environ, **session.env, **(env or {})}
+        # Inherited credentials are stripped (Batch V4-0C); anything the caller
+        # or session passes explicitly is honoured.  Before this, every linter
+        # and test suite the validation phase ran received GITHUB_TOKEN and
+        # every provider API key.
+        full_env = strip_secret_env(overrides={**session.env, **(env or {})})
         start = time.monotonic()
 
         try:
@@ -163,7 +167,14 @@ class TerminalExecutor:
         """Execute command and yield output lines as they arrive."""
         self._validate_command(command)
 
-        full_env = {**os.environ, **session.env}
+        # Same workspace clamp :meth:`execute` applies — the two paths had
+        # drifted, and this one runs the validation phase's test commands.
+        resolved_cwd = (session.cwd or session.workspace_path).resolve()
+        ws_resolved = session.workspace_path.resolve()
+        if not str(resolved_cwd).startswith(str(ws_resolved)):
+            session.cwd = session.workspace_path
+
+        full_env = strip_secret_env(overrides=session.env)
         proc = await asyncio.create_subprocess_shell(
             command,
             cwd=str(session.cwd),
