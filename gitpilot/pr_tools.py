@@ -9,6 +9,7 @@ from crewai.tools import tool
 
 from .agent_tools import get_repo_context
 from . import github_pulls as gp
+from .idempotency import run_idempotent_mutation
 
 
 def _run_async(coro):
@@ -72,17 +73,28 @@ def create_pull_request(
     title: str,
     head: str,
     base: str,
+    idempotency_key: str,
     body: str = "",
     draft: bool = False,
 ) -> str:
-    """Creates a new pull request. head=source branch, base=target branch."""
+    """Creates one approved pull request. head=source branch, base=target branch.
+
+    idempotency_key is the stable approval/request id supplied by the runtime.
+    Reuse the same key for retries; never invent a new key for the same action.
+    """
     try:
         owner, repo, token, _branch = get_repo_context()
-        pr = _run_async(
-            gp.create_pull_request(
-                owner, repo, title=title, head=head, base=base,
-                body=body or None, draft=draft, token=token,
-            )
+        args = {"title": title, "head": head, "base": base, "body": body, "draft": draft}
+        pr = run_idempotent_mutation(
+            scope=f"github.pr.create:{owner}/{repo}",
+            idempotency_key=idempotency_key,
+            arguments=args,
+            operation=lambda: _run_async(
+                gp.create_pull_request(
+                    owner, repo, title=title, head=head, base=base,
+                    body=body or None, draft=draft, token=token,
+                )
+            ),
         )
         return (
             f"Created PR #{pr.get('number')}: {pr.get('title')}\n"
@@ -95,19 +107,33 @@ def create_pull_request(
 @tool("Merge a pull request")
 def merge_pull_request(
     pull_number: int,
+    idempotency_key: str,
     merge_method: str = "merge",
     commit_title: str = "",
 ) -> str:
-    """Merges a pull request. merge_method: merge, squash, or rebase."""
+    """Merges one approved pull request. merge_method: merge, squash, or rebase.
+
+    idempotency_key is the stable approval/request id supplied by the runtime.
+    """
     try:
         owner, repo, token, _branch = get_repo_context()
-        result = _run_async(
-            gp.merge_pull_request(
-                owner, repo, pull_number,
-                merge_method=merge_method,
-                commit_title=commit_title or None,
-                token=token,
-            )
+        args = {
+            "pull_number": pull_number,
+            "merge_method": merge_method,
+            "commit_title": commit_title,
+        }
+        result = run_idempotent_mutation(
+            scope=f"github.pr.merge:{owner}/{repo}:{pull_number}",
+            idempotency_key=idempotency_key,
+            arguments=args,
+            operation=lambda: _run_async(
+                gp.merge_pull_request(
+                    owner, repo, pull_number,
+                    merge_method=merge_method,
+                    commit_title=commit_title or None,
+                    token=token,
+                )
+            ),
         )
         sha = result.get("sha", "unknown") if isinstance(result, dict) else "unknown"
         return f"PR #{pull_number} merged successfully. Merge commit: {sha}"
@@ -138,13 +164,24 @@ def list_pr_files(pull_number: int) -> str:
 def create_pr_review(
     pull_number: int,
     body: str,
+    idempotency_key: str,
     event: str = "COMMENT",
 ) -> str:
-    """Adds a review to a PR. event: APPROVE, REQUEST_CHANGES, or COMMENT."""
+    """Adds one approved review to a PR. event: APPROVE, REQUEST_CHANGES, or COMMENT.
+
+    idempotency_key is the stable approval/request id supplied by the runtime.
+    """
     try:
         owner, repo, token, _branch = get_repo_context()
-        review = _run_async(
-            gp.create_pr_review(owner, repo, pull_number, body=body, event=event, token=token)
+        review = run_idempotent_mutation(
+            scope=f"github.pr.review:{owner}/{repo}:{pull_number}",
+            idempotency_key=idempotency_key,
+            arguments={"body": body, "event": event},
+            operation=lambda: _run_async(
+                gp.create_pr_review(
+                    owner, repo, pull_number, body=body, event=event, token=token
+                )
+            ),
         )
         return f"Review submitted on PR #{pull_number} (event={event})\nURL: {review.get('html_url', '')}"
     except Exception as e:
@@ -152,11 +189,21 @@ def create_pr_review(
 
 
 @tool("Comment on a pull request")
-def add_pr_comment(pull_number: int, body: str) -> str:
-    """Adds a general comment to a pull request."""
+def add_pr_comment(pull_number: int, body: str, idempotency_key: str) -> str:
+    """Adds one approved general comment to a pull request.
+
+    idempotency_key is the stable approval/request id supplied by the runtime.
+    """
     try:
         owner, repo, token, _branch = get_repo_context()
-        comment = _run_async(gp.add_pr_comment(owner, repo, pull_number, body, token=token))
+        comment = run_idempotent_mutation(
+            scope=f"github.pr.comment:{owner}/{repo}:{pull_number}",
+            idempotency_key=idempotency_key,
+            arguments={"body": body},
+            operation=lambda: _run_async(
+                gp.add_pr_comment(owner, repo, pull_number, body, token=token)
+            ),
+        )
         return f"Comment added to PR #{pull_number}\nURL: {comment.get('html_url', '')}"
     except Exception as e:
         return f"Error commenting on PR: {e}"
