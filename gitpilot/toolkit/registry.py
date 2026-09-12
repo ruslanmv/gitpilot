@@ -47,6 +47,8 @@ from typing import (
     Tuple,
 )
 
+from ..idempotency import IdempotencyError, get_idempotency_store
+
 # ---------------------------------------------------------------------------
 # Classification
 # ---------------------------------------------------------------------------
@@ -80,6 +82,15 @@ class Effect(str, Enum):
     #: are both wrong about a Postgres UPDATE, and calling it read-only would let a
     #: read-only run mutate someone's production data.
     EXTERNAL_WRITE = "external_write"
+
+
+_MUTATING_EFFECTS = frozenset({
+    Effect.WRITES_FS,
+    Effect.GIT_LOCAL,
+    Effect.GIT_REMOTE,
+    Effect.FORGE_WRITE,
+    Effect.EXTERNAL_WRITE,
+})
 
 
 #: A tool id: dot-separated snake_case segments, at least two
@@ -154,6 +165,11 @@ class ToolSpec:
     @property
     def namespace(self) -> str:
         return self.id.split(".", 1)[0]
+
+    @property
+    def mutating(self) -> bool:
+        """Whether retries need side-effect deduplication."""
+        return bool(self.effects & _MUTATING_EFFECTS)
 
     def signature(self) -> str:
         """A one-line call signature, e.g. ``fs.read(path, offset?)``.
@@ -235,6 +251,30 @@ class ToolResult:
             content=f"Denied: {reason}", error="denied", denied=True,
         )
 
+    def to_idempotency_payload(self) -> Dict[str, Any]:
+        """JSON-friendly shape stored for safe replay after a restart."""
+        return {
+            "call_id": self.call_id,
+            "tool": self.tool,
+            "ok": self.ok,
+            "content": self.content,
+            "data": self.data,
+            "error": self.error,
+            "denied": self.denied,
+        }
+
+    @classmethod
+    def from_idempotency_payload(cls, call: ToolCall, payload: Mapping[str, Any]) -> "ToolResult":
+        return cls(
+            call_id=call.id,
+            tool=call.tool,
+            ok=bool(payload.get("ok")),
+            content=str(payload.get("content") or ""),
+            data=dict(payload.get("data") or {}) or None,
+            error=payload.get("error"),
+            denied=bool(payload.get("denied")),
+        )
+
 
 # ---------------------------------------------------------------------------
 # Execution context
@@ -312,6 +352,17 @@ class ToolExecutionContext:
             raise ToolError("no repository bound to this run")
         return self.repo
 
+    def idempotency_scope(self, spec: ToolSpec) -> str:
+        """Stable scope for one run/target/tool; call.id is the request key."""
+        run = self.run_id or self.session_id or "ephemeral"
+        if self.workspace is not None:
+            target = f"workspace:{self.workspace.root}"
+        elif self.repo is not None:
+            target = f"repo:{self.repo.full_name}:{self.repo.branch or 'HEAD'}"
+        else:
+            target = "unbound"
+        return f"runtime:{run}:{target}:{spec.id}"
+
 
 # ---------------------------------------------------------------------------
 # Capabilities (placeholder until Batch V4-D1)
@@ -336,7 +387,7 @@ class _AllowAll:
         return "ALL_CAPABILITIES"
 
 
-#: Stand-in for "no restrictions", used until the policy engine lands.  Its
+#: Stand-in for "no restrictions", used until Batch V4-D1 lands.  Its
 #: presence in a call site is a marker for work Batch V4-D1 must revisit.
 ALL_CAPABILITIES: CapabilitySet = _AllowAll()
 
@@ -738,10 +789,16 @@ class ToolRegistry:
     ) -> ToolResult:
         """Run one call.
 
-        Never raises for anything the model did: an unknown tool, bad
-        arguments, a handler blowing up, or a timeout all come back as a
-        ``ToolResult`` the model can read and correct.  Only registry misuse by
-        *our own* code (a non-callable handler, say) is allowed to propagate.
+        Authorization happens in the loop before this method.  For tools with a
+        mutating effect, the already-approved ``call.id`` doubles as the durable
+        idempotency key.  That binds one approval to one exact argument set and
+        makes retries replay the original result instead of repeating the side
+        effect.  Read-only tools stay on the zero-ledger fast path.
+
+        Never raises for anything the model did: an unknown tool, bad arguments,
+        a handler blowing up, a timeout, or an idempotency conflict all come back
+        as a ``ToolResult`` the model can read.  Registry misuse by our own code
+        still propagates.
         """
         resolved = self.resolve(call.tool)
         if resolved is None:
@@ -768,21 +825,52 @@ class ToolRegistry:
             )
 
         handler = self._handlers[resolved]
-        try:
+
+        async def _invoke_handler() -> ToolResult:
             if inspect.iscoroutinefunction(handler):
-                outcome: Any = handler(call, ctx)
+                raw: Any = handler(call, ctx)
             else:
                 # A synchronous handler could block for as long as it likes —
-                # a git subprocess, a file read on a slow disk — and the loop
-                # is single-threaded, so running it inline would stall event
-                # emission and cancellation for every other task.
-                outcome = asyncio.to_thread(handler, call, ctx)
+                # a git subprocess, a file read on a slow disk — and the loop is
+                # single-threaded, so move it off-loop.
+                raw = asyncio.to_thread(handler, call, ctx)
 
-            if inspect.isawaitable(outcome):
+            if inspect.isawaitable(raw):
                 if spec.timeout_s is not None:
-                    outcome = await asyncio.wait_for(outcome, spec.timeout_s)
+                    raw = await asyncio.wait_for(raw, spec.timeout_s)
                 else:
-                    outcome = await outcome
+                    raw = await raw
+
+            if not isinstance(raw, ToolResult):
+                raise ToolError(
+                    f"tool {spec.id!r} returned {type(raw).__name__}, expected ToolResult"
+                )
+            return raw
+
+        try:
+            if spec.mutating:
+                store = ctx.extras.get("idempotency_store") or get_idempotency_store()
+
+                async def _approved_operation() -> Dict[str, Any]:
+                    result = await _invoke_handler()
+                    return result.to_idempotency_payload()
+
+                payload = await store.run_once_async(
+                    scope=ctx.idempotency_scope(spec),
+                    idempotency_key=call.id,
+                    arguments={"tool": spec.id, "arguments": call.arguments or {}},
+                    operation=_approved_operation,
+                )
+                outcome = ToolResult.from_idempotency_payload(call, payload)
+            else:
+                outcome = await _invoke_handler()
+        except IdempotencyError as exc:
+            return ToolResult.failure(
+                call,
+                f"{spec.id} was not executed: {exc}",
+                error="idempotency_guard",
+                data={"retry_safe": False, "requires_reconciliation": True},
+            )
         except asyncio.TimeoutError:
             return ToolResult.failure(
                 call,
@@ -797,13 +885,11 @@ class ToolRegistry:
             )
         except asyncio.CancelledError:
             raise
+        except ToolError:
+            raise
         except Exception as exc:  # noqa: BLE001 - the loop must survive any tool
             return ToolResult.failure(
                 call, f"{spec.id} failed: {exc}", error=type(exc).__name__,
             )
 
-        if not isinstance(outcome, ToolResult):
-            raise ToolError(
-                f"tool {spec.id!r} returned {type(outcome).__name__}, expected ToolResult"
-            )
         return outcome
