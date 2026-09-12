@@ -1,20 +1,20 @@
 """Durable idempotency for mutating agent tools.
 
-Human approval answers *whether* a side effect may happen.  Idempotency answers a
+Human approval answers *whether* a side effect may happen. Idempotency answers a
 different production question: what happens when the approved call is delivered
 again because a model, worker, network, or orchestrator retries it?
 
 GitPilot uses a tiny SQLite ledger because it is local, transactional, requires no
-new service, and survives process restarts.  Reads never touch this module.  A
+new service, and survives process restarts. Reads never touch this module. A
 mutation reserves ``(scope, idempotency_key)`` before the side effect, binds the
 key to a canonical hash of the exact arguments, and stores the successful result.
 A retry with the same key and arguments replays the stored result without calling
 the downstream service again.
 
 There is deliberately no automatic retry after a process dies or an exception is
-raised while a mutation is in flight.  Many downstream APIs (including GitHub's
+raised while a mutation is in flight. Many downstream APIs (including GitHub's
 create-issue / create-PR APIs) do not accept an idempotency header, so after a
-lost response the outcome is unknowable.  The safe industry pattern is to mark
+lost response the outcome is unknowable. The safe industry pattern is to mark
 that key indeterminate and require reconciliation/new approval rather than risk a
 duplicate externally-visible action.
 """
@@ -91,22 +91,10 @@ def _validate_key(key: str) -> str:
     return value
 
 
-def _ephemeral_runtime_scope(scope: str) -> bool:
-    """Whether a canonical tool call has no durable run/session identity.
-
-    Standalone toolkit calls (tests, parity harnesses, direct library use) often
-    synthesize short call ids such as ``t`` and intentionally execute the same
-    id more than once.  Those calls have no approval lifecycle to resume, so
-    persisting them would create false deduplication across unrelated invocations.
-    Real agent runs always carry a run or session id and therefore use the ledger.
-    """
-    return scope.startswith("runtime:ephemeral:")
-
-
 class IdempotencyStore:
     """Small durable execution ledger backed by SQLite.
 
-    Each method opens a short-lived connection.  Mutations are rare compared with
+    Each method opens a short-lived connection. Mutations are rare compared with
     reads, so this avoids shared-connection/thread hazards while WAL mode and
     ``BEGIN IMMEDIATE`` make concurrent reservations deterministic.
     """
@@ -259,7 +247,7 @@ class IdempotencyStore:
             result = operation()
         except BaseException as exc:
             # Do not silently retry an externally-visible side effect after an
-            # ambiguous failure.  The caller surfaces the original error; a
+            # ambiguous failure. The caller surfaces the original error; a
             # later retry of the same key gets the clearer indeterminate message.
             self.mark_indeterminate(
                 scope=scope,
@@ -285,12 +273,7 @@ class IdempotencyStore:
         arguments: Any,
         operation: Callable[[], Awaitable[T]],
     ) -> T:
-        """Async twin used by the canonical V4 tool registry."""
-        if _ephemeral_runtime_scope(scope):
-            # No durable run means no durable approval identity to replay. Keep
-            # direct library/toolkit calls behaviorally transparent and fast.
-            return await operation()
-
+        """Async twin used by the production runtime registry."""
         reservation = self.reserve(
             scope=scope,
             idempotency_key=idempotency_key,
@@ -340,6 +323,36 @@ def run_idempotent_mutation(
     return get_idempotency_store().run_once(
         scope=scope,
         idempotency_key=idempotency_key,
+        arguments=arguments,
+        operation=operation,
+    )
+
+
+def run_legacy_mutation(
+    *,
+    scope: str,
+    idempotency_key: str = "",
+    arguments: Any,
+    operation: Callable[[], T],
+) -> T:
+    """Compatibility bridge for pre-V4 CrewAI mutators.
+
+    Historical CrewAI tools predate the approval/request-id plumbing and are also
+    called directly by integrations and parity tests. Breaking those signatures
+    would force callers—or worse, small models—to fabricate operational IDs.
+
+    When the legacy caller supplies the real approval/request key, use the same
+    durable ledger as the V4 runtime. When it does not, preserve the historical
+    one-shot behavior. The production V4 runtime never uses this fallback: its
+    :class:`RuntimeToolRegistry` always has the canonical call id and enforces
+    durable replay protection there.
+    """
+    key = str(idempotency_key or "").strip()
+    if not key:
+        return operation()
+    return run_idempotent_mutation(
+        scope=scope,
+        idempotency_key=key,
         arguments=arguments,
         operation=operation,
     )
