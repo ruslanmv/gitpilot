@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 
@@ -216,9 +217,22 @@ class TestPathsSurvive:
 
 
 class TestThroughTheLoop:
-    def _long_run(self, tmp_path, *, model="qwen2.5:1.5b", iterations=40):
-        """A run that would blow its window if nothing folded."""
+    def _long_run(
+        self,
+        tmp_path,
+        *,
+        model="qwen2.5:1.5b",
+        iterations=40,
+        context_window=8_192,
+    ):
+        """A run that would blow its explicitly pinned window if nothing folded.
+
+        This is a compaction stress test, not a model-catalog test. Pinning the
+        window keeps the scenario stable when a model's advertised context size
+        changes independently of compaction behavior.
+        """
         profile = resolve_profile("ollama", model, cache_path=tmp_path / "c.json")
+        profile = replace(profile, context_window=context_window)
         registry = _registry()
 
         async def chatty(call, ctx):
@@ -247,8 +261,7 @@ class TestThroughTheLoop:
         return result, ctx, events
 
     def test_a_forty_iteration_run_on_an_8k_window_completes(self, tmp_path):
-        """The case that motivates the whole batch: GitPilot's default model has
-        an 8k window and the loop can take forty turns."""
+        """A constrained 8k run can still take forty turns via compaction."""
         result, ctx, _events = self._long_run(tmp_path)
 
         assert result.status in ("completed", "degraded"), result.answer
@@ -290,7 +303,10 @@ class TestThroughTheLoop:
     def test_a_large_window_never_compacts(self, tmp_path):
         """A run inside its budget should not pay for housekeeping."""
         _result, _ctx, events = self._long_run(
-            tmp_path, model="llama3:8b", iterations=6,
+            tmp_path,
+            model="llama3:8b",
+            iterations=6,
+            context_window=32_768,
         )
         assert "compaction" not in events.types()
 
