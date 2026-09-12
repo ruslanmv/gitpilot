@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,7 +13,16 @@ from gitpilot.agent.approvals import (
     reset_registry,
 )
 from gitpilot.agent.policy import Decision
-from gitpilot.toolkit import ToolCall
+from gitpilot.toolkit import (
+    Effect,
+    LocalWorkspace,
+    Risk,
+    ToolCall,
+    ToolExecutionContext,
+    ToolRegistry,
+    ToolResult,
+    ToolSpec,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -24,6 +34,35 @@ def _fresh_registry():
 
 def _call(tool="fs.write", **arguments):
     return ToolCall(id="req-1", tool=tool, arguments=arguments or {"path": "a.py"})
+
+
+def _ctx_for(tmp_path, tool: str, effects: frozenset[Effect]):
+    registry = ToolRegistry()
+    schema = {
+        "type": "object",
+        "properties": {"path": {"type": "string"}},
+        "additionalProperties": True,
+    }
+
+    async def noop(call, ctx):
+        return ToolResult.success(call, "ok")
+
+    registry.register(
+        ToolSpec(
+            id=tool,
+            title=tool,
+            description="test",
+            params_schema=schema,
+            risk=Risk.APPROVAL,
+            effects=effects,
+        ),
+        noop,
+    )
+    tool_context = ToolExecutionContext(
+        workspace=LocalWorkspace(root=tmp_path),
+        extras={"registry": registry},
+    )
+    return SimpleNamespace(tool_context=tool_context)
 
 
 # ---------------------------------------------------------------------------
@@ -96,6 +135,25 @@ class TestRegistry:
         first, second = asyncio.run(drive())
         assert (first, second) == (True, False)
 
+    def test_one_shot_request_cannot_be_promoted_to_session(self):
+        async def drive():
+            registry = ApprovalRegistry()
+            pending = registry.register(
+                request_id="r1",
+                session_id="s",
+                tool="github.pr.create",
+                allow_session=False,
+            )
+            waiter = asyncio.create_task(registry.wait(pending, timeout=5))
+            await asyncio.sleep(0)
+            registry.resolve("r1", True, "session")
+            return pending.to_dict(), await waiter
+
+        payload, answer = asyncio.run(drive())
+        assert payload["allow_session"] is False
+        assert payload["allowed_scopes"] == ["once"]
+        assert answer == {"approved": True, "scope": "once"}
+
     def test_closing_a_session_denies_everything_outstanding(self):
         async def drive():
             registry = ApprovalRegistry()
@@ -145,30 +203,64 @@ class TestLoopApprovals:
 
         assert asyncio.run(drive()) is True
 
-    def test_the_session_scope_is_recorded(self):
-        """"Allow for session" has to reach the policy engine, or the next call
-        asks again and the answer meant nothing."""
+    def test_local_edit_session_scope_is_recorded(self, tmp_path):
+        """Local reversible work may still use Allow for session for good UX."""
         granted = []
+        ctx = _ctx_for(tmp_path, "fs.write", frozenset({Effect.WRITES_FS}))
 
         async def drive():
             approver = self._approver(timeout_s=5, on_session_scope=granted.append)
             task = asyncio.create_task(
-                approver.request(_call(), Decision(verdict="ask"), None),
+                approver.request(_call(), Decision(verdict="ask"), ctx),
             )
             await asyncio.sleep(0)
+            pending = get_registry().get("req-1")
+            assert pending is not None and pending.allow_session is True
             get_registry().resolve("req-1", True, "session")
             return await task
 
         assert asyncio.run(drive()) is True
         assert granted == ["fs.write"]
 
-    def test_a_once_scope_does_not_grant_the_session(self):
+    def test_external_write_is_always_one_shot(self, tmp_path):
+        """One click authorizes one externally visible side effect."""
         granted = []
+        ctx = _ctx_for(
+            tmp_path,
+            "github.pr.create",
+            frozenset({Effect.FORGE_WRITE, Effect.NETWORK}),
+        )
 
         async def drive():
             approver = self._approver(timeout_s=5, on_session_scope=granted.append)
             task = asyncio.create_task(
-                approver.request(_call(), Decision(verdict="ask"), None),
+                approver.request(
+                    _call("github.pr.create", path="ignored"),
+                    Decision(verdict="ask"),
+                    ctx,
+                ),
+            )
+            await asyncio.sleep(0)
+            pending = get_registry().get("req-1")
+            assert pending is not None
+            payload = pending.to_dict()
+            get_registry().resolve("req-1", True, "session")
+            result = await task
+            return payload, result
+
+        payload, result = asyncio.run(drive())
+        assert result is True
+        assert payload["allowed_scopes"] == ["once"]
+        assert granted == []
+
+    def test_a_once_scope_does_not_grant_the_session(self, tmp_path):
+        granted = []
+        ctx = _ctx_for(tmp_path, "fs.write", frozenset({Effect.WRITES_FS}))
+
+        async def drive():
+            approver = self._approver(timeout_s=5, on_session_scope=granted.append)
+            task = asyncio.create_task(
+                approver.request(_call(), Decision(verdict="ask"), ctx),
             )
             await asyncio.sleep(0)
             get_registry().resolve("req-1", True, "once")
