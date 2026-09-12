@@ -11,7 +11,7 @@ from crewai.tools import tool
 
 from .agent_tools import get_repo_context
 from . import github_issues as gi
-from .idempotency import run_idempotent_mutation
+from .idempotency import run_legacy_mutation
 
 
 def _run_async(coro):
@@ -76,16 +76,16 @@ def get_issue(issue_number: int) -> str:
 @tool("Create a new issue")
 def create_issue(
     title: str,
-    idempotency_key: str,
     body: str = "",
     labels: str = "",
     assignees: str = "",
+    idempotency_key: str = "",
 ) -> str:
-    """Creates a new GitHub issue after approval.
+    """Creates a new GitHub issue.
 
-    idempotency_key is the stable approval/request id supplied by the runtime.
-    Reuse the same key for retries; never invent a new key for the same approved
-    action. labels and assignees are comma-separated strings.
+    Existing callers keep the historical argument order. When supplied,
+    ``idempotency_key`` must be the stable approval/request id and makes retries
+    of this exact action replay-safe.
     """
     try:
         owner, repo, token, _branch = get_repo_context()
@@ -97,7 +97,7 @@ def create_issue(
             "labels": label_list,
             "assignees": assignee_list,
         }
-        issue = run_idempotent_mutation(
+        issue = run_legacy_mutation(
             scope=f"github.issue.create:{owner}/{repo}",
             idempotency_key=idempotency_key,
             arguments=args,
@@ -116,17 +116,18 @@ def create_issue(
 @tool("Update an issue")
 def update_issue(
     issue_number: int,
-    idempotency_key: str,
     title: str = "",
     body: str = "",
     state: str = "",
     labels: str = "",
     assignees: str = "",
+    idempotency_key: str = "",
 ) -> str:
-    """Updates an existing issue after approval.
+    """Updates an existing issue.
 
-    idempotency_key is the stable approval/request id supplied by the runtime.
-    Only non-empty fields are changed. labels/assignees are comma-separated.
+    Existing callers keep the historical argument order. When supplied,
+    ``idempotency_key`` is the stable approval/request id. Only non-empty fields
+    are changed; labels/assignees are comma-separated.
     """
     try:
         owner, repo, token, _branch = get_repo_context()
@@ -141,7 +142,7 @@ def update_issue(
             kwargs["labels"] = [l.strip() for l in labels.split(",") if l.strip()]
         if assignees:
             kwargs["assignees"] = [a.strip() for a in assignees.split(",") if a.strip()]
-        issue = run_idempotent_mutation(
+        issue = run_legacy_mutation(
             scope=f"github.issue.update:{owner}/{repo}:{issue_number}",
             idempotency_key=idempotency_key,
             arguments=kwargs,
@@ -155,14 +156,18 @@ def update_issue(
 
 
 @tool("Add a comment to an issue")
-def add_issue_comment(issue_number: int, body: str, idempotency_key: str) -> str:
-    """Adds one approved comment to an existing issue.
+def add_issue_comment(
+    issue_number: int,
+    body: str,
+    idempotency_key: str = "",
+) -> str:
+    """Adds a comment to an existing issue.
 
-    idempotency_key is the stable approval/request id supplied by the runtime.
+    Supply the stable approval/request id to make retries replay-safe.
     """
     try:
         owner, repo, token, _branch = get_repo_context()
-        comment = run_idempotent_mutation(
+        comment = run_legacy_mutation(
             scope=f"github.issue.comment:{owner}/{repo}:{issue_number}",
             idempotency_key=idempotency_key,
             arguments={"body": body},
