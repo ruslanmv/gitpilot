@@ -2,7 +2,7 @@
 
 Offline by construction: a real ``git init`` with pinned author, message and
 content, so ``git ls-files``, ``git grep``, ``git status`` and ``git log``
-behave exactly as they do against a user's checkout.  Mocking git here would
+behave exactly as they do against a user's checkout. Mocking git here would
 mean the parity gate proved the mocks matched, not the tools.
 """
 from __future__ import annotations
@@ -69,7 +69,12 @@ def build_fixture_repo(root: Path) -> WorkspaceInfo:
 
     Idempotent: called twice on the same path it returns the existing checkout
     rather than re-initialising, since a second ``git commit`` with nothing
-    staged fails.  Callers that need a pristine tree pass a fresh path.
+    staged fails. Callers that need a pristine tree pass a fresh path.
+
+    The repository also receives a *local* Git identity. The environment above
+    makes fixture creation deterministic, but later tests intentionally invoke
+    Git through GitPilot's normal WorkspaceManager, which must not depend on a
+    CI runner or developer having a global ``user.name``/``user.email``.
     """
     if (root / ".git").is_dir():
         return WorkspaceInfo(
@@ -87,6 +92,8 @@ def build_fixture_repo(root: Path) -> WorkspaceInfo:
         target.write_text(text, encoding="utf-8")
 
     _git(["init", "--initial-branch=main"], root)
+    _git(["config", "user.name", "Parity Fixture"], root)
+    _git(["config", "user.email", "parity@example.invalid"], root)
     _git(["add", "-A"], root)
     _git(["commit", "-m", "Fixture commit"], root)
 
