@@ -12,6 +12,7 @@ from typing import Optional
 
 from crewai.tools import tool
 
+from .idempotency import run_idempotent_mutation
 from .sandbox_routing import (
     SandboxFallback,
     coerce_timeout,
@@ -69,22 +70,40 @@ def read_local_file(file_path: str) -> str:
 
 
 @tool("Write local file")
-def write_local_file(file_path: str, content: str) -> str:
-    """Write content to a file in the local workspace. Creates parent directories."""
+def write_local_file(file_path: str, content: str, idempotency_key: str) -> str:
+    """Write approved content to a local file, creating parent directories.
+
+    idempotency_key is the stable approval/request id supplied by the runtime.
+    Reuse it for retries of this exact write.
+    """
     ws = _require_workspace()
     try:
-        result = _run_async(_ws_manager.write_file(ws, file_path, content))
+        result = run_idempotent_mutation(
+            scope=f"local.file.write:{ws.path}",
+            idempotency_key=idempotency_key,
+            arguments={"file_path": file_path, "content": content},
+            operation=lambda: _run_async(_ws_manager.write_file(ws, file_path, content)),
+        )
         return f"Written {result['size']} bytes to {result['path']}"
     except Exception as e:
         return f"Error writing {file_path}: {e}"
 
 
 @tool("Delete local file")
-def delete_local_file(file_path: str) -> str:
-    """Delete a file from the local workspace."""
+def delete_local_file(file_path: str, idempotency_key: str) -> str:
+    """Delete one approved file from the local workspace.
+
+    idempotency_key is the stable approval/request id supplied by the runtime.
+    A retry with the same key returns the first result without deleting again.
+    """
     ws = _require_workspace()
     try:
-        deleted = _run_async(_ws_manager.delete_file(ws, file_path))
+        deleted = run_idempotent_mutation(
+            scope=f"local.file.delete:{ws.path}",
+            idempotency_key=idempotency_key,
+            arguments={"file_path": file_path},
+            operation=lambda: _run_async(_ws_manager.delete_file(ws, file_path)),
+        )
         return f"Deleted: {deleted}"
     except Exception as e:
         return f"Error deleting {file_path}: {e}"
