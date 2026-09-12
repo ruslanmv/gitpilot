@@ -1,4 +1,4 @@
-"""Idempotency invariants at the canonical ToolRegistry boundary."""
+"""Idempotency invariants at the production RuntimeToolRegistry boundary."""
 from __future__ import annotations
 
 import asyncio
@@ -10,10 +10,10 @@ from gitpilot.toolkit import (
     Risk,
     ToolCall,
     ToolExecutionContext,
-    ToolRegistry,
     ToolResult,
     ToolSpec,
 )
+from gitpilot.toolkit.runtime_registry import RuntimeToolRegistry
 
 
 SCHEMA = {
@@ -49,7 +49,7 @@ def _ctx(tmp_path, store: IdempotencyStore) -> ToolExecutionContext:
 
 
 def test_mutating_retry_replays_result_without_reexecuting(tmp_path):
-    registry = ToolRegistry()
+    registry = RuntimeToolRegistry()
     calls: list[dict] = []
 
     async def handler(call, ctx):
@@ -79,7 +79,7 @@ def test_mutating_retry_replays_result_without_reexecuting(tmp_path):
 
 
 def test_approval_id_is_bound_to_exact_arguments(tmp_path):
-    registry = ToolRegistry()
+    registry = RuntimeToolRegistry()
     calls = 0
 
     async def handler(call, ctx):
@@ -119,7 +119,7 @@ def test_approval_id_is_bound_to_exact_arguments(tmp_path):
 
 
 def test_distinct_approval_ids_are_distinct_mutations(tmp_path):
-    registry = ToolRegistry()
+    registry = RuntimeToolRegistry()
     calls = 0
 
     async def handler(call, ctx):
@@ -149,7 +149,7 @@ def test_distinct_approval_ids_are_distinct_mutations(tmp_path):
 
 
 def test_safe_reads_stay_on_zero_ledger_fast_path(tmp_path):
-    registry = ToolRegistry()
+    registry = RuntimeToolRegistry()
     calls = 0
 
     async def handler(call, ctx):
@@ -180,7 +180,7 @@ def test_safe_reads_stay_on_zero_ledger_fast_path(tmp_path):
 
 
 def test_failed_mutation_becomes_indeterminate_and_is_not_retried(tmp_path):
-    registry = ToolRegistry()
+    registry = RuntimeToolRegistry()
     calls = 0
 
     async def handler(call, ctx):
@@ -195,7 +195,10 @@ def test_failed_mutation_becomes_indeterminate_and_is_not_retried(tmp_path):
     first = asyncio.run(registry.execute(call, ctx))
     second = asyncio.run(registry.execute(call, ctx))
 
-    assert not first.ok and first.error == "TimeoutError"
+    # Preserve the base registry's first-attempt timeout contract. The durable
+    # runtime then refuses an automatic replay because the downstream outcome is
+    # unknowable after a lost/late response.
+    assert not first.ok and first.error == "timeout"
     assert not second.ok and second.error == "idempotency_guard"
     assert second.data == {"retry_safe": False, "requires_reconciliation": True}
     assert calls == 1
