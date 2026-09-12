@@ -9,7 +9,7 @@ from crewai.tools import tool
 
 from .agent_tools import get_repo_context
 from . import github_pulls as gp
-from .idempotency import run_idempotent_mutation
+from .idempotency import run_legacy_mutation
 
 
 def _run_async(coro):
@@ -73,19 +73,20 @@ def create_pull_request(
     title: str,
     head: str,
     base: str,
-    idempotency_key: str,
     body: str = "",
     draft: bool = False,
+    idempotency_key: str = "",
 ) -> str:
-    """Creates one approved pull request. head=source branch, base=target branch.
+    """Creates a pull request. head=source branch, base=target branch.
 
-    idempotency_key is the stable approval/request id supplied by the runtime.
-    Reuse the same key for retries; never invent a new key for the same action.
+    Existing callers keep the historical argument order. When supplied,
+    ``idempotency_key`` is the stable approval/request id and makes retries of
+    this exact action replay-safe.
     """
     try:
         owner, repo, token, _branch = get_repo_context()
         args = {"title": title, "head": head, "base": base, "body": body, "draft": draft}
-        pr = run_idempotent_mutation(
+        pr = run_legacy_mutation(
             scope=f"github.pr.create:{owner}/{repo}",
             idempotency_key=idempotency_key,
             arguments=args,
@@ -107,13 +108,14 @@ def create_pull_request(
 @tool("Merge a pull request")
 def merge_pull_request(
     pull_number: int,
-    idempotency_key: str,
     merge_method: str = "merge",
     commit_title: str = "",
+    idempotency_key: str = "",
 ) -> str:
-    """Merges one approved pull request. merge_method: merge, squash, or rebase.
+    """Merges a pull request. merge_method: merge, squash, or rebase.
 
-    idempotency_key is the stable approval/request id supplied by the runtime.
+    Existing callers keep the historical argument order. Supply the stable
+    approval/request id to make retries replay-safe.
     """
     try:
         owner, repo, token, _branch = get_repo_context()
@@ -122,7 +124,7 @@ def merge_pull_request(
             "merge_method": merge_method,
             "commit_title": commit_title,
         }
-        result = run_idempotent_mutation(
+        result = run_legacy_mutation(
             scope=f"github.pr.merge:{owner}/{repo}:{pull_number}",
             idempotency_key=idempotency_key,
             arguments=args,
@@ -164,16 +166,17 @@ def list_pr_files(pull_number: int) -> str:
 def create_pr_review(
     pull_number: int,
     body: str,
-    idempotency_key: str,
     event: str = "COMMENT",
+    idempotency_key: str = "",
 ) -> str:
-    """Adds one approved review to a PR. event: APPROVE, REQUEST_CHANGES, or COMMENT.
+    """Adds a review to a PR. event: APPROVE, REQUEST_CHANGES, or COMMENT.
 
-    idempotency_key is the stable approval/request id supplied by the runtime.
+    Existing callers keep the historical argument order. Supply the stable
+    approval/request id to make retries replay-safe.
     """
     try:
         owner, repo, token, _branch = get_repo_context()
-        review = run_idempotent_mutation(
+        review = run_legacy_mutation(
             scope=f"github.pr.review:{owner}/{repo}:{pull_number}",
             idempotency_key=idempotency_key,
             arguments={"body": body, "event": event},
@@ -189,14 +192,18 @@ def create_pr_review(
 
 
 @tool("Comment on a pull request")
-def add_pr_comment(pull_number: int, body: str, idempotency_key: str) -> str:
-    """Adds one approved general comment to a pull request.
+def add_pr_comment(
+    pull_number: int,
+    body: str,
+    idempotency_key: str = "",
+) -> str:
+    """Adds a general comment to a pull request.
 
-    idempotency_key is the stable approval/request id supplied by the runtime.
+    Supply the stable approval/request id to make retries replay-safe.
     """
     try:
         owner, repo, token, _branch = get_repo_context()
-        comment = run_idempotent_mutation(
+        comment = run_legacy_mutation(
             scope=f"github.pr.comment:{owner}/{repo}:{pull_number}",
             idempotency_key=idempotency_key,
             arguments={"body": body},
