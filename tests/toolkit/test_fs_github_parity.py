@@ -1,10 +1,12 @@
 """GitHub-mode parity for the filesystem tools — Batches V4-A2 / V4-A3.
 
-The local cases in ``test_fs.py`` cover the on-disk backend.  These cover the
+The local cases in ``test_fs.py`` cover the on-disk backend. These cover the
 other one, where the tools' own logic — tree listing, glob pre-filtering, the
 fetch cap, read-modify-commit — is what has to keep behaving identically.
 """
 from __future__ import annotations
+
+import uuid
 
 import pytest
 
@@ -29,6 +31,11 @@ def repo_ctx() -> ToolExecutionContext:
     return ToolExecutionContext(
         repo=RepoBinding(owner=OWNER, repo=REPO, token="fixture-token", branch=BRANCH),
     )
+
+
+def _approval_key() -> str:
+    """One request id per legacy mutation so the durable ledger cannot leak across cases."""
+    return f"parity-{uuid.uuid4()}"
 
 
 PARITY_CASES = [
@@ -78,7 +85,9 @@ PARITY_CASES = [
         name="fs.write/github",
         tool="fs.write",
         arguments={"path": "added.py", "content": "x = 1\n", "commit_message": "Add added.py"},
-        legacy=lambda ws: at.write_file.func("added.py", "x = 1\n", "Add added.py"),
+        legacy=lambda ws: at.write_file.func(
+            "added.py", "x = 1\n", "Add added.py", idempotency_key=_approval_key()
+        ),
     ),
     ParityCase(
         name="fs.edit/github",
@@ -89,7 +98,9 @@ PARITY_CASES = [
             "new_string": "return 2",
             "commit_message": "Bump",
         },
-        legacy=lambda ws: at.edit_file.func("src/util.py", "return 1", "return 2", "Bump"),
+        legacy=lambda ws: at.edit_file.func(
+            "src/util.py", "return 1", "return 2", "Bump", idempotency_key=_approval_key()
+        ),
     ),
     ParityCase(
         name="fs.edit/github-conflict",
@@ -100,13 +111,17 @@ PARITY_CASES = [
             "new_string": "hello",
             "commit_message": "Rename",
         },
-        legacy=lambda ws: at.edit_file.func("docs/guide.md", "greet", "hello", "Rename"),
+        legacy=lambda ws: at.edit_file.func(
+            "docs/guide.md", "greet", "hello", "Rename", idempotency_key=_approval_key()
+        ),
     ),
     ParityCase(
         name="fs.delete/github",
         tool="fs.delete",
         arguments={"path": "docs/guide.md", "commit_message": "Drop guide"},
-        legacy=lambda ws: at.delete_repo_file.func("docs/guide.md", "Drop guide"),
+        legacy=lambda ws: at.delete_repo_file.func(
+            "docs/guide.md", "Drop guide", idempotency_key=_approval_key()
+        ),
     ),
 ]
 

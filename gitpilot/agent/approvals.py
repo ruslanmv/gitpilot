@@ -30,6 +30,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Set
 
+from ..toolkit.registry import Effect
+
 logger = logging.getLogger(__name__)
 
 #: How long a request waits before it is treated as a refusal.  Per-topology in
@@ -39,6 +41,15 @@ DEFAULT_TIMEOUT_S = 120.0
 #: Scopes a client may answer with.
 SCOPE_ONCE = "once"
 SCOPE_SESSION = "session"
+
+#: Side effects that must always be approved one operation at a time.  A session
+#: grant is convenient for local, reversible edits; it is too broad for actions
+#: another person can observe or that change an external system.
+_ONE_SHOT_EFFECTS = frozenset({
+    Effect.GIT_REMOTE,
+    Effect.FORGE_WRITE,
+    Effect.EXTERNAL_WRITE,
+})
 
 
 @dataclass
@@ -52,6 +63,7 @@ class PendingApproval:
     risk: str
     reason: str
     command_class: str = ""
+    allow_session: bool = True
     #: Always set by :meth:`ApprovalRegistry.register`; optional only so the
     #: dataclass can be constructed in a test without an event loop.
     future: Optional["asyncio.Future[Dict[str, Any]]"] = field(repr=False, default=None)
@@ -65,6 +77,8 @@ class PendingApproval:
             "risk": self.risk,
             "reason": self.reason,
             "command_class": self.command_class,
+            "allow_session": self.allow_session,
+            "allowed_scopes": [SCOPE_ONCE, SCOPE_SESSION] if self.allow_session else [SCOPE_ONCE],
         }
 
 
@@ -92,12 +106,13 @@ class ApprovalRegistry:
         risk: str = "approval",
         reason: str = "",
         command_class: str = "",
+        allow_session: bool = True,
     ) -> PendingApproval:
         future: "asyncio.Future[Dict[str, Any]]" = asyncio.get_running_loop().create_future()
         pending = PendingApproval(
             request_id=request_id, session_id=session_id, tool=tool,
             arguments=dict(arguments or {}), risk=risk, reason=reason,
-            command_class=command_class, future=future,
+            command_class=command_class, allow_session=allow_session, future=future,
         )
         self._pending[request_id] = pending
         self._by_session.setdefault(session_id, set()).add(request_id)
@@ -133,12 +148,19 @@ class ApprovalRegistry:
         """Answer a pending request.  Returns whether there was one.
 
         Idempotent: a duplicate answer (the user double-clicks, or two transports
-        both deliver it) is dropped rather than raising.
+        both deliver it) is dropped rather than raising.  A client cannot elevate
+        a one-shot external approval into a session-wide grant: unsupported
+        ``session`` scope is deterministically reduced to ``once``.
         """
         pending = self._pending.get(request_id)
         if pending is None or pending.future is None or pending.future.done():
             return False
-        pending.future.set_result({"approved": bool(approved), "scope": scope})
+        effective_scope = (
+            SCOPE_SESSION
+            if scope == SCOPE_SESSION and pending.allow_session
+            else SCOPE_ONCE
+        )
+        pending.future.set_result({"approved": bool(approved), "scope": effective_scope})
         return True
 
     def deny_session(self, session_id: str, *, reason: str = "session closed") -> int:
@@ -159,7 +181,7 @@ class ApprovalRegistry:
         if pending is not None:
             requests = self._by_session.get(pending.session_id)
             if requests is not None:
-                requests.discard(request_id)
+                requests.discard(pending.request_id)
                 if not requests:
                     self._by_session.pop(pending.session_id, None)
 
@@ -196,6 +218,38 @@ def reset_registry() -> None:
     """Drop the process registry.  For tests; never call this from a server."""
     global _registry
     _registry = None
+
+
+def _allows_session_scope(call: Any, ctx: Any) -> bool:
+    """Session grants are only for local/reversible effects.
+
+    The registry is already attached to the execution context by the runner.  If
+    anything about the spec cannot be established, fail closed to one-shot: a
+    missing registry must never widen an approval.
+    """
+    tool_context = getattr(ctx, "tool_context", None)
+    extras = getattr(tool_context, "extras", {}) or {}
+    registry = extras.get("registry") if isinstance(extras, dict) else None
+    if registry is None:
+        return False
+    try:
+        spec = registry.spec(call.tool)
+    except Exception:  # noqa: BLE001 - unknown ⇒ one-shot is the safe direction
+        return False
+
+    if spec.effects & _ONE_SHOT_EFFECTS:
+        return False
+
+    # ``fs.write``/``fs.edit`` share one spec between local and GitHub-backed
+    # workspaces.  When the target is a remote repo rather than a local checkout,
+    # treat filesystem writes as external and keep them one-shot as well.
+    if Effect.WRITES_FS in spec.effects:
+        workspace = getattr(tool_context, "workspace", None)
+        repo = getattr(tool_context, "repo", None)
+        if workspace is None and repo is not None:
+            return False
+
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +295,7 @@ class LoopApprovals:
             risk=getattr(decision, "risk", "approval"),
             reason=getattr(decision, "reason", ""),
             command_class=getattr(decision, "command_class", ""),
+            allow_session=_allows_session_scope(call, ctx),
         )
         if self.gate is not None:
             # Let the gate's own pending map see it too, so a WS client calling

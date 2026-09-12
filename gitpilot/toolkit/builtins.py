@@ -17,6 +17,7 @@ from typing import Any
 
 from . import forge, fs, git, terminal, testing, todo, web
 from .registry import ToolRegistry
+from .runtime_registry import RuntimeToolRegistry
 
 #: Feature flag gating the *use* of this registry by execution paths.  Building
 #: one is always safe and has no side effects.
@@ -33,15 +34,19 @@ def build_default_registry(
     include_todo: bool = True,
     include_web: bool = True,
 ) -> ToolRegistry:
-    """Return a registry holding GitPilot's built-in tools.
+    """Return the replay-safe registry holding GitPilot's built-in tools.
 
     The include flags exist for tests and for callers that know a namespace
     cannot work in their context — there is no point offering ``git.*`` to a
     session with no checkout.  They are *not* the permission mechanism:
     capability masks decide what a model may call (Batch V4-D1), and a tool
     withheld here is invisible to policy too.
+
+    RuntimeToolRegistry behaves exactly like ToolRegistry for direct calls that
+    have no run/session identity; durable idempotency activates only inside real
+    agent runs, after the policy/approval boundary.
     """
-    registry = ToolRegistry()
+    registry = RuntimeToolRegistry()
     if include_filesystem:
         fs.register(registry)
     if include_terminal:
