@@ -12,7 +12,7 @@ from typing import Optional
 
 from crewai.tools import tool
 
-from .idempotency import run_idempotent_mutation
+from .idempotency import run_legacy_mutation
 from .sandbox_routing import (
     SandboxFallback,
     coerce_timeout,
@@ -70,15 +70,20 @@ def read_local_file(file_path: str) -> str:
 
 
 @tool("Write local file")
-def write_local_file(file_path: str, content: str, idempotency_key: str) -> str:
-    """Write approved content to a local file, creating parent directories.
+def write_local_file(
+    file_path: str,
+    content: str,
+    idempotency_key: str = "",
+) -> str:
+    """Write content to a local file, creating parent directories.
 
-    idempotency_key is the stable approval/request id supplied by the runtime.
-    Reuse it for retries of this exact write.
+    Legacy callers may omit ``idempotency_key`` for backward compatibility.
+    When the runtime supplies its stable approval/request id, retries of that
+    exact write are durably deduplicated.
     """
     ws = _require_workspace()
     try:
-        result = run_idempotent_mutation(
+        result = run_legacy_mutation(
             scope=f"local.file.write:{ws.path}",
             idempotency_key=idempotency_key,
             arguments={"file_path": file_path, "content": content},
@@ -90,15 +95,15 @@ def write_local_file(file_path: str, content: str, idempotency_key: str) -> str:
 
 
 @tool("Delete local file")
-def delete_local_file(file_path: str, idempotency_key: str) -> str:
-    """Delete one approved file from the local workspace.
+def delete_local_file(file_path: str, idempotency_key: str = "") -> str:
+    """Delete a file from the local workspace.
 
-    idempotency_key is the stable approval/request id supplied by the runtime.
-    A retry with the same key returns the first result without deleting again.
+    With an approval/request id, retries replay the first result. Historical
+    direct callers may omit the key and retain their original one-shot behavior.
     """
     ws = _require_workspace()
     try:
-        deleted = run_idempotent_mutation(
+        deleted = run_legacy_mutation(
             scope=f"local.file.delete:{ws.path}",
             idempotency_key=idempotency_key,
             arguments={"file_path": file_path},
