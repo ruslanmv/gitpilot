@@ -11,6 +11,7 @@ from crewai.tools import tool
 
 from .agent_tools import get_repo_context
 from . import github_issues as gi
+from .idempotency import run_idempotent_mutation
 
 
 def _run_async(coro):
@@ -75,17 +76,37 @@ def get_issue(issue_number: int) -> str:
 @tool("Create a new issue")
 def create_issue(
     title: str,
+    idempotency_key: str,
     body: str = "",
     labels: str = "",
     assignees: str = "",
 ) -> str:
-    """Creates a new GitHub issue. labels and assignees are comma-separated strings."""
+    """Creates a new GitHub issue after approval.
+
+    idempotency_key is the stable approval/request id supplied by the runtime.
+    Reuse the same key for retries; never invent a new key for the same approved
+    action. labels and assignees are comma-separated strings.
+    """
     try:
         owner, repo, token, _branch = get_repo_context()
         label_list = [l.strip() for l in labels.split(",") if l.strip()] if labels else None
         assignee_list = [a.strip() for a in assignees.split(",") if a.strip()] if assignees else None
-        issue = _run_async(
-            gi.create_issue(owner, repo, title, body=body or None, labels=label_list, assignees=assignee_list, token=token)
+        args = {
+            "title": title,
+            "body": body,
+            "labels": label_list,
+            "assignees": assignee_list,
+        }
+        issue = run_idempotent_mutation(
+            scope=f"github.issue.create:{owner}/{repo}",
+            idempotency_key=idempotency_key,
+            arguments=args,
+            operation=lambda: _run_async(
+                gi.create_issue(
+                    owner, repo, title, body=body or None,
+                    labels=label_list, assignees=assignee_list, token=token,
+                )
+            ),
         )
         return f"Created issue #{issue.get('number')}: {issue.get('title')}\nURL: {issue.get('html_url', '')}"
     except Exception as e:
@@ -95,13 +116,18 @@ def create_issue(
 @tool("Update an issue")
 def update_issue(
     issue_number: int,
+    idempotency_key: str,
     title: str = "",
     body: str = "",
     state: str = "",
     labels: str = "",
     assignees: str = "",
 ) -> str:
-    """Updates an existing issue. Only non-empty fields are changed. labels/assignees are comma-separated."""
+    """Updates an existing issue after approval.
+
+    idempotency_key is the stable approval/request id supplied by the runtime.
+    Only non-empty fields are changed. labels/assignees are comma-separated.
+    """
     try:
         owner, repo, token, _branch = get_repo_context()
         kwargs: dict = {}
@@ -115,18 +141,35 @@ def update_issue(
             kwargs["labels"] = [l.strip() for l in labels.split(",") if l.strip()]
         if assignees:
             kwargs["assignees"] = [a.strip() for a in assignees.split(",") if a.strip()]
-        issue = _run_async(gi.update_issue(owner, repo, issue_number, token=token, **kwargs))
+        issue = run_idempotent_mutation(
+            scope=f"github.issue.update:{owner}/{repo}:{issue_number}",
+            idempotency_key=idempotency_key,
+            arguments=kwargs,
+            operation=lambda: _run_async(
+                gi.update_issue(owner, repo, issue_number, token=token, **kwargs)
+            ),
+        )
         return f"Updated issue #{issue.get('number')}: {issue.get('title')}\nState: {issue.get('state')}"
     except Exception as e:
         return f"Error updating issue: {e}"
 
 
 @tool("Add a comment to an issue")
-def add_issue_comment(issue_number: int, body: str) -> str:
-    """Adds a comment to an existing issue."""
+def add_issue_comment(issue_number: int, body: str, idempotency_key: str) -> str:
+    """Adds one approved comment to an existing issue.
+
+    idempotency_key is the stable approval/request id supplied by the runtime.
+    """
     try:
         owner, repo, token, _branch = get_repo_context()
-        comment = _run_async(gi.add_issue_comment(owner, repo, issue_number, body, token=token))
+        comment = run_idempotent_mutation(
+            scope=f"github.issue.comment:{owner}/{repo}:{issue_number}",
+            idempotency_key=idempotency_key,
+            arguments={"body": body},
+            operation=lambda: _run_async(
+                gi.add_issue_comment(owner, repo, issue_number, body, token=token)
+            ),
+        )
         return f"Comment added to issue #{issue_number}\nURL: {comment.get('html_url', '')}"
     except Exception as e:
         return f"Error adding comment: {e}"
