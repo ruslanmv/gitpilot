@@ -27,7 +27,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Generic, Optional, TypeVar
+from typing import Any, Awaitable, Callable, Generic, Optional, TypeVar
 
 T = TypeVar("T")
 
@@ -265,6 +265,42 @@ class IdempotencyStore:
         )
         return result
 
+    async def run_once_async(
+        self,
+        *,
+        scope: str,
+        idempotency_key: str,
+        arguments: Any,
+        operation: Callable[[], Awaitable[T]],
+    ) -> T:
+        """Async twin used by the canonical V4 tool registry."""
+        reservation = self.reserve(
+            scope=scope,
+            idempotency_key=idempotency_key,
+            arguments=arguments,
+        )
+        if not reservation.execute:
+            return reservation.result  # type: ignore[return-value]
+
+        try:
+            result = await operation()
+        except BaseException as exc:
+            self.mark_indeterminate(
+                scope=scope,
+                idempotency_key=idempotency_key,
+                arguments=arguments,
+                error=exc,
+            )
+            raise
+
+        self.complete(
+            scope=scope,
+            idempotency_key=idempotency_key,
+            arguments=arguments,
+            result=result,
+        )
+        return result
+
 
 _default_store: Optional[IdempotencyStore] = None
 
@@ -285,6 +321,22 @@ def run_idempotent_mutation(
 ) -> T:
     """Execute one approved mutation at most once for a stable request key."""
     return get_idempotency_store().run_once(
+        scope=scope,
+        idempotency_key=idempotency_key,
+        arguments=arguments,
+        operation=operation,
+    )
+
+
+async def run_idempotent_mutation_async(
+    *,
+    scope: str,
+    idempotency_key: str,
+    arguments: Any,
+    operation: Callable[[], Awaitable[T]],
+) -> T:
+    """Async execution path for canonical agent tools."""
+    return await get_idempotency_store().run_once_async(
         scope=scope,
         idempotency_key=idempotency_key,
         arguments=arguments,
