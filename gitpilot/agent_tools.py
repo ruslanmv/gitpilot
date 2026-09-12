@@ -12,6 +12,7 @@ from .github_api import get_file, get_repo_tree
 from .glob_match import GLOB_DEFAULT_MAX_RESULTS as _GLOB_DEFAULT_MAX_RESULTS
 from .glob_match import GLOB_HARD_MAX_RESULTS as _GLOB_HARD_MAX_RESULTS
 from .glob_match import glob_match, glob_to_regex
+from .idempotency import run_idempotent_mutation
 
 
 def _sanitize_tool_arg(value: Any, fallback_key: str = "description") -> str:
@@ -403,14 +404,13 @@ def edit_file(
     old_string: Any,
     new_string: Any,
     commit_message: Any,
+    idempotency_key: str,
     expected_occurrences: Any = 1,
 ) -> str:
-    """Surgical edit — replace a small section of a file without
-    re-emitting the rest.  Use this whenever you want to fix a bug,
-    rename a symbol, or insert a few lines into a file that already
-    exists.  Never use ``Write or update a file`` to apply a small
-    change — that requires re-emitting the whole file and corrupts
-    long files on small-context models.
+    """Surgical approved edit with replay protection.
+
+    idempotency_key is the stable approval/request id supplied by the runtime.
+    Reuse the same key for retries of the exact same edit.
 
     file_path: path relative to the repo root.  Plain string.
     old_string: the exact text to find — including surrounding
@@ -440,29 +440,52 @@ def edit_file(
 
     try:
         owner, repo, token, branch = get_repo_context()
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            current = loop.run_until_complete(
-                get_file(owner, repo, file_path, token=token, ref=branch)
-            )
-            new_content, report = apply_edit(
-                current or "",
-                old_string=old_string_s,
-                new_string=new_string_s,
-                expected_occurrences=expected,
-            )
-            result = loop.run_until_complete(
-                put_file(owner, repo, file_path, new_content, commit_message_s, token=token, branch=branch)
-            )
-        finally:
-            loop.close()
+        args = {
+            "file_path": file_path,
+            "old_string": old_string_s,
+            "new_string": new_string_s,
+            "commit_message": commit_message_s,
+            "expected_occurrences": expected,
+            "branch": branch,
+        }
 
+        def _operation():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                current = loop.run_until_complete(
+                    get_file(owner, repo, file_path, token=token, ref=branch)
+                )
+                new_content, report = apply_edit(
+                    current or "",
+                    old_string=old_string_s,
+                    new_string=new_string_s,
+                    expected_occurrences=expected,
+                )
+                result = loop.run_until_complete(
+                    put_file(owner, repo, file_path, new_content, commit_message_s, token=token, branch=branch)
+                )
+                return {
+                    "result": result,
+                    "occurrences_replaced": report.occurrences_replaced,
+                    "bytes_before": report.bytes_before,
+                    "bytes_after": report.bytes_after,
+                }
+            finally:
+                loop.close()
+
+        outcome = run_idempotent_mutation(
+            scope=f"github.file.edit:{owner}/{repo}:{file_path}",
+            idempotency_key=idempotency_key,
+            arguments=args,
+            operation=_operation,
+        )
+        result = outcome["result"]
         sha = result.get("commit_sha", "")
         return (
             f"File '{file_path}' edited "
-            f"({report.occurrences_replaced} occurrence(s) replaced, "
-            f"{report.bytes_before} → {report.bytes_after} bytes). "
+            f"({outcome['occurrences_replaced']} occurrence(s) replaced, "
+            f"{outcome['bytes_before']} → {outcome['bytes_after']} bytes). "
             f"Commit: {sha[:8]}"
         )
     except EditError as e:
@@ -478,11 +501,13 @@ def apply_patch_to_file(
     file_path: Any,
     diff: Any,
     commit_message: Any,
+    idempotency_key: str,
 ) -> str:
-    """Apply a unified-diff patch to a single file.  Use this when the
-    change involves several non-contiguous edits inside one file and
-    a single ``Edit a section of a file`` call wouldn't capture all
-    of them cleanly.
+    """Apply one approved unified-diff patch to a single file.
+
+    idempotency_key is the stable approval/request id supplied by the runtime.
+    Use this when the change involves several non-contiguous edits inside one
+    file and a single ``Edit a section of a file`` call would not capture them.
 
     file_path: path relative to the repo root.
     diff: a single-file unified diff with one or more @@-hunks.  The
@@ -502,24 +527,45 @@ def apply_patch_to_file(
 
     try:
         owner, repo, token, branch = get_repo_context()
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            current = loop.run_until_complete(
-                get_file(owner, repo, file_path, token=token, ref=branch)
-            )
-            new_content, report = apply_unified_diff(current or "", diff_s)
-            result = loop.run_until_complete(
-                put_file(owner, repo, file_path, new_content, commit_message_s, token=token, branch=branch)
-            )
-        finally:
-            loop.close()
+        args = {
+            "file_path": file_path,
+            "diff": diff_s,
+            "commit_message": commit_message_s,
+            "branch": branch,
+        }
 
+        def _operation():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                current = loop.run_until_complete(
+                    get_file(owner, repo, file_path, token=token, ref=branch)
+                )
+                new_content, report = apply_unified_diff(current or "", diff_s)
+                result = loop.run_until_complete(
+                    put_file(owner, repo, file_path, new_content, commit_message_s, token=token, branch=branch)
+                )
+                return {
+                    "result": result,
+                    "occurrences_replaced": report.occurrences_replaced,
+                    "bytes_before": report.bytes_before,
+                    "bytes_after": report.bytes_after,
+                }
+            finally:
+                loop.close()
+
+        outcome = run_idempotent_mutation(
+            scope=f"github.file.patch:{owner}/{repo}:{file_path}",
+            idempotency_key=idempotency_key,
+            arguments=args,
+            operation=_operation,
+        )
+        result = outcome["result"]
         sha = result.get("commit_sha", "")
         return (
             f"File '{file_path}' patched "
-            f"({report.occurrences_replaced} hunk(s) applied, "
-            f"{report.bytes_before} → {report.bytes_after} bytes). "
+            f"({outcome['occurrences_replaced']} hunk(s) applied, "
+            f"{outcome['bytes_before']} → {outcome['bytes_after']} bytes). "
             f"Commit: {sha[:8]}"
         )
     except EditError as e:
@@ -529,9 +575,10 @@ def apply_patch_to_file(
 
 
 @tool("Write or update a file in the repository")
-def write_file(file_path: Any, content: Any, commit_message: Any) -> str:
-    """Create or update a file in the repository.
+def write_file(file_path: Any, content: Any, commit_message: Any, idempotency_key: str) -> str:
+    """Create or update one approved file in the repository.
 
+    idempotency_key is the stable approval/request id supplied by the runtime.
     file_path: path relative to the repo root (plain string, e.g.
     ``"src/main.py"``).  content: the full new file content (plain
     string).  commit_message: a short imperative commit summary.  Do
@@ -544,15 +591,27 @@ def write_file(file_path: Any, content: Any, commit_message: Any) -> str:
         owner, repo, token, branch = get_repo_context()
         from .github_api import put_file
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(
-                put_file(owner, repo, file_path, content, commit_message, token=token, branch=branch)
-            )
-        finally:
-            loop.close()
+        def _operation():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(
+                    put_file(owner, repo, file_path, content, commit_message, token=token, branch=branch)
+                )
+            finally:
+                loop.close()
 
+        result = run_idempotent_mutation(
+            scope=f"github.file.write:{owner}/{repo}:{file_path}",
+            idempotency_key=idempotency_key,
+            arguments={
+                "file_path": file_path,
+                "content": content,
+                "commit_message": commit_message,
+                "branch": branch,
+            },
+            operation=_operation,
+        )
         sha = result.get("commit_sha", "")
         return f"File '{file_path}' written successfully. Commit: {sha[:8]}"
     except Exception as e:
@@ -560,9 +619,10 @@ def write_file(file_path: Any, content: Any, commit_message: Any) -> str:
 
 
 @tool("Delete a file from the repository")
-def delete_repo_file(file_path: Any, commit_message: Any) -> str:
-    """Delete a file from the repository.
+def delete_repo_file(file_path: Any, commit_message: Any, idempotency_key: str) -> str:
+    """Delete one approved file from the repository.
 
+    idempotency_key is the stable approval/request id supplied by the runtime.
     file_path: the path relative to the repo root (plain string, e.g.
     ``"docs/old.md"``).  commit_message: a short imperative commit
     summary.  Both are plain strings — never wrap them in a schema dict.
@@ -573,15 +633,26 @@ def delete_repo_file(file_path: Any, commit_message: Any) -> str:
         owner, repo, token, branch = get_repo_context()
         from .github_api import delete_file
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(
-                delete_file(owner, repo, file_path, commit_message, token=token, branch=branch)
-            )
-        finally:
-            loop.close()
+        def _operation():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(
+                    delete_file(owner, repo, file_path, commit_message, token=token, branch=branch)
+                )
+            finally:
+                loop.close()
 
+        result = run_idempotent_mutation(
+            scope=f"github.file.delete:{owner}/{repo}:{file_path}",
+            idempotency_key=idempotency_key,
+            arguments={
+                "file_path": file_path,
+                "commit_message": commit_message,
+                "branch": branch,
+            },
+            operation=_operation,
+        )
         sha = result.get("commit_sha", "")
         return f"File '{file_path}' deleted. Commit: {sha[:8]}"
     except Exception as e:
@@ -589,22 +660,32 @@ def delete_repo_file(file_path: Any, commit_message: Any) -> str:
 
 
 @tool("Create a new branch in the repository")
-def create_repo_branch(branch_name: str) -> str:
-    """Creates a new branch from the current HEAD."""
+def create_repo_branch(branch_name: str, idempotency_key: str) -> str:
+    """Create one approved branch from the current HEAD.
+
+    idempotency_key is the stable approval/request id supplied by the runtime.
+    """
     branch_name = _sanitize_tool_arg(branch_name)
     try:
         owner, repo, token, _branch = get_repo_context()
         from .github_api import create_branch
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(
-                create_branch(owner, repo, branch_name, from_ref="HEAD", token=token)
-            )
-        finally:
-            loop.close()
+        def _operation():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(
+                    create_branch(owner, repo, branch_name, from_ref="HEAD", token=token)
+                )
+            finally:
+                loop.close()
 
+        run_idempotent_mutation(
+            scope=f"github.branch.create:{owner}/{repo}:{branch_name}",
+            idempotency_key=idempotency_key,
+            arguments={"branch_name": branch_name, "from_ref": "HEAD"},
+            operation=_operation,
+        )
         return f"Branch '{branch_name}' created successfully."
     except Exception as e:
         if "already exists" in str(e).lower() or "422" in str(e):
