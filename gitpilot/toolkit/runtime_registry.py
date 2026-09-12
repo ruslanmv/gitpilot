@@ -1,36 +1,38 @@
 """Production ToolRegistry with durable replay protection for mutations.
 
-The base :class:`ToolRegistry` intentionally stays a small, predictable library
-primitive.  This subclass adds the runtime-only contract GitPilot needs once a
-tool call belongs to a real run/session:
+The base :class:`ToolRegistry` remains a small, predictable library primitive.
+This subclass adds the runtime-only contract GitPilot needs once a tool call
+belongs to a real run/session:
 
 * safe/read-only tools keep the base registry's zero-ledger fast path;
-* mutating tools use the stable provider/tool-call id as the idempotency key;
-* that key is bound to the canonical tool id, exact arguments, run and target;
-* successful retries replay the original ToolResult without repeating effects;
-* ambiguous failures fail closed instead of automatically duplicating a remote
-  action whose response may simply have been lost.
+* direct SDK/toolkit calls without a run/session keep byte-for-byte base
+  execution semantics;
+* mutating runtime calls use the stable provider/tool-call id as the
+  idempotency key;
+* the key is bound to the canonical tool id, exact arguments, run, and target;
+* successful retries replay the original :class:`ToolResult` without repeating
+  side effects;
+* ambiguous handler failures fail closed instead of automatically duplicating a
+  remote action whose response may simply have been lost.
 
-Standalone toolkit calls without a run/session id deliberately bypass the ledger.
-They have no durable approval identity to resume and are frequently used by SDK
-consumers, tests and parity harnesses with short synthetic call ids.
+The important layering rule is that replay protection lives at the production
+execution boundary, not inside every tool handler and not in the generic
+registry. That keeps tests, SDK use, and read-heavy workloads inexpensive while
+making the real agent path durable by construction.
 """
 from __future__ import annotations
 
-import asyncio
-import inspect
-from typing import Any, Awaitable, Callable, Dict, Mapping
+from typing import Any, Dict, Mapping
 
 from ..idempotency import IdempotencyError, get_idempotency_store
 from .registry import (
     Effect,
     ToolCall,
-    ToolError,
     ToolExecutionContext,
-    ToolHandler,
     ToolRegistry,
     ToolResult,
     ToolSpec,
+    validate_arguments,
 )
 
 _MUTATING_EFFECTS = frozenset({
@@ -47,7 +49,7 @@ def _mutating(spec: ToolSpec) -> bool:
 
 
 def _scope(ctx: ToolExecutionContext, spec: ToolSpec) -> str | None:
-    """Return a durable scope, or None for direct/ephemeral library calls."""
+    """Return a durable scope, or ``None`` for direct/ephemeral calls."""
     run = ctx.run_id or ctx.session_id
     if not run:
         return None
@@ -61,7 +63,9 @@ def _scope(ctx: ToolExecutionContext, spec: ToolSpec) -> str | None:
 
 
 def _payload(result: ToolResult) -> Dict[str, Any]:
+    """JSON-friendly result persisted for exact replay after a restart."""
     return {
+        "tool": result.tool,
         "ok": result.ok,
         "content": result.content,
         "data": result.data,
@@ -73,7 +77,7 @@ def _payload(result: ToolResult) -> Dict[str, Any]:
 def _result_from_payload(call: ToolCall, payload: Mapping[str, Any]) -> ToolResult:
     return ToolResult(
         call_id=call.id,
-        tool=call.tool,
+        tool=str(payload.get("tool") or call.tool),
         ok=bool(payload.get("ok")),
         content=str(payload.get("content") or ""),
         data=dict(payload.get("data") or {}) or None,
@@ -82,59 +86,70 @@ def _result_from_payload(call: ToolCall, payload: Mapping[str, Any]) -> ToolResu
     )
 
 
-async def _invoke(handler: ToolHandler, call: ToolCall, ctx: ToolExecutionContext) -> ToolResult:
-    """Match ToolRegistry's async/sync dispatch without blocking the event loop."""
-    if inspect.iscoroutinefunction(handler):
-        raw: Any = handler(call, ctx)
-    else:
-        raw = await asyncio.to_thread(handler, call, ctx)
+class _MutationOutcomeUncertain(RuntimeError):
+    """Carry the first failure while making the ledger fail closed on retry."""
 
-    if inspect.isawaitable(raw):
-        raw = await raw
-    if not isinstance(raw, ToolResult):
-        # This is a programming error, not a model/tool error.  Preserve the base
-        # registry contract by surfacing ToolError to its execute() wrapper.
-        raise ToolError(
-            f"tool {call.tool!r} returned {type(raw).__name__}, expected ToolResult"
-        )
-    return raw
+    def __init__(self, result: ToolResult) -> None:
+        super().__init__(result.content)
+        self.result = result
 
 
 class RuntimeToolRegistry(ToolRegistry):
-    """ToolRegistry whose mutating handlers become replay-safe in real runs."""
+    """ToolRegistry whose mutating calls become replay-safe in real runs."""
 
-    def register(self, spec: ToolSpec, handler: ToolHandler) -> None:
-        if not _mutating(spec):
-            super().register(spec, handler)
-            return
+    async def execute(
+        self,
+        call: ToolCall,
+        ctx: ToolExecutionContext,
+    ) -> ToolResult:
+        # Unknown tools and invalid arguments are deterministic input failures,
+        # not attempted mutations. Let the base registry return its normal,
+        # corrective ToolResult without creating a ledger record.
+        resolved = self.resolve(call.tool)
+        if resolved is None:
+            return await super().execute(call, ctx)
 
-        async def protected(call: ToolCall, ctx: ToolExecutionContext) -> ToolResult:
-            scope = _scope(ctx, spec)
-            if scope is None:
-                # Direct library/tests have no approval/run identity.  Keep their
-                # semantics identical to the base registry and avoid disk I/O.
-                return await _invoke(handler, call, ctx)
+        spec = self.spec(resolved)
+        if validate_arguments(spec.params_schema, call.arguments or {}):
+            return await super().execute(call, ctx)
 
-            store = ctx.extras.get("idempotency_store") or get_idempotency_store()
+        scope = _scope(ctx, spec)
+        if not _mutating(spec) or scope is None:
+            # This branch is deliberately the exact base execution path. In
+            # particular, standalone toolkit calls must not gain persistence,
+            # altered timeout semantics, or hidden disk I/O merely because the
+            # default registry happens to be runtime-capable.
+            return await super().execute(call, ctx)
 
-            async def operation() -> Dict[str, Any]:
-                result = await _invoke(handler, call, ctx)
-                return _payload(result)
+        store = ctx.extras.get("idempotency_store") or get_idempotency_store()
+        identity = {"tool": resolved, "arguments": call.arguments or {}}
 
-            try:
-                stored = await store.run_once_async(
-                    scope=scope,
-                    idempotency_key=call.id,
-                    arguments={"tool": spec.id, "arguments": call.arguments or {}},
-                    operation=operation,
-                )
-            except IdempotencyError as exc:
-                return ToolResult.failure(
-                    call,
-                    f"{spec.id} was not executed: {exc}",
-                    error="idempotency_guard",
-                    data={"retry_safe": False, "requires_reconciliation": True},
-                )
-            return _result_from_payload(call, stored)
+        async def operation() -> Dict[str, Any]:
+            result = await super(RuntimeToolRegistry, self).execute(call, ctx)
+            if not result.ok:
+                # A downstream failure can be ambiguous: the service may have
+                # committed the mutation and only lost the response. Raising
+                # here lets IdempotencyStore mark the key indeterminate. We then
+                # return the original ToolResult for this first attempt; only a
+                # retry is blocked pending reconciliation/new approval.
+                raise _MutationOutcomeUncertain(result)
+            return _payload(result)
 
-        super().register(spec, protected)
+        try:
+            stored = await store.run_once_async(
+                scope=scope,
+                idempotency_key=call.id,
+                arguments=identity,
+                operation=operation,
+            )
+        except _MutationOutcomeUncertain as exc:
+            return exc.result
+        except IdempotencyError as exc:
+            return ToolResult.failure(
+                call,
+                f"{resolved} was not executed: {exc}",
+                error="idempotency_guard",
+                data={"retry_safe": False, "requires_reconciliation": True},
+            )
+
+        return _result_from_payload(call, stored)
