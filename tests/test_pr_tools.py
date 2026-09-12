@@ -1,6 +1,7 @@
 """Tests for gitpilot.pr_tools CrewAI tools."""
 from __future__ import annotations
 
+import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -15,6 +16,11 @@ from gitpilot.pr_tools import (
     add_pr_comment,
     PR_TOOLS,
 )
+
+
+def _approval_key() -> str:
+    """Unique per test invocation so the durable ledger cannot cross-contaminate runs."""
+    return f"test-approval-{uuid.uuid4()}"
 
 
 def test_pr_tools_exported():
@@ -79,7 +85,12 @@ class TestCreatePRTool:
             "title": "New Feature",
             "html_url": "https://github.com/o/r/pull/20",
         }
-        result = create_pull_request.run(title="New Feature", head="feat", base="main")
+        result = create_pull_request.run(
+            title="New Feature",
+            head="feat",
+            base="main",
+            idempotency_key=_approval_key(),
+        )
         assert "Created PR #20" in result
 
 
@@ -87,7 +98,9 @@ class TestMergePRTool:
     @patch("gitpilot.pr_tools.gp.merge_pull_request", new_callable=AsyncMock)
     def test_merges_pr(self, mock_merge, repo_context):
         mock_merge.return_value = {"sha": "abc123"}
-        result = merge_pull_request.run(pull_number=10)
+        result = merge_pull_request.run(
+            pull_number=10, idempotency_key=_approval_key()
+        )
         assert "merged" in result.lower()
         assert "abc123" in result
 
@@ -113,7 +126,12 @@ class TestReviewTool:
     @patch("gitpilot.pr_tools.gp.create_pr_review", new_callable=AsyncMock)
     def test_creates_review(self, mock_review, repo_context):
         mock_review.return_value = {"html_url": "https://github.com/o/r/pull/10#review"}
-        result = create_pr_review.run(pull_number=10, body="LGTM", event="APPROVE")
+        result = create_pr_review.run(
+            pull_number=10,
+            body="LGTM",
+            event="APPROVE",
+            idempotency_key=_approval_key(),
+        )
         assert "Review submitted" in result
 
 
@@ -121,5 +139,7 @@ class TestCommentTool:
     @patch("gitpilot.pr_tools.gp.add_pr_comment", new_callable=AsyncMock)
     def test_adds_comment(self, mock_comment, repo_context):
         mock_comment.return_value = {"html_url": "https://github.com/o/r/pull/10#comment"}
-        result = add_pr_comment.run(pull_number=10, body="Nice work")
+        result = add_pr_comment.run(
+            pull_number=10, body="Nice work", idempotency_key=_approval_key()
+        )
         assert "Comment added" in result
