@@ -91,6 +91,18 @@ def _validate_key(key: str) -> str:
     return value
 
 
+def _ephemeral_runtime_scope(scope: str) -> bool:
+    """Whether a canonical tool call has no durable run/session identity.
+
+    Standalone toolkit calls (tests, parity harnesses, direct library use) often
+    synthesize short call ids such as ``t`` and intentionally execute the same
+    id more than once.  Those calls have no approval lifecycle to resume, so
+    persisting them would create false deduplication across unrelated invocations.
+    Real agent runs always carry a run or session id and therefore use the ledger.
+    """
+    return scope.startswith("runtime:ephemeral:")
+
+
 class IdempotencyStore:
     """Small durable execution ledger backed by SQLite.
 
@@ -274,6 +286,11 @@ class IdempotencyStore:
         operation: Callable[[], Awaitable[T]],
     ) -> T:
         """Async twin used by the canonical V4 tool registry."""
+        if _ephemeral_runtime_scope(scope):
+            # No durable run means no durable approval identity to replay. Keep
+            # direct library/toolkit calls behaviorally transparent and fast.
+            return await operation()
+
         reservation = self.reserve(
             scope=scope,
             idempotency_key=idempotency_key,
