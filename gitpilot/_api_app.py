@@ -380,6 +380,10 @@ try:
 except Exception:  # noqa: BLE001
     logger.exception("Matrix runs API failed to mount; /api/v1/gitpilot/runs will be unavailable")
 
+# GitLab OAuth and repository endpoints are additive; GitHub routes remain intact.
+from .gitlab import build_gitlab_router
+app.include_router(build_gitlab_router())
+
 # GitPilot accounts (account-first identity: email/password + verification +
 # sessions). Off by default so the existing bring-your-own-GitHub-token flow is
 # unchanged; enable with GITPILOT_ENABLE_ACCOUNTS=true. See docs/auth.md.
