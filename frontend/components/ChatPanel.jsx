@@ -1,5 +1,5 @@
 import { resolveBackendUrl } from "../utils/backend.js";
-import { apiUrl } from "../utils/api.js";
+import { apiUrl, getAuthHeaders } from "../utils/api.js";
 // frontend/components/ChatPanel.jsx
 import React, { useEffect, useRef, useState } from "react";
 import AssistantMessage from "./AssistantMessage.jsx";
@@ -28,10 +28,14 @@ function languageFromPath(path) {
 }
 
 // Helper to get headers (inline safety if utility is missing)
-const getHeaders = () => ({
-  "Content-Type": "application/json",
-  Authorization: `Bearer ${localStorage.getItem("github_token") || ""}`,
-});
+const getHeaders = () => ({ "Content-Type": "application/json", ...getAuthHeaders() });
+
+const fileUrl = (repo, path, branch) => {
+  const endpoint = repo.provider === "gitlab"
+    ? `/api/gitlab/projects/${repo.id}/file`
+    : `/api/repos/${repo.owner}/${repo.name}/file`;
+  return `${endpoint}?path=${encodeURIComponent(path)}&ref=${encodeURIComponent(branch)}`;
+};
 
 export default function ChatPanel({
   repo,
@@ -48,6 +52,9 @@ export default function ChatPanel({
   // Initialize state from props or defaults
   const [messages, setMessages] = useState(sessionChatState?.messages || []);
   const [goal, setGoal] = useState("");
+  // GitLab file browsing is available; agent actions still use GitHub-specific
+  // issue/PR and execution tools. Do not send a GitLab credential to those APIs.
+  const gitlabReadOnly = repo?.provider === "gitlab";
   const [plan, setPlan] = useState(sessionChatState?.plan || null);
 
   const [loadingPlan, setLoadingPlan] = useState(false);
@@ -241,7 +248,7 @@ export default function ChatPanel({
   useEffect(() => {
     const onRunFile = (e) => {
       const path = e?.detail?.path;
-      if (!path || !repo) return;
+      if (!path || !repo || repo.provider === "gitlab") return;
       send({ goal: `run ${path}` });
     };
     // "Open in Canvas" handler — fetches the file's content from the
@@ -254,9 +261,7 @@ export default function ChatPanel({
       setCanvasError(null);
       const branch = currentBranch || "HEAD";
       try {
-        const url = `/api/repos/${repo.owner}/${repo.name}/file`
-                  + `?path=${encodeURIComponent(path)}`
-                  + `&ref=${encodeURIComponent(branch)}`;
+        const url = fileUrl(repo, path, branch);
         const res = await fetch(apiUrl(url), { headers: getHeaders() });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -302,9 +307,7 @@ export default function ChatPanel({
       } catch (_e) { /* old browser */ }
       const branch = currentBranch || "HEAD";
       const fetchOnce = async () => {
-        const url = `/api/repos/${repo.owner}/${repo.name}/file`
-                  + `?path=${encodeURIComponent(path)}`
-                  + `&ref=${encodeURIComponent(branch)}`;
+        const url = fileUrl(repo, path, branch);
         const res = await fetch(apiUrl(url), { headers: getHeaders() });
         const data = await res.json().catch(() => ({}));
         return { res, data };
@@ -1148,6 +1151,13 @@ export default function ChatPanel({
           </div>
         )}
 
+        {gitlabReadOnly && (
+          <div role="note" style={{ padding: "10px 12px", marginBottom: 12, fontSize: 12,
+            color: "#f5c6b3", border: "1px solid #705048", borderRadius: 9, background: "#2b2529" }}>
+            GitLab project browsing is available. AI code execution and merge-request
+            workflows are not yet supported for GitLab projects.
+          </div>
+        )}
         <div className="chat-input-row">
           <textarea
             className="chat-input"
@@ -1165,7 +1175,7 @@ export default function ChatPanel({
                 if (!loadingPlan && !executing) send();
               }
             }}
-            disabled={!canChat || loadingPlan || executing}
+            disabled={!canChat || gitlabReadOnly || loadingPlan || executing}
           />
 
           {/* Always show both buttons (old UX) */}
@@ -1173,7 +1183,7 @@ export default function ChatPanel({
             className="chat-btn primary"
             type="button"
             onClick={send}
-            disabled={!canChat || loadingPlan || executing || !goal.trim()}
+            disabled={!canChat || gitlabReadOnly || loadingPlan || executing || !goal.trim()}
           >
             {loadingPlan ? "Planning..." : wsConnected ? "Send" : "Generate plan"}
           </button>
