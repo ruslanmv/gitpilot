@@ -3,7 +3,7 @@ import "./auth.css";
 import { resolveBackendUrl } from "../utils/backend.js";
 import { getSessionToken, setSessionToken } from "../utils/api.js";
 
-// Premium /auth — GitPilot account (email/password) + "Continue with GitHub".
+// GitPilot authentication: email identity plus GitHub or GitLab repository access.
 // GitPilot account = who you are; GitHub = repository access (the device flow).
 //
 // One layout for every state: <div.gp-auth> (full-viewport background) wraps a
@@ -52,6 +52,39 @@ async function getJSON(path, opts = {}) {
 const GithubMark = () => (
   <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49v-1.7c-2.78.62-3.37-1.21-3.37-1.21-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.36-2.22-.26-4.55-1.14-4.55-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.7 0 0 .84-.28 2.75 1.05a9.3 9.3 0 0 1 5 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.4.2 2.44.1 2.7.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9v2.82c0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.25C22 6.58 17.52 2 12 2z" /></svg>
 );
+const GitLabMark = () => (
+  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <path d="M12 21.6 16.45 8H7.55L12 21.6Z" fill="#E24329"/>
+    <path d="m12 21.6-4.45-13H1.6L12 21.6Z" fill="#FC6D26"/>
+    <path d="m1.6 8 2.2-6.7c.1-.34.57-.34.68 0L7.55 8H1.6Z" fill="#FCA326"/>
+    <path d="m12 21.6 4.45-13h5.95L12 21.6Z" fill="#FC6D26"/>
+    <path d="m22.4 8-2.2-6.7c-.1-.34-.57-.34-.68 0L16.45 8h5.95Z" fill="#FCA326"/>
+    <path d="M7.55 8 12 21.6 16.45 8H7.55Z" fill="#FC6D26"/>
+  </svg>
+);
+
+const AuthAside = () => (
+  <aside className="gp-auth-aside" aria-label="About GitPilot">
+    <a className="gp-brand" href="/">
+      <span className="gp-brand-mark">G<span>.</span></span>
+      <span>gitpilot <small>WORKSPACE</small></span>
+    </a>
+    <div className="gp-aside-content">
+      <span className="gp-aside-kicker"><span className="gp-status-dot" /> BUILT FOR ENGINEERING TEAMS</span>
+      <h1>From your repo.<br /><em>To production.</em></h1>
+      <p>One intelligent workspace to explore, plan, review and ship software — with you in control.</p>
+      <div className="gp-aside-preview" aria-hidden="true">
+        <div className="gp-preview-top"><span className="gp-preview-dots">● ● ●</span><span>gitpilot / workspace</span><span className="gp-preview-live">● ACTIVE</span></div>
+        <div className="gp-preview-code"><span className="gp-preview-muted">01</span><span><b>explorer</b> <i>→</i> analyzing project context</span></div>
+        <div className="gp-preview-code"><span className="gp-preview-muted">02</span><span><b>planner</b> <i>→</i> preparing safe changes</span></div>
+        <div className="gp-preview-code"><span className="gp-preview-muted">03</span><span><b>reviewer</b> <i>→</i> verifying the diff</span></div>
+        <div className="gp-preview-bottom"><span>✓ Changes require your approval</span><span>GitHub · GitLab</span></div>
+      </div>
+    </div>
+    <div className="gp-aside-footer">OPEN SOURCE · APACHE 2.0 <span>BUILD WITH CONFIDENCE</span></div>
+  </aside>
+);
+
 const Eye = ({ off }) => (off
   ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.5 18.5 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19M1 1l22 22"/></svg>
   : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -63,13 +96,15 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
     !!params.get("token") && window.location.pathname.includes("verify-email");
   // connectMode / ?view=github: jump straight to the GitHub device flow (used by
   // the in-workspace "Connect GitHub" button for already-signed-in accounts).
-  const wantsGithub = !!params.get("code") || params.get("view") === "github" || connectMode;
+  const callbackProvider = params.get("provider");
+  const wantsGitlab = callbackProvider === "gitlab" || params.get("view") === "gitlab" || params.get("connect") === "gitlab";
+  const wantsGithub = !wantsGitlab && (!!params.get("code") || params.get("view") === "github" || connectMode);
   const [mode, setMode] = useState(params.get("mode") === "signup" ? "signup" : "signin");
   // Pick the opening view: GitHub flow → github; an email confirmation link
   // (?token= on /verify-email) → verify; otherwise email.
   const [view, setView] = useState(
-    wantsGithub ? "github" : isVerifyLink ? "verify" : "email"
-  ); // "email" | "github" | "verify"
+    wantsGitlab ? "gitlab" : wantsGithub ? "github" : isVerifyLink ? "verify" : "email"
+  ); // "email" | "github" | "gitlab" | "verify"
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
@@ -137,6 +172,7 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
     try {
       localStorage.setItem("github_token", data.access_token);
       localStorage.setItem("github_user", JSON.stringify(data.user));
+      localStorage.setItem("gitpilot_git_provider", "github");
     } catch { /* storage may be blocked */ }
     if (typeof onAuthenticated === "function") {
       onAuthenticated({ access_token: data.access_token, user: data.user });
@@ -220,12 +256,55 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
     }
   }
 
-  // Kick off the GitHub flow when entering the github view.
+  async function startGitLab() {
+    setGhPhase("connecting");
+    setGhError("");
+    const code = params.get("code");
+    const state = params.get("state") || "";
+    if (code && callbackProvider === "gitlab") {
+      window.history.replaceState({}, document.title, window.location.pathname);
+      const expectedState = sessionStorage.getItem("gitpilot_gitlab_oauth_state");
+      sessionStorage.removeItem("gitpilot_gitlab_oauth_state");
+      if (!expectedState || state !== expectedState) {
+        setGhPhase("error");
+        setGhError("The GitLab login session has expired. Please start again.");
+        return;
+      }
+      try {
+        const r = await post("/api/gitlab/auth/callback", { code, state });
+        if (!r.ok) throw new Error(r.data.detail || "GitLab authorization failed.");
+        if (!r.data.access_token || !r.data.user) throw new Error("GitLab returned an incomplete session.");
+        localStorage.setItem("gitlab_token", r.data.access_token);
+        localStorage.setItem("gitlab_user", JSON.stringify(r.data.user));
+        localStorage.setItem("gitpilot_git_provider", "gitlab");
+        if (typeof onAuthenticated === "function") {
+          onAuthenticated({ access_token: r.data.access_token, user: r.data.user, provider: "gitlab" });
+        }
+        if (connectMode) window.location.href = "/";
+      } catch (e) {
+        setGhPhase("error");
+        setGhError(e.message || "GitLab authorization failed.");
+      }
+      return;
+    }
+    try {
+      const r = await getJSON("/api/gitlab/auth/url");
+      if (!r.ok || !r.data.authorization_url) throw new Error(r.data.detail || "GitLab OAuth is not configured.");
+      sessionStorage.setItem("gitpilot_gitlab_oauth_state", r.data.state);
+      window.location.href = r.data.authorization_url;
+    } catch (e) {
+      setGhPhase("error");
+      setGhError(e.message || "Could not start GitLab sign-in.");
+    }
+  }
+
+  // Kick off the selected provider flow.
   useEffect(() => {
-    if (view === "github") {
+    if (view === "github" || view === "gitlab") {
       if (ghStarted.current) return;
       ghStarted.current = true;
-      startGitHub();
+      if (view === "gitlab") startGitLab();
+      else startGitHub();
     } else {
       ghStarted.current = false;
       stopPolling.current = true;
@@ -281,6 +360,7 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
   if (view === "verify") {
     return (
       <div className="gp-auth">
+      <AuthAside />
         <a className="gp-home" href="/">← Back to home</a>
         <div className="gp-auth-card">
           <a className="gp-auth-logo" href="/" aria-label="Back to GitPilot home">GP</a>
@@ -322,7 +402,7 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="Email"
+                  placeholder="you@company.com" aria-label="Email address" autoComplete="email"
                 />
               </div>
               <button type="button" className="gp-submit" onClick={resendVerification} disabled={resendBusy}>
@@ -334,16 +414,18 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
             </>
           )}
 
-          <div className="gp-copy">© {new Date().getFullYear()} GitPilot Inc.</div>
+          <div className="gp-copy">© {new Date().getFullYear()} GitPilot · Open source</div>
         </div>
       </div>
     );
   }
 
   // ── GitHub authorization card (same shell, no nested rectangle) ──
-  if (view === "github") {
+  if (view === "github" || view === "gitlab") {
+    const isGitlab = view === "gitlab";
     return (
       <div className="gp-auth">
+      <AuthAside />
         <a className="gp-home" href="/">← Back to home</a>
         <div className="gp-auth-card">
           {connectMode
@@ -353,13 +435,13 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
 
           {ghPhase === "connecting" && (
             <>
-              <h2>Connecting to GitHub…</h2>
+              <h2>Connecting to {isGitlab ? "GitLab" : "GitHub"}…</h2>
               <p className="lead">Opening a secure authorization session for your repositories.</p>
               <div className="gp-spinwrap"><span className="gp-spin" /></div>
             </>
           )}
 
-          {ghPhase === "device" && ghDevice && (
+          {!isGitlab && ghPhase === "device" && ghDevice && (
             <>
               <h2>Authorize GitPilot</h2>
               <p className="lead">Enter this code on GitHub to grant repository access.</p>
@@ -380,10 +462,10 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
 
           {ghPhase === "error" && (
             <>
-              <h2>GitHub sign-in failed</h2>
+              <h2>{isGitlab ? "GitLab" : "GitHub"} connection failed</h2>
               <div className="gp-note err">{ghError}</div>
-              <button type="button" className="gp-github" onClick={startGitHub}>
-                <GithubMark /> Try again
+              <button type="button" className="gp-github" onClick={isGitlab ? startGitLab : startGitHub}>
+                {isGitlab ? <GitLabMark /> : <GithubMark />} Try again
               </button>
             </>
           )}
@@ -397,6 +479,7 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
   // ── Email / password card (sign in + create account share this shell) ──
   return (
     <div className="gp-auth">
+      <AuthAside />
       <a className="gp-home" href="/">← Back to home</a>
       <form className="gp-auth-card" onSubmit={submit}>
         {mode === "signup" && (
@@ -405,8 +488,9 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
         <a className="gp-auth-logo" href="/" aria-label="Back to GitPilot home">GP</a>
         {mode === "signin" ? (
           <>
-            <h2>GitPilot Enterprise</h2>
-            <p className="lead">Agentic AI workflow for your repositories.<br />Secure. Context-aware. Automated.</p>
+            <div className="gp-auth-eyebrow">YOUR ENGINEERING WORKSPACE</div>
+            <h2>Welcome back</h2>
+            <p className="lead">Sign in to GitPilot and continue building.</p>
           </>
         ) : (
           <>
@@ -415,16 +499,21 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
           </>
         )}
 
-        <button type="button" className="gp-github" onClick={() => setView("github")}>
-          <GithubMark /> Continue with GitHub
-        </button>
-        <div className="gp-or">or</div>
+        <div className="gp-provider-stack">
+          <button type="button" className="gp-github" onClick={() => setView("github")}>
+            <GithubMark /> Continue with GitHub <span className="gp-provider-arrow">↗</span>
+          </button>
+          <button type="button" className="gp-gitlab" onClick={() => setView("gitlab")}>
+            <GitLabMark /> Continue with GitLab <span className="gp-provider-arrow">↗</span>
+          </button>
+        </div>
+        <div className="gp-or">or continue with email</div>
 
         {note && <div className={`gp-note ${note.kind}`}>{note.text}</div>}
 
         {mode === "signup" && (
           <div className="gp-field">
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (optional)" />
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Full name (optional)" aria-label="Full name" autoComplete="name" />
           </div>
         )}
         <div className="gp-field">
@@ -432,7 +521,7 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
         </div>
         <div className="gp-field gp-pw">
           <input type={showPw ? "text" : "password"} required minLength={8} value={password}
-            onChange={(e) => setPassword(e.target.value)} placeholder="Password" />
+            onChange={(e) => setPassword(e.target.value)} placeholder="Enter your password" aria-label="Password" autoComplete={mode === "signin" ? "current-password" : "new-password"} />
           <button type="button" className="gp-eye" onClick={() => setShowPw((s) => !s)} aria-label="Toggle password">
             <Eye off={showPw} />
           </button>
