@@ -31,7 +31,8 @@ import { initApp } from "./utils/appInit.js";
 
 function makeRepoKey(repo) {
   if (!repo) return null;
-  return repo.full_name || `${repo.owner}/${repo.name}`;
+  const fullName = repo.full_name || `${repo.owner}/${repo.name}`;
+  return repo.provider === "gitlab" ? `gitlab:${repo.id}:${fullName}` : fullName;
 }
 
 function uniq(arr) {
@@ -152,6 +153,7 @@ export default function App() {
   const addRepoToContext = useCallback((r) => {
     const key = makeRepoKey(r);
     if (!key) return;
+    localStorage.setItem("gitpilot_git_provider", r.provider === "gitlab" ? "gitlab" : "github");
 
     setContextRepos((prev) => {
       if (prev.some((e) => e.repoKey === key)) {
