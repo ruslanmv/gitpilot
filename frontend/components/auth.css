@@ -1,116 +1,75 @@
-/* GitPilot /auth — premium single-card sign in / create account / GitHub.
-   Scoped .gp-auth. One continuous full-viewport background; the card sits
-   directly on it (no second rectangle) for every state. */
-.gp-auth {
-  --o: #ff5a2b; --o2: #ff7a4c; --tx: #f1f3f5; --mut: #9aa3ad; --faint: #6f7884;
-  --bd: rgba(255,255,255,.08); --field: #15171d;
-  position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; overflow-y: auto;
-  background:
-    radial-gradient(circle at 50% 20%, rgba(255,95,48,.10), transparent 34%),
-    #101114;
-  color: var(--tx);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
-  -webkit-font-smoothing: antialiased;
-}
-.gp-auth * { box-sizing: border-box; }
-.gp-auth-card {
-  width: min(100%, 520px); border: 1px solid var(--bd); border-radius: 28px;
-  background: rgba(28,29,33,.92); padding: 40px 46px 32px; text-align: center;
-  box-shadow: 0 32px 80px rgba(0,0,0,.45);
-}
-.gp-auth-logo {
-  width: 64px; height: 64px; border-radius: 16px; margin: 0 auto 22px; display: grid; place-items: center;
-  font-weight: 800; font-size: 22px; color: var(--o); text-decoration: none;
-  background: linear-gradient(150deg, rgba(255,90,43,.22), rgba(255,90,43,.08));
-  border: 1px solid rgba(255,90,43,.25); transition: filter .15s, transform .15s;
-}
-a.gp-auth-logo:hover { filter: brightness(1.12); transform: translateY(-1px); }
-
-/* subtle "back to home" affordance on the dedicated auth page */
-.gp-home {
-  position: fixed; top: 18px; left: 20px; z-index: 5;
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 13px; color: var(--mut); text-decoration: none; opacity: .72;
-}
-.gp-home:hover { opacity: 1; color: var(--tx); }
-.gp-auth h2 { font-size: 26px; font-weight: 750; margin: 0 0 12px; letter-spacing: -0.02em; }
-.gp-auth .lead { color: var(--mut); font-size: 14.5px; line-height: 1.5; margin: 0 0 26px; }
-
-.gp-github {
-  display: flex; align-items: center; justify-content: center; gap: 11px; width: 100%;
-  border: none; border-radius: 12px; padding: 14px; font-size: 15px; font-weight: 600; cursor: pointer;
-  color: #fff; background: linear-gradient(150deg, var(--o2), var(--o));
-  box-shadow: 0 16px 38px -16px rgba(255,90,43,.85); transition: .15s;
-  text-decoration: none;
-}
-.gp-github:hover { filter: brightness(1.05); transform: translateY(-1px); }
-.gp-github svg { width: 20px; height: 20px; }
-
-.gp-or { display: flex; align-items: center; gap: 14px; color: var(--faint); font-size: 13px; margin: 22px 0; }
-.gp-or::before, .gp-or::after { content: ""; flex: 1; height: 1px; background: var(--bd); }
-
-.gp-field { margin-bottom: 14px; position: relative; text-align: left; }
-.gp-field input {
-  width: 100%; border: 1px solid var(--bd); background: var(--field); color: var(--tx);
-  border-radius: 11px; padding: 14px 15px; font-size: 14.5px; outline: none; transition: border-color .15s;
-}
-.gp-field input::placeholder { color: var(--faint); }
-.gp-field input:focus { border-color: rgba(255,90,43,.5); }
-.gp-pw .gp-eye {
-  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
-  background: none; border: none; color: var(--faint); cursor: pointer; padding: 8px; display: grid; place-items: center;
-}
-.gp-pw .gp-eye:hover { color: var(--mut); }
-.gp-pw .gp-eye svg { width: 18px; height: 18px; }
-
-.gp-forgot { text-align: right; margin: -2px 0 16px; }
-.gp-submit {
-  width: 100%; border: 1px solid var(--bd); border-radius: 11px; padding: 14px; font-size: 15px; font-weight: 600;
-  color: var(--tx); background: #21242c; cursor: pointer; transition: .15s;
-}
-.gp-submit:hover:not(:disabled) { background: #272a33; }
-.gp-submit:disabled { opacity: .6; cursor: default; }
-
-.gp-foot { font-size: 14px; color: var(--mut); margin-top: 22px; }
-.gp-copy { font-size: 12px; color: var(--faint); margin-top: 18px; }
-.gp-link { color: var(--o); cursor: pointer; background: none; border: none; font-size: inherit; padding: 0; font-weight: 550; }
-.gp-link:hover { text-decoration: underline; }
-.gp-back { background: none; border: none; color: var(--mut); font-size: 13px; cursor: pointer; margin-bottom: 14px; padding: 0; }
-
-.gp-note { border-radius: 10px; padding: 11px 13px; font-size: 13.5px; margin-bottom: 16px; text-align: left; }
-.gp-note.ok { background: rgba(34,200,120,.1); border: 1px solid rgba(34,200,120,.3); color: #8ff0bf; }
-.gp-note.err { background: rgba(255,107,107,.1); border: 1px solid rgba(255,107,107,.3); color: #ffb3b3; }
-
-/* ── GitHub authorization (same card) ── */
-.gp-spinwrap { display: grid; place-items: center; padding: 18px 0 6px; }
-.gp-spin {
-  width: 30px; height: 30px; border-radius: 50%;
-  border: 3px solid rgba(255,90,43,.22); border-top-color: var(--o);
-  animation: gp-spin 0.8s linear infinite; display: inline-block;
-}
-.gp-spin-sm { width: 15px; height: 15px; border-width: 2px; vertical-align: middle; }
-@keyframes gp-spin { to { transform: rotate(360deg); } }
-
-.gp-code {
-  display: block; width: 100%; margin: 4px 0 16px; padding: 14px;
-  font-size: 24px; font-weight: 750; letter-spacing: 5px; color: var(--o);
-  background: var(--field); border: 1px dashed rgba(255,90,43,.5); border-radius: 12px;
-  cursor: pointer; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-.gp-code:hover { background: #181b22; }
-.gp-waiting {
-  display: flex; align-items: center; justify-content: center; gap: 9px;
-  color: var(--faint); font-size: 13px; margin-top: 18px;
-}
-
-@media (max-width: 480px) { .gp-auth-card { padding: 30px 24px 24px; } }
-
-/* Email-confirmation success check (verify-email screen) */
-.gp-verify-check {
-  width: 64px; height: 64px; margin: 6px auto 14px;
-  display: grid; place-items: center;
-  border-radius: 50%;
-  background: rgba(34,200,120,.12);
-  border: 1px solid rgba(34,200,120,.35);
-  color: #8ff0bf; font-size: 32px; line-height: 1; font-weight: 700;
-}
+/* Scoped enterprise sign-in design: GitPilot workspace + GitHub / GitLab OAuth. */
+.gp-auth{--coral:#f18b68;--muted:#98a5b9;--line:rgba(215,226,244,.14);position:fixed;inset:0;z-index:100;display:grid;grid-template-columns:minmax(0,1.06fr) minmax(420px,.94fr);overflow-y:auto;min-height:100vh;background:#0b111d;color:#edf2fa;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+.gp-auth *{box-sizing:border-box}
+.gp-auth button,.gp-auth input{font:inherit}
+.gp-auth a:focus-visible,.gp-auth button:focus-visible,.gp-auth input:focus-visible{outline:2px solid var(--coral);outline-offset:3px}
+.gp-auth-aside{grid-column:1;grid-row:1;display:flex;flex-direction:column;justify-content:space-between;min-height:100vh;padding:clamp(32px,5vw,76px);border-right:1px solid rgba(255,255,255,.07);background:radial-gradient(ellipse at 72% 52%,rgba(235,111,69,.13),transparent 46%),radial-gradient(ellipse at 20% 8%,rgba(62,89,143,.24),transparent 55%),linear-gradient(155deg,#162034,#0a1120)}
+.gp-brand{display:inline-flex;align-items:center;gap:12px;width:fit-content;color:#fafbff;text-decoration:none;font-size:23px;font-weight:780;letter-spacing:-.05em}
+.gp-brand-mark{width:41px;height:41px;display:grid;place-items:center;border-radius:12px;background:linear-gradient(135deg,#ffa17d,#d65a3b);box-shadow:0 9px 28px rgba(222,97,58,.25);font-weight:800;color:#fff}
+.gp-brand-mark span{color:#582b20}
+.gp-brand small{display:block;color:#8e9db1;font-size:9px;letter-spacing:.22em;margin-top:3px}
+.gp-aside-content{width:min(100%,600px);margin:65px 0}
+.gp-aside-kicker{display:inline-flex;gap:10px;align-items:center;color:#c1c9d6;font-size:10px;font-weight:730;letter-spacing:.19em;margin-bottom:23px}
+.gp-status-dot{width:7px;height:7px;border-radius:50%;background:#ed9b74;box-shadow:0 0 0 4px rgba(237,155,116,.12)}
+.gp-aside-content h1{margin:0 0 24px;font-size:clamp(42px,4.25vw,76px);font-weight:740;line-height:1.06;letter-spacing:-.064em}
+.gp-aside-content h1 em{color:#f18b68;font-style:normal}
+.gp-aside-content>p{max-width:420px;margin:0 0 48px;color:#a2aec0;font-size:clamp(15px,1.25vw,18px);line-height:1.7}
+.gp-aside-preview{width:min(100%,505px);overflow:hidden;border:1px solid rgba(185,205,232,.17);border-radius:14px;background:rgba(6,11,19,.7);transform:rotate(-1deg);box-shadow:0 24px 70px rgba(0,0,0,.3)}
+.gp-preview-top,.gp-preview-bottom{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 18px;color:#9aa8b9;font-size:10px}
+.gp-preview-top{background:rgba(255,255,255,.035);border-bottom:1px solid rgba(255,255,255,.07)}
+.gp-preview-dots{color:#a76761;letter-spacing:3px}
+.gp-preview-live{color:#91d1aa}
+.gp-preview-code{display:flex;gap:21px;padding:12px 23px;font:12px ui-monospace,SFMono-Regular,Consolas,monospace;color:#aebacc}
+.gp-preview-code:first-of-type{margin-top:10px}
+.gp-preview-code:last-of-type{margin-bottom:10px}
+.gp-preview-code b{color:#f2ae91;font-weight:600}
+.gp-preview-code i{color:#85ad99;font-style:normal}
+.gp-preview-muted{color:#617084}
+.gp-preview-bottom{border-top:1px solid rgba(255,255,255,.07);color:#98d1ae}
+.gp-preview-bottom span:last-child{color:#8898ab}
+.gp-aside-footer{display:flex;justify-content:space-between;gap:15px;color:#8290a3;font-size:10px;letter-spacing:.12em}
+.gp-home{position:absolute;top:33px;right:45px;color:#929eb0;text-decoration:none;font-size:12px;z-index:5}
+.gp-home:hover{color:#fff}
+.gp-auth-card{grid-column:2;grid-row:1;align-self:center;justify-self:center;width:min(calc(100% - 78px),465px);margin:75px 0 45px;padding:37px 36px 30px;border:1px solid var(--line);border-radius:20px;background:linear-gradient(160deg,rgba(36,45,62,.73),rgba(17,25,38,.91));box-shadow:0 28px 90px rgba(0,0,0,.3);text-align:left}
+.gp-auth-logo{display:grid;place-items:center;width:47px;height:47px;margin-bottom:27px;border-radius:12px;color:#fff;text-decoration:none;font-weight:800;background:linear-gradient(135deg,#ffa17d,#d65a3b);box-shadow:0 9px 23px rgba(221,99,59,.2)}
+.gp-auth-eyebrow{margin:0 0 13px;color:var(--coral);font-size:10px;font-weight:750;letter-spacing:.18em}
+.gp-auth h2{font-size:31px;font-weight:750;letter-spacing:-.045em;margin:0 0 10px}
+.gp-auth .lead{color:var(--muted);font-size:13.5px;line-height:1.7;margin:0 0 27px}
+.gp-provider-stack{display:grid;gap:10px}
+.gp-github,.gp-gitlab{display:flex;align-items:center;justify-content:center;gap:12px;width:100%;min-height:49px;padding:12px 15px;border:1px solid rgba(225,232,244,.17);border-radius:10px;background:#2c3547;color:#f8fbff;text-decoration:none;font-size:13px;font-weight:650;cursor:pointer;transition:background .16s,transform .16s,border-color .16s}
+.gp-gitlab{background:#1d2738}
+.gp-github:hover,.gp-gitlab:hover{background:#3a475b;border-color:rgba(255,255,255,.35);transform:translateY(-1px)}
+.gp-github svg,.gp-gitlab svg{width:20px;height:20px;flex-shrink:0}
+.gp-provider-arrow{margin-left:auto;color:#a1adc0}
+.gp-or{display:flex;align-items:center;gap:13px;margin:25px 0 23px;color:#8b97aa;font-size:11px;white-space:nowrap}
+.gp-or::before,.gp-or::after{content:"";height:1px;flex:1;background:var(--line)}
+.gp-field{position:relative;margin-bottom:13px;text-align:left}
+.gp-field input{width:100%;min-height:48px;padding:13px 14px;border:1px solid rgba(206,219,238,.17);border-radius:10px;background:#0d1522;color:#f4f7fc;font-size:13px;outline:none}
+.gp-field input::placeholder{color:#8792a4}
+.gp-field input:focus{border-color:var(--coral);box-shadow:0 0 0 3px rgba(241,139,104,.1)}
+.gp-pw input{padding-right:48px}
+.gp-pw .gp-eye{position:absolute;right:9px;top:50%;transform:translateY(-50%);display:grid;place-items:center;padding:8px;border:0;background:none;color:#97a4b8;cursor:pointer}
+.gp-pw .gp-eye svg{width:18px;height:18px}
+.gp-forgot{text-align:right;margin:3px 0 17px}
+.gp-submit{width:100%;min-height:48px;border:0;border-radius:10px;background:linear-gradient(125deg,#fba27e,#e66d4d);color:#26120e;font-size:13.5px;font-weight:750;cursor:pointer}
+.gp-submit:hover:not(:disabled){filter:brightness(1.07)}
+.gp-submit:disabled{opacity:.6;cursor:wait}
+.gp-link{border:0;background:none;color:#f49d7c;padding:0;font-weight:630;cursor:pointer}
+.gp-link:hover{text-decoration:underline}
+.gp-foot{margin-top:24px;text-align:center;font-size:12px;color:var(--muted)}
+.gp-copy{margin-top:29px;padding-top:18px;border-top:1px solid var(--line);text-align:center;color:#8290a3;font-size:10.5px}
+.gp-back{padding:0;margin:0 0 21px;border:0;background:none;color:#acb6c6;font-size:12px;cursor:pointer}
+.gp-note{padding:11px 13px;margin-bottom:16px;border-radius:10px;font-size:12px;line-height:1.6}
+.gp-note.ok{color:#9be0bc;background:rgba(42,177,117,.1);border:1px solid rgba(42,177,117,.28)}
+.gp-note.err{color:#ffc1bd;background:rgba(242,95,91,.12);border:1px solid rgba(242,95,91,.3)}
+.gp-spinwrap{display:grid;place-items:center;padding:30px 0}
+.gp-spin{display:inline-block;width:30px;height:30px;border:3px solid rgba(241,139,104,.17);border-top-color:var(--coral);border-radius:50%;animation:gp-spin .8s linear infinite}
+.gp-spin-sm{width:15px;height:15px;border-width:2px}
+@keyframes gp-spin{to{transform:rotate(360deg)}}
+.gp-code{display:block;width:100%;margin:0 0 15px;padding:14px;border:1px dashed var(--coral);border-radius:10px;background:#101925;color:var(--coral);font:750 22px ui-monospace,SFMono-Regular,monospace;letter-spacing:4px;cursor:copy}
+.gp-waiting{display:flex;align-items:center;gap:9px;margin-top:18px;color:var(--muted);font-size:12px}
+.gp-verify-check{display:grid;place-items:center;width:62px;height:62px;margin:7px 0 19px;border-radius:50%;color:#93d8ae;background:rgba(42,177,117,.1);border:1px solid rgba(42,177,117,.3);font-size:30px}
+@media(max-width:1050px){.gp-auth-aside{padding:36px}.gp-aside-content h1{font-size:clamp(39px,4.3vw,55px)}.gp-auth-card{width:min(calc(100% - 44px),464px);padding:32px 28px}}
+@media(max-width:800px){.gp-auth{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100svh;padding:66px 18px 22px}.gp-auth-aside{display:none}.gp-auth-card{width:min(100%,460px);margin:auto 0;padding:31px 25px}.gp-home{top:25px;right:22px}}
+@media(max-width:420px){.gp-auth-card{padding:27px 20px;border-radius:16px}.gp-auth h2{font-size:28px}}
+@media(prefers-reduced-motion:reduce){.gp-auth *{animation-duration:.01ms!important;transition-duration:.01ms!important}}
