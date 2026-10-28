@@ -403,8 +403,8 @@ export default function RepoSelector({ onSelect, workspace, onOpenLocal }) {
         )}
       </div>
 
-      {/* GitHub App Installation Notice */}
-      <div className="repo-github-notice">
+      {/* GitHub App Installation Notice (only for GitHub projects) */}
+      {gitProvider === "github" && <div className="repo-github-notice">
         <svg
           className="repo-github-icon"
           height="20"
@@ -432,7 +432,7 @@ export default function RepoSelector({ onSelect, workspace, onOpenLocal }) {
             to access private repositories.
           </div>
         </div>
-      </div>
+      </div>}
     </div>
   );
 }
