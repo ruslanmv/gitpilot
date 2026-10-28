@@ -19,7 +19,9 @@ export default function AddRepoModal({ isOpen, onSelect, onClose, excludeKeys = 
       try {
         const params = new URLSearchParams({ per_page: "50" });
         if (searchQuery) params.set("query", searchQuery);
-        const res = await authFetch(`/api/repos?${params}`);
+        const provider = localStorage.getItem("gitpilot_git_provider") === "gitlab" ? "gitlab" : "github";
+        const endpoint = provider === "gitlab" ? "/api/gitlab/projects" : "/api/repos";
+        const res = await authFetch(`${endpoint}?${params}`);
         if (!res.ok) return;
         const data = await res.json();
         setRepos(data.repositories || []);
@@ -105,7 +107,7 @@ export default function AddRepoModal({ isOpen, onSelect, onClose, excludeKeys = 
               >
                 <div style={styles.repoInfo}>
                   <span style={styles.repoName}>{r.name}</span>
-                  <span style={styles.repoOwner}>{r.owner}</span>
+                  <span style={styles.repoOwner}>{r.owner} · {r.provider === "gitlab" ? "GitLab" : "GitHub"}</span>
                 </div>
                 <div style={styles.repoMeta}>
                   {r.private && <span style={styles.privateBadge}>Private</span>}
