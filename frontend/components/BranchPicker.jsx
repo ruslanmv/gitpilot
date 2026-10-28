@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { apiUrl, getAuthHeaders } from "../utils/api.js";
 import { createPortal } from "react-dom";
 
 /**
@@ -55,7 +56,7 @@ export default function BranchPicker({
   // The element used for dropdown positioning
   const anchorRef = isExternalMode ? externalAnchorRef : triggerRef;
 
-  const cacheKey = repo ? `${repo.owner}/${repo.name}` : null;
+  const cacheKey = repo ? `${repo.provider || "github"}:${repo.id || `${repo.owner}/${repo.name}`}` : null;
 
   // Seed from cache on mount / repo change
   useEffect(() => {
@@ -70,13 +71,14 @@ export default function BranchPicker({
     setLoading(true);
     setError(null);
     try {
-      const token = localStorage.getItem("github_token");
-      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      const headers = getAuthHeaders();
       const params = new URLSearchParams({ per_page: "100" });
       if (searchQuery) params.set("query", searchQuery);
 
-      const res = await fetch(
-        `/api/repos/${repo.owner}/${repo.name}/branches?${params}`,
+      const endpoint = repo.provider === "gitlab"
+        ? `/api/gitlab/projects/${repo.id}/branches`
+        : `/api/repos/${repo.owner}/${repo.name}/branches`;
+      const res = await fetch(apiUrl(`${endpoint}?${params}`),
         { headers, cache: "no-cache" }
       );
       if (!res.ok) {
