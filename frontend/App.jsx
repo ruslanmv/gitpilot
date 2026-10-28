@@ -814,18 +814,19 @@ export default function App() {
         setAdminStatus(status);
       }
 
-      const token = localStorage.getItem("github_token");
-      const user = localStorage.getItem("github_user");
+      const gitProvider = localStorage.getItem("gitpilot_git_provider") === "gitlab" ? "gitlab" : "github";
+      const token = localStorage.getItem(gitProvider === "gitlab" ? "gitlab_token" : "github_token");
+      const user = localStorage.getItem(gitProvider === "gitlab" ? "gitlab_user" : "github_user");
 
       if (token && user) {
         setStartupPhase("validating-auth");
         setStartupStatusMessage("Validating authentication...");
         setStartupDetailMessage(
-          "Restoring your GitHub session and confirming access."
+          `Restoring your ${gitProvider === "gitlab" ? "GitLab" : "GitHub"} session and confirming access.`
         );
 
         try {
-          const data = await safeFetchJSON(apiUrl("/api/auth/validate"), {
+          const data = await safeFetchJSON(apiUrl(gitProvider === "gitlab" ? "/api/gitlab/auth/validate" : "/api/auth/validate"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ access_token: token }),
@@ -848,8 +849,8 @@ export default function App() {
           console.error(err);
         }
 
-        localStorage.removeItem("github_token");
-        localStorage.removeItem("github_user");
+        localStorage.removeItem(gitProvider === "gitlab" ? "gitlab_token" : "github_token");
+        localStorage.removeItem(gitProvider === "gitlab" ? "gitlab_user" : "github_user");
       }
 
       // No GitHub token — but a GitPilot account session (HttpOnly cookie) may
@@ -907,6 +908,9 @@ export default function App() {
     } catch { /* ignore */ }
     localStorage.removeItem("github_token");
     localStorage.removeItem("github_user");
+    localStorage.removeItem("gitlab_token");
+    localStorage.removeItem("gitlab_user");
+    localStorage.removeItem("gitpilot_git_provider");
     clearSessionToken();
     setIsAuthenticated(false);
     setUserInfo(null);
@@ -918,7 +922,7 @@ export default function App() {
   // This renders even when authenticated (unlike the sign-in screen below).
   if (typeof window !== "undefined") {
     const qs = new URLSearchParams(window.location.search);
-    if (window.location.pathname.startsWith("/auth") && qs.get("connect") === "github") {
+    if (window.location.pathname.startsWith("/auth") && ["github", "gitlab"].includes(qs.get("connect"))) {
       return (
         <AuthPage
           onAuthenticated={handleAuthenticated}
@@ -936,7 +940,8 @@ export default function App() {
   if (!isAuthenticated) {
     const path = typeof window !== "undefined" ? window.location.pathname : "/";
     const hasGithubToken =
-      typeof window !== "undefined" && !!localStorage.getItem("github_token");
+      typeof window !== "undefined" &&
+      !!(localStorage.getItem("github_token") || localStorage.getItem("gitlab_token"));
 
     // The auth/device-flow screen lives at "/auth"; it manages its own backend
     // readiness via the backendReady prop, so render it immediately.
