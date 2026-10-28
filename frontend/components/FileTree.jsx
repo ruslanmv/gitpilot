@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { apiUrl } from "../utils/api.js";
+import { apiUrl, getAuthHeaders } from "../utils/api.js";
 
 /**
  * Simple recursive file tree viewer with refresh support
@@ -46,16 +46,7 @@ export default function FileTree({ repo, refreshTrigger, branch }) {
     }
     setError(null);
 
-    // Construct headers manually
-    let headers = {};
-    try {
-      const token = localStorage.getItem("github_token");
-      if (token) {
-        headers = { Authorization: `Bearer ${token}` };
-      }
-    } catch (e) {
-      console.warn("Unable to read github_token", e);
-    }
+    const headers = getAuthHeaders();
 
     // Add cache busting + selected branch ref
     const refParam = branch ? `&ref=${encodeURIComponent(branch)}` : "";
@@ -63,7 +54,10 @@ export default function FileTree({ repo, refreshTrigger, branch }) {
 
     let cancelled = false;
 
-    fetch(apiUrl(`/api/repos/${repo.owner}/${repo.name}/tree${cacheBuster}`), { headers })
+    const endpoint = repo.provider === "gitlab"
+      ? `/api/gitlab/projects/${repo.id}/tree`
+      : `/api/repos/${repo.owner}/${repo.name}/tree`;
+    fetch(apiUrl(`${endpoint}${cacheBuster}`), { headers })
       .then(async (res) => {
         if (!res.ok) {
             const errData = await res.json().catch(() => ({}));
