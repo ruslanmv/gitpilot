@@ -136,12 +136,17 @@ export function clearSessionToken() {
  */
 export function getAuthHeaders() {
   const headers = {};
-  let githubToken = '';
+  let provider = 'github';
+  let sourceToken = '';
   let sessionToken = '';
-  try { githubToken = localStorage.getItem('github_token') || ''; } catch { /* blocked */ }
+  try {
+    provider = localStorage.getItem('gitpilot_git_provider') === 'gitlab' ? 'gitlab' : 'github';
+    sourceToken = localStorage.getItem(provider === 'gitlab' ? 'gitlab_token' : 'github_token') || '';
+  } catch { /* blocked */ }
   sessionToken = getSessionToken();
 
-  if (githubToken) headers['Authorization'] = `Bearer ${githubToken}`;
+  if (sourceToken) headers['Authorization'] = `Bearer ${sourceToken}`;
+  headers['X-GitPilot-Git-Provider'] = provider;
   if (sessionToken) headers['X-GitPilot-Session'] = sessionToken;
   return headers;
 }
