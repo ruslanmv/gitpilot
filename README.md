@@ -262,6 +262,9 @@ The web interface includes:
 
 - Chat with real-time responses
 - GitHub integration (connect your repos)
+- GitLab.com OAuth and project browser (branches, file tree, source preview; GitLab agent/merge-request support is planned)
+
+See [GitLab setup and implementation scope](docs/GITLAB_INTEGRATION.md).
 - File tree browser
 - Diff viewer with line-by-line changes
 - Pull request creation
