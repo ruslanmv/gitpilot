@@ -97,7 +97,9 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
   // connectMode / ?view=github: jump straight to the GitHub device flow (used by
   // the in-workspace "Connect GitHub" button for already-signed-in accounts).
   const callbackProvider = params.get("provider");
-  const wantsGitlab = callbackProvider === "gitlab" || params.get("view") === "gitlab" || params.get("connect") === "gitlab";
+  const gitlabCallback = !!params.get("code") && !!params.get("state") &&
+    sessionStorage.getItem("gitpilot_gitlab_oauth_state") === params.get("state");
+  const wantsGitlab = callbackProvider === "gitlab" || gitlabCallback || params.get("view") === "gitlab" || params.get("connect") === "gitlab";
   const wantsGithub = !wantsGitlab && (!!params.get("code") || params.get("view") === "github" || connectMode);
   const [mode, setMode] = useState(params.get("mode") === "signup" ? "signup" : "signin");
   // Pick the opening view: GitHub flow → github; an email confirmation link
@@ -261,7 +263,7 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
     setGhError("");
     const code = params.get("code");
     const state = params.get("state") || "";
-    if (code && callbackProvider === "gitlab") {
+    if (code && wantsGitlab) {
       window.history.replaceState({}, document.title, window.location.pathname);
       const expectedState = sessionStorage.getItem("gitpilot_gitlab_oauth_state");
       sessionStorage.removeItem("gitpilot_gitlab_oauth_state");
