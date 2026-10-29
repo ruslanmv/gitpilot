@@ -63,26 +63,62 @@ const GitLabMark = () => (
   </svg>
 );
 
+const FeatureIcon = ({ kind }) => {
+  const paths = {
+    bolt: <path d="m13 2-8 11h6l-1 9 9-12h-6l1-8z"/>,
+    branch: <><circle cx="6" cy="5" r="2"/><circle cx="18" cy="8" r="2"/><circle cx="6" cy="19" r="2"/><path d="M6 7v10m2 0c7 0 2-9 8-9"/></>,
+    shield: <><path d="M12 2 20 6v6c0 5-4 8-8 10-4-2-8-5-8-10V6z"/><path d="m9 12 2 2 4-4"/></>,
+    team: <><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M2 20v-2c0-3 3-5 6-5s6 2 6 5v2m1-6c3 0 6 2 6 5v1"/></>,
+  };
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"
+    strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[kind]}</svg>;
+};
+
 const AuthAside = () => (
   <aside className="gp-auth-aside" aria-label="About GitPilot">
-    <a className="gp-brand" href="/">
-      <span className="gp-brand-mark">G<span>.</span></span>
-      <span>gitpilot <small>WORKSPACE</small></span>
-    </a>
-    <div className="gp-aside-content">
-      <span className="gp-aside-kicker"><span className="gp-status-dot" /> BUILT FOR ENGINEERING TEAMS</span>
-      <h1>From your repo.<br /><em>To production.</em></h1>
-      <p>One intelligent workspace to explore, plan, review and ship software — with you in control.</p>
-      <div className="gp-aside-preview" aria-hidden="true">
-        <div className="gp-preview-top"><span className="gp-preview-dots">● ● ●</span><span>gitpilot / workspace</span><span className="gp-preview-live">● ACTIVE</span></div>
-        <div className="gp-preview-code"><span className="gp-preview-muted">01</span><span><b>explorer</b> <i>→</i> analyzing project context</span></div>
-        <div className="gp-preview-code"><span className="gp-preview-muted">02</span><span><b>planner</b> <i>→</i> preparing safe changes</span></div>
-        <div className="gp-preview-code"><span className="gp-preview-muted">03</span><span><b>reviewer</b> <i>→</i> verifying the diff</span></div>
-        <div className="gp-preview-bottom"><span>✓ Changes require your approval</span><span>GitHub · GitLab</span></div>
+    <div className="gp-aside-upper">
+      <a className="gp-brand" href="/" aria-label="GitPilot home">
+        <span className="gp-brand-mark">GP</span><span>GitPilot</span>
+      </a>
+      <div className="gp-aside-content">
+        <span className="gp-aside-kicker">YOUR AI DEVELOPER COPILOT</span>
+        <h1>From ideas to<br /><em>production, faster.</em></h1>
+        <p>GitPilot is the AI agent that understands your repositories, helps you code,
+          reviews changes, manages issues, and automates your development workflow.</p>
+        <div className="gp-auth-features" aria-label="Platform capabilities">
+          <div className="gp-auth-feature"><span className="gp-feature-icon"><FeatureIcon kind="bolt"/></span>
+            <span><b>Understand</b><small>Your codebase instantly</small></span></div>
+          <div className="gp-auth-feature"><span className="gp-feature-icon"><FeatureIcon kind="branch"/></span>
+            <span><b>Automate</b><small>PRs, issues and workflows</small></span></div>
+          <div className="gp-auth-feature"><span className="gp-feature-icon"><FeatureIcon kind="shield"/></span>
+            <span><b>Stay secure</b><small>Review changes before applying</small></span></div>
+          <div className="gp-auth-feature"><span className="gp-feature-icon"><FeatureIcon kind="team"/></span>
+            <span><b>Work anywhere</b><small>GitHub, GitLab and local Git</small></span></div>
+        </div>
       </div>
     </div>
-    <div className="gp-aside-footer">OPEN SOURCE · APACHE 2.0 <span>BUILD WITH CONFIDENCE</span></div>
+    <img className="gp-auth-illustration"
+      src="/assets/auth/gitpilot-hero-illustration.svg"
+      alt="" aria-hidden="true" draggable="false" />
   </aside>
+);
+
+const MailMark = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"
+  strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+  <rect x="3" y="5" width="18" height="14" rx="2"/><path d="m4 7 8 6 8-6"/></svg>;
+const LockMark = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"
+  strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+  <rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><path d="M12 14v3"/></svg>;
+
+const AppearanceControl = ({ light, toggle }) => (
+  <div className="gp-auth-tools">
+    <button type="button" className="gp-theme-toggle" onClick={toggle}
+      aria-label={light ? "Use dark theme" : "Use light theme"}
+      title={light ? "Use dark theme" : "Use light theme"}>
+      {light ? "☾" : "☼"}
+    </button>
+    <span className="gp-auth-lang" lang="en">English</span>
+  </div>
 );
 
 const Eye = ({ off }) => (off
@@ -107,6 +143,15 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
   const [view, setView] = useState(
     wantsGitlab ? "gitlab" : wantsGithub ? "github" : isVerifyLink ? "verify" : "email"
   ); // "email" | "github" | "gitlab" | "verify"
+  const [lightTheme, setLightTheme] = useState(() => {
+    try { return localStorage.getItem("gitpilot_auth_theme") === "light"; } catch { return false; }
+  });
+  const toggleTheme = () => {
+    setLightTheme((current) => {
+      try { localStorage.setItem("gitpilot_auth_theme", current ? "dark" : "light"); } catch { /* ignored */ }
+      return !current;
+    });
+  };
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
@@ -361,8 +406,9 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
   // ── Email-confirmation card (landed from the verify-email link) ──
   if (view === "verify") {
     return (
-      <div className="gp-auth">
+      <div className={lightTheme ? "gp-auth gp-auth-light" : "gp-auth"}>
       <AuthAside />
+      <AppearanceControl light={lightTheme} toggle={toggleTheme} />
         <a className="gp-home" href="/">← Back to home</a>
         <div className="gp-auth-card">
           <a className="gp-auth-logo" href="/" aria-label="Back to GitPilot home">GP</a>
@@ -426,8 +472,9 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
   if (view === "github" || view === "gitlab") {
     const isGitlab = view === "gitlab";
     return (
-      <div className="gp-auth">
+      <div className={lightTheme ? "gp-auth gp-auth-light" : "gp-auth"}>
       <AuthAside />
+      <AppearanceControl light={lightTheme} toggle={toggleTheme} />
         <a className="gp-home" href="/">← Back to home</a>
         <div className="gp-auth-card">
           {connectMode
@@ -480,8 +527,9 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
 
   // ── Email / password card (sign in + create account share this shell) ──
   return (
-    <div className="gp-auth">
+    <div className={lightTheme ? "gp-auth gp-auth-light" : "gp-auth"}>
       <AuthAside />
+      <AppearanceControl light={lightTheme} toggle={toggleTheme} />
       <a className="gp-home" href="/">← Back to home</a>
       <form className="gp-auth-card" onSubmit={submit}>
         {mode === "signup" && (
@@ -491,8 +539,8 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
         {mode === "signin" ? (
           <>
             <div className="gp-auth-eyebrow">YOUR ENGINEERING WORKSPACE</div>
-            <h2>Welcome back</h2>
-            <p className="lead">Sign in to GitPilot and continue building.</p>
+            <h2>Welcome to <em>GitPilot</em></h2>
+            <p className="lead">Sign in to your account to continue to your<br className="gp-desktop-break" /> repositories and AI workspace.</p>
           </>
         ) : (
           <>
@@ -515,16 +563,26 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
 
         {mode === "signup" && (
           <div className="gp-field">
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Full name (optional)" aria-label="Full name" autoComplete="name" />
+            <label htmlFor="gp-signin-name">Full name</label>
+            <input id="gp-signin-name" value={name} onChange={(e) => setName(e.target.value)}
+              placeholder="Full name (optional)" autoComplete="name" />
           </div>
         )}
         <div className="gp-field">
-          <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" />
+          <label htmlFor="gp-signin-email">Email address</label>
+          <span className="gp-input-icon"><MailMark /></span>
+          <input id="gp-signin-email" type="email" required value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@company.com" autoComplete="email" />
         </div>
         <div className="gp-field gp-pw">
-          <input type={showPw ? "text" : "password"} required minLength={8} value={password}
-            onChange={(e) => setPassword(e.target.value)} placeholder="Enter your password" aria-label="Password" autoComplete={mode === "signin" ? "current-password" : "new-password"} />
-          <button type="button" className="gp-eye" onClick={() => setShowPw((s) => !s)} aria-label="Toggle password">
+          <label htmlFor="gp-signin-password">Password</label>
+          <span className="gp-input-icon"><LockMark /></span>
+          <input id="gp-signin-password" type={showPw ? "text" : "password"} required minLength={8}
+            value={password} onChange={(e) => setPassword(e.target.value)}
+            placeholder="Enter your password" autoComplete={mode === "signin" ? "current-password" : "new-password"} />
+          <button type="button" className="gp-eye" onClick={() => setShowPw((shown) => !shown)}
+            aria-label={showPw ? "Hide password" : "Show password"} aria-pressed={showPw}>
             <Eye off={showPw} />
           </button>
         </div>
@@ -533,7 +591,7 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
         )}
 
         <button className="gp-submit" type="submit" disabled={busy}>
-          {busy ? "Please wait…" : mode === "signin" ? "Sign in" : "Create account"}
+          {busy ? "Please wait…" : mode === "signin" ? "Sign in →" : "Create account →"}
         </button>
 
         <div className="gp-foot">
@@ -543,7 +601,8 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
             <>Already have an account? <button type="button" className="gp-link" onClick={() => { setMode("signin"); setNote(null); }}>Sign in</button></>
           )}
         </div>
-        <div className="gp-copy">© {new Date().getFullYear()} GitPilot Inc.</div>
+        <div className="gp-copy">GitPilot is open source. <a href="https://github.com/ruslanmv/gitpilot/blob/master/LICENSE"
+            target="_blank" rel="noopener noreferrer">Apache 2.0 license</a>.</div>
       </form>
     </div>
   );
