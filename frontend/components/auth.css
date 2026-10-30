@@ -248,3 +248,38 @@
   .gp-auth-card { width: 100%; padding: 27px 21px 25px; }
   .gp-desktop-break { display: none; }
 }
+
+/* ─── Sign-in states added with server-side sessions ─────────────────────── */
+.gp-auth-main {
+  grid-column: 2; grid-row: 1; min-width: 0; min-height: 100vh;
+  display: grid; grid-template-columns: minmax(0, 1fr); place-items: center;
+}
+.gp-auth-main .gp-auth-card {
+  grid-column: 1; grid-row: 1;
+  margin: clamp(56px, 7vh, 75px) 0 clamp(16px, 3vh, 45px);
+}
+@media (min-width: 991px) and (max-height: 960px) {
+  .gp-auth-main .gp-auth-card { padding-top: 26px; padding-bottom: 22px; }
+  .gp-auth-main .gp-auth-logo { width: 46px; height: 46px; margin-bottom: 12px; }
+  .gp-auth-main .gp-auth .lead, .gp-auth-main .lead { margin-bottom: 20px; }
+  .gp-auth-main .gp-or { margin: 18px 0 15px; }
+  .gp-auth-main .gp-copy { margin-top: 18px; padding-top: 12px; }
+  .gp-auth-main .gp-foot { margin-top: 16px; }
+}
+ul.gp-auth-features { list-style: none; padding: 0; }
+.gp-github:disabled, .gp-gitlab:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+.gp-github:disabled:hover, .gp-gitlab:disabled:hover { background: #191c25; }
+.gp-provider-host { color: #a9b2c2; font-weight: 500; }
+.gp-provider-note { margin: 9px 0 0; color: #a3abb8; font-size: 11.5px; line-height: 1.5; }
+.gp-provider-note--center { text-align: center; margin: 22px 0 6px; }
+.gp-hint { margin: -6px 0 16px; color: #98a1ae; font-size: 11.5px; }
+.gp-block-link { display: block; margin: 14px auto 0; }
+.gp-field input.gp-no-icon { padding-left: 16px; }
+.gp-auth h2:focus { outline: none; }
+.gp-auth h2:focus-visible { outline: 2px solid var(--coral); outline-offset: 4px; border-radius: 6px; }
+.gp-auth-light .gp-provider-note, .gp-auth-light .gp-hint { color: #5d6a7e; }
+.gp-auth-light .gp-github:disabled:hover, .gp-auth-light .gp-gitlab:disabled:hover { background: #f6f8fb; }
+@media (max-width: 990px) {
+  .gp-auth-main { width: 100%; min-height: 0; display: flex; justify-content: center; }
+  .gp-auth-main .gp-auth-card { margin: auto 0; }
+}

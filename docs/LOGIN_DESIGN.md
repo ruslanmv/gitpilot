@@ -26,15 +26,25 @@ In Vite, the browser resolves it at `/assets/auth/gitpilot-hero-illustration.svg
 | --- | --- | --- |
 | Brand icon and GitPilot wordmark | `AuthAside` in `AuthPage.jsx` | Home navigation |
 | Marketing headline and explanatory copy | `AuthAside` | HTML text, not embedded into the illustration |
-| Four benefit items | `FeatureIcon` + `gp-auth-features` | SVG icons and responsive layout |
+| Four benefit items | `FeatureIcon` + `gp-auth-features` (a list) | SVG icons and responsive layout |
 | Left visual background | `gp-auth-illustration` | Local vector asset |
-| GitHub button | `AuthPage` | Existing GitHub web/device OAuth |
-| GitLab button | `AuthPage` | GitLab OAuth code + state + PKCE |
-| Email and password fields | `AuthPage` | Labels, correct autocomplete, password reveal |
-| Sign in / sign up / reset | `AuthPage` | Existing account API flows retained |
-| Light/dark appearance toggle | `AppearanceControl` | Live state + persisted browser preference |
-| Authorization, device and email verification views | `AuthPage` | Same responsive visual shell |
+| GitHub button | `AuthPage` | GitHub OAuth (state + S256 PKCE, exchanged server-side); device flow when the server has no client secret |
+| GitLab button | `AuthPage` | GitLab.com or the configured self-managed instance, OAuth with state + S256 PKCE |
+| Provider availability | `GET /api/auth/providers` | A provider the server has not configured is shown disabled with an explanation, never as a dead button |
+| Email and password fields | `AuthPage` | Labels, correct autocomplete, password reveal; hidden when the server has accounts disabled |
+| Sign in / sign up / forgot password | `AuthPage` | Account API flows |
+| Email confirmation view | `/auth/verify-email?token=` | Confirms, signs in, offers resend on failure |
+| Password reset view | `/auth/reset-password?token=` | New + confirm password; the link works once; other sessions are signed out |
+| Light/dark appearance toggle | `AppearanceControl` | Live state + persisted browser preference (`gitpilot_auth_theme`) |
+| Authorization, device and error views | `AuthPage` | Same responsive card |
+| URL → view and OAuth return checks | `frontend/utils/authFlow.js` | Unit-tested (`frontend/tests/authFlow.test.js`) |
 | Styles | `frontend/components/auth.css` | Desktop, tablet, mobile and light theme |
+
+The page is wrapped in a `<main>` landmark, the card is labelled by its heading, focus
+moves to the heading on every state change, notices are announced (`role="status"` /
+`role="alert"`), and busy buttons carry `aria-busy`. The decorative "English" label of
+the concept is not rendered: there is no language switcher, and a control-looking label
+that does nothing would be a fake control.
 
 ## Design tokens
 
@@ -54,15 +64,23 @@ In Vite, the browser resolves it at `/assets/auth/gitpilot-hero-illustration.svg
 
 ## Verification checklist
 
-- [ ] Desktop visual check at 1440 × 900, 1672 × 941 and ultrawide sizes
-- [ ] Mobile checks at 375px, 390px and 768px
-- [ ] Keyboard-only tab order, field focus, form errors and password reveal
-- [ ] Dark/light toggle survives refresh
-- [ ] Existing GitHub OAuth web + device flow succeeds
-- [ ] GitLab OAuth code callback succeeds with configured environment
-- [ ] Account sign-up, email verification and password recovery
-- [ ] Ensure built static assets are served at `/assets/auth/gitpilot-hero-illustration.svg`
+Checked on the production build (`vite build`, served with `vite preview`):
+
+- [x] Desktop 1440 × 900: two-panel layout, card fits the viewport without scrolling
+- [x] Mobile 375 × 812: illustration panel hidden, 12 px gutters, no horizontal scroll
+- [x] Focus moves to the card heading on every view; every field has a label
+- [x] Reset-password link view renders and removes the token from the address bar
+- [x] A callback URL this tab did not start is refused before contacting the server
+- [x] Built static assets are served at `/assets/auth/gitpilot-hero-illustration.svg`
+- [ ] Real GitHub and GitLab OAuth round trips with configured client credentials (needs real applications; the flows are covered by mocked tests in `tests/test_auth_sessions.py`)
+- [ ] Cross-browser pass (Safari, Firefox) and 1672 × 941 / ultrawide visual check
 
 ## Security and provider scope
 
-The visual update does not alter GitHub credentials or change authorization logic. GitLab project browsing is the first integration stage; GitLab agent execution and merge requests remain disabled until provider-aware agents exist. For enterprise production, server-side encrypted token storage and shared OAuth state storage should replace browser localStorage and in-memory process state across both providers.
+Provider access tokens never reach the browser. OAuth codes are exchanged by the server
+with a PKCE verifier it keeps, and the GitHub/GitLab tokens are stored encrypted in the
+server-side session vault. The browser holds an HttpOnly session cookie, or a header
+token on cross-site deployments where the cookie is blocked. The `state` of an OAuth
+return must match the one stored by this tab *and* the single-use one on the server.
+GitLab supports the same agent, branch, merge-request and issue workflows as GitHub.
+See [auth.md](auth.md) and [GITLAB_INTEGRATION.md](GITLAB_INTEGRATION.md).

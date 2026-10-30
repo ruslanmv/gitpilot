@@ -1,17 +1,15 @@
 # gitpilot/toolkit/forge.py
 """Forge tools — Batch V4-A6.
 
-Issues, pull requests and code search on the hosting platform, wrapping
-:mod:`gitpilot.github_issues`, :mod:`gitpilot.github_pulls` and
-:mod:`gitpilot.github_search`.
+Issues, pull requests and code search on the hosting platform, routed through
+:mod:`gitpilot.scm` to GitHub (``github_issues`` / ``github_pulls`` /
+``github_search``) or GitLab (:mod:`gitpilot.gitlab_api`).
 
-Ids are namespaced by platform (``github.*``) rather than a neutral ``forge.*``
-because the payload shapes are GitHub's, and pretending otherwise would mean
-inventing a lowest common denominator now and discovering it fits nothing later.
-GitLab lands as ``gitlab.*`` with the same *tool shapes* when someone needs it;
-a topology that grants "the forge can create PRs" does so by naming the
-capability (``github.pr.write``), so the grant survives the second platform even
-though the tool ids do not.
+Ids are namespaced by platform (``github.*``, ``gitlab.*``) rather than a
+neutral ``forge.*``: a run on a GitLab project is offered ``gitlab.issue.*``,
+``gitlab.mr.*`` (merge requests) and ``gitlab.search.*`` with the same schemas,
+and never a ``github.*`` tool. GitLab payloads are normalised to the GitHub
+shapes, so one handler serves both.
 
 Reads are SAFE.  Writes are APPROVAL and carry ``FORGE_WRITE`` — they are
 visible to other people the moment they land, and no local checkpoint can take
@@ -72,7 +70,7 @@ ISSUE_LIST_SCHEMA = {
 
 
 async def _issue_list(call: ToolCall, ctx: ToolExecutionContext) -> ToolResult:
-    from ..github_issues import list_issues
+    from ..scm import list_issues
 
     repo = ctx.require_repo()
     issues = await list_issues(
@@ -83,7 +81,7 @@ async def _issue_list(call: ToolCall, ctx: ToolExecutionContext) -> ToolResult:
         assignee=call.arguments.get("assignee"),
         per_page=int(call.arguments.get("per_page") or 30),
         page=int(call.arguments.get("page") or 1),
-        token=repo.token,
+        token=repo.token, provider=repo.provider,
     )
     if not issues:
         return ToolResult.success(call, "No issues matched.", data={"issues": [], "count": 0})
@@ -102,10 +100,10 @@ ISSUE_GET_SCHEMA = {
 
 
 async def _issue_get(call: ToolCall, ctx: ToolExecutionContext) -> ToolResult:
-    from ..github_issues import get_issue
+    from ..scm import get_issue
 
     repo = ctx.require_repo()
-    issue = await get_issue(repo.owner, repo.repo, int(call.arguments["number"]), token=repo.token)
+    issue = await get_issue(repo.owner, repo.repo, int(call.arguments["number"]), token=repo.token, provider=repo.provider)
     body = issue.get("body") or "(no description)"
     content = f"{_brief_issue(issue)}\n\n{body}"
     return ToolResult.success(
@@ -127,7 +125,7 @@ ISSUE_CREATE_SCHEMA = {
 
 
 async def _issue_create(call: ToolCall, ctx: ToolExecutionContext) -> ToolResult:
-    from ..github_issues import create_issue
+    from ..scm import create_issue
 
     repo = ctx.require_repo()
     issue = await create_issue(
@@ -137,7 +135,7 @@ async def _issue_create(call: ToolCall, ctx: ToolExecutionContext) -> ToolResult
         body=call.arguments.get("body"),
         labels=call.arguments.get("labels"),
         assignees=call.arguments.get("assignees"),
-        token=repo.token,
+        token=repo.token, provider=repo.provider,
     )
     return ToolResult.success(
         call,
@@ -158,11 +156,11 @@ ISSUE_COMMENT_SCHEMA = {
 
 
 async def _issue_comment(call: ToolCall, ctx: ToolExecutionContext) -> ToolResult:
-    from ..github_issues import add_issue_comment
+    from ..scm import add_issue_comment
 
     repo = ctx.require_repo()
     comment = await add_issue_comment(
-        repo.owner, repo.repo, int(call.arguments["number"]), call.arguments["body"], token=repo.token,
+        repo.owner, repo.repo, int(call.arguments["number"]), call.arguments["body"], token=repo.token, provider=repo.provider,
     )
     return ToolResult.success(
         call,
@@ -188,7 +186,7 @@ PR_LIST_SCHEMA = {
 
 
 async def _pr_list(call: ToolCall, ctx: ToolExecutionContext) -> ToolResult:
-    from ..github_pulls import list_pull_requests
+    from ..scm import list_pull_requests
 
     repo = ctx.require_repo()
     pulls = await list_pull_requests(
@@ -199,7 +197,7 @@ async def _pr_list(call: ToolCall, ctx: ToolExecutionContext) -> ToolResult:
         head=call.arguments.get("head"),
         per_page=int(call.arguments.get("per_page") or 30),
         page=int(call.arguments.get("page") or 1),
-        token=repo.token,
+        token=repo.token, provider=repo.provider,
     )
     if not pulls:
         return ToolResult.success(call, "No pull requests matched.", data={"count": 0})
@@ -214,10 +212,10 @@ PR_GET_SCHEMA = ISSUE_GET_SCHEMA
 
 
 async def _pr_get(call: ToolCall, ctx: ToolExecutionContext) -> ToolResult:
-    from ..github_pulls import get_pull_request
+    from ..scm import get_pull_request
 
     repo = ctx.require_repo()
-    pull = await get_pull_request(repo.owner, repo.repo, int(call.arguments["number"]), token=repo.token)
+    pull = await get_pull_request(repo.owner, repo.repo, int(call.arguments["number"]), token=repo.token, provider=repo.provider)
     body = pull.get("body") or "(no description)"
     return ToolResult.success(
         call,
@@ -246,7 +244,7 @@ PR_CREATE_SCHEMA = {
 
 
 async def _pr_create(call: ToolCall, ctx: ToolExecutionContext) -> ToolResult:
-    from ..github_pulls import create_pull_request
+    from ..scm import create_pull_request
 
     repo = ctx.require_repo()
     pull = await create_pull_request(
@@ -257,11 +255,12 @@ async def _pr_create(call: ToolCall, ctx: ToolExecutionContext) -> ToolResult:
         base=call.arguments["base"],
         body=call.arguments.get("body"),
         draft=bool(call.arguments.get("draft", False)),
-        token=repo.token,
+        token=repo.token, provider=repo.provider,
     )
     return ToolResult.success(
         call,
-        f"Opened PR #{pull.get('number')}: {pull.get('html_url', '')}",
+        (f"Opened MR !{pull.get('number')}: {pull.get('html_url', '')}" if repo.provider == "gitlab"
+         else f"Opened PR #{pull.get('number')}: {pull.get('html_url', '')}"),
         data={"number": pull.get("number"), "url": pull.get("html_url")},
     )
 
@@ -288,7 +287,7 @@ SEARCH_CODE_SCHEMA = {
 
 
 async def _search_code(call: ToolCall, ctx: ToolExecutionContext) -> ToolResult:
-    from ..github_search import search_code
+    from ..scm import search_code
 
     repo = ctx.require_repo()
     scoped = call.arguments.get("this_repo_only", True)
@@ -300,7 +299,7 @@ async def _search_code(call: ToolCall, ctx: ToolExecutionContext) -> ToolResult:
         path=call.arguments.get("path"),
         per_page=int(call.arguments.get("per_page") or 30),
         page=int(call.arguments.get("page") or 1),
-        token=repo.token,
+        token=repo.token, provider=repo.provider,
     )
     items = result.get("items", []) or []
     if not items:
@@ -329,7 +328,7 @@ SEARCH_ISSUES_SCHEMA = {
 
 
 async def _search_issues(call: ToolCall, ctx: ToolExecutionContext) -> ToolResult:
-    from ..github_search import search_issues
+    from ..scm import search_issues
 
     repo = ctx.require_repo()
     scoped = call.arguments.get("this_repo_only", True)
@@ -342,7 +341,7 @@ async def _search_issues(call: ToolCall, ctx: ToolExecutionContext) -> ToolResul
         is_pr=call.arguments.get("is_pr"),
         per_page=int(call.arguments.get("per_page") or 30),
         page=int(call.arguments.get("page") or 1),
-        token=repo.token,
+        token=repo.token, provider=repo.provider,
     )
     items = result.get("items", []) or []
     if not items:
@@ -486,27 +485,50 @@ SPECS: List[Tuple[ToolSpec, Any]] = [
 ]
 
 
-#: GitLab is not implemented.  The tool *shapes* above transfer directly — list
-#: / get / create over issues and merge requests — but GitPilot has no GitLab
-#: client, no token plumbing and no ``RepoBinding`` variant that knows about
-#: projects instead of owner/repo.  Registering half of that would give a model
-#: tools that fail on the first call, so nothing is registered: an absent
-#: provider means an absent tool (see :mod:`gitpilot.toolkit.web` for the same
-#: rule applied to web search).  ``gitlab.mr.*`` is the naming to use when it
-#: lands, so that ``github.pr.write`` and ``gitlab.mr.write`` can both satisfy
-#: one topology capability.
-GITLAB_SPECS: List[Tuple[ToolSpec, Any]] = []
+def _gitlab_spec(spec: ToolSpec) -> ToolSpec:
+    """The GitLab twin of a GitHub forge tool: same handler and schema, GitLab names.
+
+    ``github.pr.*`` becomes ``gitlab.mr.*`` (merge requests) and the
+    capabilities become ``gitlab.read`` / ``gitlab.issue.write`` /
+    ``gitlab.mr.write``. A topology that grants only the GitHub id grants the
+    twin too (see :meth:`gitpilot.agent.policy.CapabilityMask.qualifier`).
+    """
+    import dataclasses
+
+    def rename(value: str) -> str:
+        return value.replace("github.pr.", "gitlab.mr.").replace("github.", "gitlab.")
+
+    def wording(text: str) -> str:
+        return (text.replace("pull requests", "merge requests").replace("pull request", "merge request")
+                .replace("GitHub's index", "the GitLab project's search").replace("on GitHub", "on GitLab"))
+
+    capability = {"github.pr.write": "gitlab.mr.write"}.get(spec.capability or "", rename(spec.capability or ""))
+    return dataclasses.replace(
+        spec,
+        id=rename(spec.id),
+        title=wording(spec.title),
+        description=wording(spec.description),
+        capability=capability or None,
+    )
+
+
+#: GitLab twins of :data:`SPECS`. The handlers are shared: they route through
+#: :mod:`gitpilot.scm` by ``RepoBinding.provider``, and GitLab's merge requests
+#: come back in the pull-request shape the handlers already format.
+GITLAB_SPECS: List[Tuple[ToolSpec, Any]] = [(_gitlab_spec(spec), handler) for spec, handler in SPECS]
 
 
 def gitlab_available() -> bool:
-    """Whether a GitLab client is configured.  Always ``False`` today."""
-    return False
+    """Whether GitLab forge tools can be offered (a GitLab client is built in)."""
+    return True
 
 
-def register(registry: ToolRegistry) -> None:
-    """Add the forge tools to *registry*."""
-    for spec, handler in SPECS:
+def register(registry: ToolRegistry, provider: str = "github") -> None:
+    """Add the forge tools of the bound repository's *provider* to *registry*.
+
+    Only one provider's tools are offered to a run, so a model working on a
+    GitLab project never sees (or calls) a ``github.*`` tool, and vice versa.
+    """
+    specs = GITLAB_SPECS if provider == "gitlab" and gitlab_available() else SPECS
+    for spec, handler in specs:
         registry.register(spec, handler)
-    if gitlab_available():   # pragma: no cover - unreachable until GitLab lands
-        for spec, handler in GITLAB_SPECS:
-            registry.register(spec, handler)

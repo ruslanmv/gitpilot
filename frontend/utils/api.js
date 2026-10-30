@@ -108,11 +108,18 @@ export async function safeFetchJSON(url, options = {}) {
   }
 }
 
-// ─── GitPilot account session (portable token) ───────────────────────────
-// The account session also rides in localStorage + the X-GitPilot-Session
-// header (not just the cookie) so email/password accounts stay signed in when
-// the SPA (Vercel) and API (HF Space) are on different origins.
+// ─── Web session (server-side) ───────────────────────────────────────────
+// GitHub and GitLab access tokens live on the server, encrypted, attached to a
+// GitPilot web session. The browser holds only that session's id, preferably in
+// an HttpOnly cookie it cannot read. When the SPA and the API are on different
+// sites and the browser blocks the cookie, the id is kept here instead and sent
+// in the X-GitPilot-Session header (see adoptSession).
 const SESSION_TOKEN_KEY = 'gitpilot_session_token';
+// Provider tokens stored by earlier versions; migrated once, then deleted.
+const LEGACY_TOKEN_KEYS = { github: 'github_token', gitlab: 'gitlab_token' };
+const LEGACY_KEYS = ['github_token', 'github_user', 'gitlab_token', 'gitlab_user', 'gitpilot_git_provider'];
+
+let csrfToken = '';
 
 export function getSessionToken() {
   try { return localStorage.getItem(SESSION_TOKEN_KEY) || ''; } catch { return ''; }
@@ -129,30 +136,31 @@ export function clearSessionToken() {
   setSessionToken('');
 }
 
+/** Remember the session's CSRF token (memory only; re-read from /api/auth/session). */
+export function setCsrfToken(token) {
+  csrfToken = token || '';
+}
+
+export function getCsrfToken() {
+  return csrfToken;
+}
+
 /**
- * Get authorization headers: GitHub bearer token (repos) and/or the GitPilot
- * account session header. Either/both may be present.
+ * Headers every API call carries: the session id when the cookie cannot be
+ * used, and the CSRF token that cookie-authenticated writes must echo. No
+ * GitHub or GitLab token is ever sent from the browser.
  * @returns {Object} Headers object
  */
 export function getAuthHeaders() {
   const headers = {};
-  let provider = 'github';
-  let sourceToken = '';
-  let sessionToken = '';
-  try {
-    provider = localStorage.getItem('gitpilot_git_provider') === 'gitlab' ? 'gitlab' : 'github';
-    sourceToken = localStorage.getItem(provider === 'gitlab' ? 'gitlab_token' : 'github_token') || '';
-  } catch { /* blocked */ }
-  sessionToken = getSessionToken();
-
-  if (sourceToken) headers['Authorization'] = `Bearer ${sourceToken}`;
-  headers['X-GitPilot-Git-Provider'] = provider;
+  const sessionToken = getSessionToken();
   if (sessionToken) headers['X-GitPilot-Session'] = sessionToken;
+  if (csrfToken) headers['X-GitPilot-CSRF'] = csrfToken;
   return headers;
 }
 
 /**
- * Make an authenticated fetch request
+ * Make an authenticated fetch request (session cookie + headers).
  * @param {string} url - API endpoint URL
  * @param {Object} options - Fetch options
  * @returns {Promise<Response>} Fetch response
@@ -166,6 +174,7 @@ export async function authFetch(url, options = {}) {
   // Resolve root-relative paths against the configured backend so callers that
   // pass "/api/..." work on the split frontend(Vercel)/backend(HF) deployment.
   return fetch(apiUrl(url), {
+    credentials: 'include',
     ...options,
     headers,
   });
@@ -178,23 +187,121 @@ export async function authFetch(url, options = {}) {
  * @returns {Promise<any>} Parsed JSON response
  */
 export async function authFetchJSON(url, options = {}) {
-  const headers = {
-    'Content-Type': 'application/json',
-    ...getAuthHeaders(),
-    ...options.headers,
-  };
-
-  const response = await fetch(apiUrl(url), {
+  const response = await authFetch(url, {
     ...options,
-    headers,
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
   });
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Request failed' }));
-    throw new Error(error.detail || error.message || 'Request failed');
+    const err = new Error(error.detail || error.message || 'Request failed');
+    err.status = response.status;
+    throw err;
   }
 
   return response.json();
+}
+
+/**
+ * Current session: who is signed in, which providers are connected, and the
+ * CSRF token. Never contains a provider access token.
+ * @returns {Promise<{authenticated:boolean, account:?Object, providers:Object, csrf_token:?string}>}
+ */
+export async function fetchSession() {
+  const res = await authFetch('/api/auth/session');
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || 'Could not read the session.');
+  setCsrfToken(data.csrf_token || '');
+  if (data.session_token) await adoptSession(data);
+  return data;
+}
+
+/**
+ * Take over the session a sign-in response created. If the browser kept the
+ * HttpOnly cookie, the session id is not stored anywhere script-readable;
+ * otherwise (cross-site deployment with third-party cookies blocked) it is
+ * kept for the X-GitPilot-Session header.
+ */
+export async function adoptSession(data) {
+  if (!data) return;
+  if (data.csrf_token) setCsrfToken(data.csrf_token);
+  if (!data.session_token) return;
+  let cookieWorks = false;
+  try {
+    const probe = await fetch(apiUrl('/api/auth/session'), { credentials: 'include' });
+    const body = await probe.json().catch(() => ({}));
+    cookieWorks = !!(body && body.csrf_token && body.csrf_token === data.csrf_token);
+  } catch { /* offline: fall back to the header */ }
+  setSessionToken(cookieWorks ? '' : data.session_token);
+}
+
+/** True when a token from an earlier GitPilot version is still in localStorage. */
+export function hasLegacyTokens() {
+  try {
+    return Object.values(LEGACY_TOKEN_KEYS).some((k) => !!localStorage.getItem(k));
+  } catch { return false; }
+}
+
+/**
+ * One-time migration: hand any provider token an earlier version kept in
+ * localStorage to the server (it is validated there), then delete it from the
+ * browser. A token the provider rejects is simply dropped.
+ */
+export async function migrateLegacyTokens() {
+  let migrated = false;
+  for (const [provider, key] of Object.entries(LEGACY_TOKEN_KEYS)) {
+    let token = '';
+    try { token = localStorage.getItem(key) || ''; } catch { /* blocked */ }
+    if (!token) continue;
+    try {
+      const res = await authFetch('/api/auth/session/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, access_token: token }),
+      });
+      if (res.ok) {
+        await adoptSession(await res.json());
+        migrated = true;
+      }
+    } catch { /* keep going; the token is removed below either way */ }
+  }
+  try { LEGACY_KEYS.forEach((k) => localStorage.removeItem(k)); } catch { /* blocked */ }
+  return migrated;
+}
+
+/** Sign out: revoke the server session (and its provider grants) and forget it locally. */
+export async function logoutSession() {
+  try {
+    await authFetch('/api/auth/logout', { method: 'POST' });
+  } catch { /* the local state is cleared regardless */ }
+  clearSessionToken();
+  setCsrfToken('');
+  try { LEGACY_KEYS.forEach((k) => localStorage.removeItem(k)); } catch { /* blocked */ }
+}
+
+/** Disconnect one provider from the session (and revoke its token at the provider). */
+export async function disconnectProvider(provider) {
+  return authFetchJSON(`/api/auth/providers/${encodeURIComponent(provider)}/disconnect`, { method: 'POST' });
+}
+
+/** Which sign-in methods this server offers ({github:{web,device}, gitlab:{web,host}, accounts}). */
+export async function fetchAuthProviders() {
+  const res = await fetch(apiUrl('/api/auth/providers'), { credentials: 'include' });
+  if (!res.ok) throw new Error('Could not load sign-in options.');
+  return res.json();
+}
+
+/**
+ * A short-lived, single-use ticket for opening a WebSocket (browsers cannot
+ * send headers on a WebSocket handshake, and the cookie may be cross-site).
+ */
+export async function fetchWsTicket() {
+  try {
+    const data = await authFetchJSON('/api/auth/ws-ticket', { method: 'POST' });
+    return data.ticket || '';
+  } catch {
+    return '';
+  }
 }
 
 // ─── Redesigned API Endpoints ────────────────────────────

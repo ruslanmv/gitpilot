@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { apiUrl, getAuthHeaders } from "../utils/api.js";
+import { authFetch } from "../utils/api.js";
+import { branchesUrl, createBranch, providerLabel } from "../utils/repoApi.js";
 import { createPortal } from "react-dom";
 
 /**
@@ -71,15 +72,8 @@ export default function BranchPicker({
     setLoading(true);
     setError(null);
     try {
-      const headers = getAuthHeaders();
-      const params = new URLSearchParams({ per_page: "100" });
-      if (searchQuery) params.set("query", searchQuery);
-
-      const endpoint = repo.provider === "gitlab"
-        ? `/api/gitlab/projects/${repo.id}/branches`
-        : `/api/repos/${repo.owner}/${repo.name}/branches`;
-      const res = await fetch(apiUrl(`${endpoint}?${params}`),
-        { headers, cache: "no-cache" }
+      const res = await authFetch(branchesUrl(repo, { query: searchQuery || undefined }),
+        { cache: "no-cache" }
       );
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
@@ -102,6 +96,27 @@ export default function BranchPicker({
       setLoading(false);
     }
   }, [repo, cacheKey]);
+
+  // Create a branch from the current one, then switch to it.
+  const [creating, setCreating] = useState(false);
+  const trimmed = (query || "").trim();
+  const canCreate =
+    !!trimmed && /^[A-Za-z0-9._\/-]+$/.test(trimmed) && !trimmed.endsWith("/") &&
+    !trimmed.includes("..") && !branches.some((b) => b.name === trimmed);
+  const handleCreateBranch = async () => {
+    if (!canCreate || creating) return;
+    setCreating(true);
+    setError(null);
+    try {
+      await createBranch(repo, trimmed, branch);
+      if (cacheKey) delete branchCache[cacheKey];
+      handleSelect(trimmed);
+    } catch (err) {
+      setError(err.message || `Could not create the branch on ${providerLabel(repo)}.`);
+    } finally {
+      setCreating(false);
+    }
+  };
 
   // Fetch + focus when opened
   useEffect(() => {
@@ -216,7 +231,11 @@ export default function BranchPicker({
                 if (e.key === "Escape") {
                   handleClose();
                 }
+                if (e.key === "Enter" && canCreate && allBranches.length === 0) {
+                  handleCreateBranch();
+                }
               }}
+              aria-label="Search or create a branch"
             />
           </div>
 
@@ -230,8 +249,19 @@ export default function BranchPicker({
               <div style={styles.errorRow}>{error}</div>
             )}
 
-            {!loading && !error && allBranches.length === 0 && (
+            {!loading && !error && allBranches.length === 0 && !canCreate && (
               <div style={styles.loadingRow}>No branches found</div>
+            )}
+
+            {canCreate && !loading && (
+              <button
+                type="button"
+                style={styles.createRow}
+                disabled={creating}
+                onMouseDown={(e) => { e.preventDefault(); handleCreateBranch(); }}
+              >
+                {creating ? "Creating…" : <>Create branch <code>{trimmed}</code> from <code>{branch}</code></>}
+              </button>
             )}
 
             {allBranches.map((b) => {
@@ -300,6 +330,18 @@ export default function BranchPicker({
 const styles = {
   container: {
     position: "relative",
+  },
+  createRow: {
+    display: "block",
+    width: "100%",
+    textAlign: "left",
+    padding: "8px 12px",
+    border: 0,
+    borderBottom: "1px solid #27272A",
+    background: "rgba(16, 185, 129, 0.08)",
+    color: "#10B981",
+    fontSize: 12,
+    cursor: "pointer",
   },
   trigger: {
     display: "flex",

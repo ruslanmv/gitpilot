@@ -12,7 +12,9 @@
 const HOSTED_BACKEND = "https://ruslanmv-gitpilot.hf.space";
 
 export function resolveBackendUrl() {
-  const env = import.meta.env.VITE_BACKEND_URL;
+  // `import.meta.env` is Vite's; it is absent when the module runs under
+  // `node --test`.
+  const env = (import.meta.env || {}).VITE_BACKEND_URL;
   if (env && String(env).trim()) {
     return String(env).trim().replace(/\/+$/, "");
   }

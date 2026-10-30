@@ -41,16 +41,24 @@ def _manager():
 
 
 def _info(ctx: ToolExecutionContext):
-    from ..workspace import WorkspaceInfo
+    from ..workspace import WorkspaceInfo, _auth_env, _remote_url
 
     ws = ctx.require_workspace()
     repo = ctx.repo
+    auth: dict = {}
+    if repo is not None and repo.token:
+        # Clones keep no credential in .git/config; push/fetch authenticate with
+        # the bound provider's token, sent only to that provider's host.
+        provider = getattr(repo, "provider", "github") or "github"
+        auth = _auth_env(_remote_url(repo.owner, repo.repo, provider), repo.token, provider)
     return WorkspaceInfo(
         owner=repo.owner if repo else "local",
         repo=repo.repo if repo else ws.root.name,
         path=ws.root,
         branch=(repo.branch if repo else None) or "HEAD",
         remote_url="",
+        provider=getattr(repo, "provider", "github") if repo else "github",
+        auth_env=auth,
     )
 
 

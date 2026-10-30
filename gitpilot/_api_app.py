@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, List, Optional
 
-from fastapi import FastAPI, Query, Path as FPath, Header, HTTPException, UploadFile, File
+from fastapi import FastAPI, Query, Path as FPath, Header, HTTPException, Request, Response, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,7 +24,7 @@ from .github_api import (
     get_repo_tree,
     get_file,
     put_file,
-    execution_context,
+    execution_context,  # noqa: F401 - kept as a module attribute (tests and plugins patch it)
     github_request,
 )
 from .github_app import check_repo_write_access
@@ -114,13 +114,10 @@ def _is_lite_mode_active() -> bool:
 # _agent_team.plan_and_split(...) works identically to the original.
 # NL database types are imported lazily at call site (see /api/nl-db endpoint)
 from .github_oauth import (
-    generate_authorization_url,
-    exchange_code_for_token,
     validate_token,
     initiate_device_flow,
     poll_device_token,
     web_flow_available,
-    AuthSession,
     GitHubUser,
 )
 import os
@@ -380,7 +377,12 @@ try:
 except Exception:  # noqa: BLE001
     logger.exception("Matrix runs API failed to mount; /api/v1/gitpilot/runs will be unavailable")
 
-# GitLab OAuth and repository endpoints are additive; GitHub routes remain intact.
+# Server-side web sessions: provider connections (GitHub / GitLab OAuth with
+# PKCE), the encrypted token vault, CSRF tokens and WebSocket tickets.
+from .auth.session_router import build_session_router
+app.include_router(build_session_router())
+
+# GitLab OAuth and repository endpoints; GitHub routes remain intact.
 from .gitlab import build_gitlab_router
 app.include_router(build_gitlab_router())
 
@@ -421,13 +423,29 @@ except Exception:  # noqa: BLE001
 # ============================================================================
 # Enable CORS to allow frontend (local dev or Vercel) to connect to backend
 allowed_origins_str = os.getenv("CORS_ORIGINS", "http://localhost:5173")
-allowed_origins = [origin.strip() for origin in allowed_origins_str.split(",")]
+allowed_origins = [origin.strip() for origin in allowed_origins_str.split(",") if origin.strip()]
+# Preview deployments (e.g. ``https://gitpilot-.*\.vercel\.app``) need a
+# pattern: ``CORS_ORIGINS`` only matches exact origins.
+allowed_origin_regex = os.getenv("CORS_ORIGIN_REGEX", "").strip() or None
 
 logger.info(f"CORS enabled for origins: {allowed_origins}")
+if "*" in allowed_origins:
+    logger.warning(
+        "CORS_ORIGINS='*' lets any website call this API from a browser. Session "
+        "cookies stay SameSite=Lax in this mode; list your frontend origins "
+        "explicitly for production."
+    )
+
+# Resolves the web session (header / HttpOnly cookie / WS ticket), enforces the
+# CSRF header on cookie-authenticated writes and refreshes provider tokens. Added
+# before CORS so CORS headers also wrap its 403 responses.
+from .auth.middleware import WebSessionMiddleware
+app.add_middleware(WebSessionMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
+    allow_origin_regex=allowed_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -736,22 +754,51 @@ def _build_local_repo_aware_prompt(req, session) -> str:
 
 def get_github_token(authorization: Optional[str] = Header(None)) -> Optional[str]:
     """
-    Extract GitHub token from Authorization header.
+    The caller's GitHub credential for this request.
 
-    Supports formats:
-    - Bearer <token>
-    - token <token>
-    - <token>
+    1. An explicit ``Authorization`` header (``Bearer <t>``, ``token <t>`` or a
+       bare token) from API clients and the VS Code extension — unless the
+       client declared ``X-GitPilot-Git-Provider: gitlab`` or the token is
+       visibly a GitLab one, which is never forwarded to GitHub.
+    2. The GitHub connection stored server-side for the web session.
+
+    ``None`` lets ``github_api`` fall back to the server's own token.
     """
-    if not authorization:
-        return None
+    from .auth.web_session import resolve_provider_token
 
-    if authorization.startswith("Bearer "):
-        return authorization[7:]
-    elif authorization.startswith("token "):
-        return authorization[6:]
-    else:
-        return authorization
+    return resolve_provider_token("github", authorization)
+
+
+def get_provider_token(provider: Optional[str], authorization: Optional[str] = None) -> Optional[str]:
+    """The caller's credential for ``provider`` ("github" or "gitlab"); see :func:`get_github_token`."""
+    from .auth.web_session import resolve_provider_token
+
+    return resolve_provider_token(_provider_name(provider), authorization)
+
+
+def _provider_name(provider: Optional[str]) -> str:
+    from .scm_context import normalize_provider
+
+    try:
+        return normalize_provider(provider)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _repo_scope(provider: Optional[str], authorization: Optional[str], owner: str, repo: str,
+                branch: Optional[str], repo_id: Optional[Any] = None):
+    """Bind the repository's provider, its credential and ref for an agent run.
+
+    Inside the scope every GitHub helper refuses to run for a GitLab
+    repository (and vice versa), so a credential only ever reaches its own
+    provider.
+    """
+    from . import scm
+
+    name = _provider_name(provider)
+    token = get_provider_token(name, authorization)
+    return scm.execution_context(name, token, ref=branch, repo_full_name=f"{owner}/{repo}",
+                                 repo_id=repo_id), token
 
 
 # --- FIXED: Added default_branch to model ---
@@ -762,6 +809,8 @@ class RepoSummary(BaseModel):
     private: bool
     owner: str
     default_branch: str = "main"  # <--- CRITICAL FIX: Defaults to main, but can be master/dev
+    # Hosting provider; GitLab projects come from /api/gitlab/projects.
+    provider: str = "github"
 
 
 class PaginatedReposResponse(BaseModel):
@@ -796,6 +845,8 @@ class CommitRequest(BaseModel):
     path: str
     content: str
     message: str
+    # Target branch; omitted means the repository's default branch.
+    branch: Optional[str] = None
 
 
 class CommitResponse(BaseModel):
@@ -835,6 +886,11 @@ class ProviderUpdate(BaseModel):
 class ChatPlanRequest(BaseModel):
     repo_owner: str
     repo_name: str
+    # Hosting provider of the repository ("github" | "gitlab") and its stable
+    # id (GitLab project id). Omitted by older clients, which means GitHub.
+    # On GitLab ``repo_owner`` may be a nested group path.
+    provider: Optional[str] = None
+    repo_id: Optional[str] = None
     goal: str
     branch_name: Optional[str] = None
     # Optional: when present, the planner invocation is recorded as a
@@ -852,6 +908,11 @@ class ChatPlanRequest(BaseModel):
 class ExecutePlanRequest(BaseModel):
     repo_owner: str
     repo_name: str
+    # Hosting provider of the repository ("github" | "gitlab") and its stable
+    # id (GitLab project id). Omitted by older clients, which means GitHub.
+    # On GitLab ``repo_owner`` may be a nested group path.
+    provider: Optional[str] = None
+    repo_id: Optional[str] = None
     plan: PlanResult
     branch_name: Optional[str] = None
     # Optional: when present, the active session's `branch` (and the
@@ -893,6 +954,8 @@ class ChatRequest(BaseModel):
     """Unified chat request for the conversational dispatcher."""
     repo_owner: str
     repo_name: str
+    provider: Optional[str] = None
+    repo_id: Optional[str] = None
     message: str
     branch_name: Optional[str] = None
     auto_pr: bool = False
@@ -1163,9 +1226,80 @@ async def api_put_file(
     # Attribute the commit to GitPilot (Co-authored-by trailer) so it shows up as
     # a GitPilot contribution — like Claude Code. See gitpilot.commit_attribution.
     result = await put_file(
-        owner, repo, payload.path, payload.content, with_attribution(payload.message), token=token
+        owner, repo, payload.path, payload.content, with_attribution(payload.message), token=token,
+        branch=payload.branch,
     )
     return CommitResponse(**result)
+
+
+@app.delete("/api/repos/{owner}/{repo}/file", response_model=CommitResponse)
+async def api_delete_file(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    path: str = Query(..., min_length=1),
+    branch: str = Query(..., min_length=1),
+    message: str = Query(..., min_length=1, max_length=2000),
+    authorization: Optional[str] = Header(None),
+):
+    """Delete a file on a branch as one commit."""
+    from .github_api import delete_file as _delete_file
+
+    token = get_github_token(authorization)
+    result = await _delete_file(owner, repo, path, with_attribution(message), token=token, branch=branch)
+    return CommitResponse(**result)
+
+
+class BranchCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    ref: str = Field(default="HEAD", min_length=1, max_length=255)
+
+
+@app.post("/api/repos/{owner}/{repo}/branches", status_code=201)
+async def api_create_branch(
+    payload: BranchCreateRequest,
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    authorization: Optional[str] = Header(None),
+):
+    """Create a branch from ``ref`` (``HEAD`` = default branch)."""
+    from .github_api import create_branch as _create_branch
+
+    token = get_github_token(authorization)
+    ref = await _create_branch(owner, repo, payload.name, payload.ref, token=token)
+    return {"ref": ref, "name": payload.name, "provider": "github"}
+
+
+@app.get("/api/repos/{owner}/{repo}/commits")
+async def api_list_commits(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    ref: Optional[str] = None,
+    path: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(30, ge=1, le=100),
+    authorization: Optional[str] = Header(None),
+):
+    """Commit history of a ref (optionally of one path)."""
+    from .github_api import list_commits as _list_commits
+
+    token = get_github_token(authorization)
+    return {"commits": await _list_commits(owner, repo, ref=ref, path=path, page=page,
+                                           per_page=per_page, token=token)}
+
+
+@app.get("/api/repos/{owner}/{repo}/compare")
+async def api_compare_refs(
+    owner: str = FPath(...),
+    repo: str = FPath(...),
+    base: str = Query(..., min_length=1),
+    head: str = Query(..., min_length=1),
+    authorization: Optional[str] = Header(None),
+):
+    """Diff between two refs (files with unified-diff patches, and commits)."""
+    from .github_api import compare_refs as _compare_refs
+
+    token = get_github_token(authorization)
+    return await _compare_refs(owner, repo, base, head, token=token)
 
 
 # ============================================================================
@@ -1490,7 +1624,9 @@ def _maybe_compact_session_for_request(session_id: Optional[str]) -> None:
 @_track_task(kind="plan", title_fn=lambda req: req.goal)
 async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Header(None)):
     _maybe_compact_session_for_request(req.session_id)
-    token = get_github_token(authorization)
+    _scope, token = _repo_scope(
+        req.provider, authorization, req.repo_owner, req.repo_name, req.branch_name, req.repo_id,
+    )
 
     logger.info(
         "PLAN REQUEST: %s/%s | branch_name=%r",
@@ -1499,7 +1635,7 @@ async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Hea
         req.branch_name,
     )
 
-    with execution_context(token, ref=req.branch_name):
+    with _scope:
         full_name = f"{req.repo_owner}/{req.repo_name}"
 
         # Use lite planner when Lite Mode is active (setting OR topology)
@@ -1523,7 +1659,7 @@ async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Hea
                 # classifier's path-verification step.  Failure is
                 # tolerated — router falls back to "no targets".
                 try:
-                    from .github_api import get_repo_tree
+                    from .scm import get_repo_tree
                     _tree = await get_repo_tree(
                         req.repo_owner, req.repo_name,
                         token=token, ref=req.branch_name,
@@ -1613,7 +1749,7 @@ async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Hea
                         # fetch so the short-circuit has a chance.
                         if not repo_paths:
                             try:
-                                from .github_api import get_repo_tree
+                                from .scm import get_repo_tree
                                 _tree = await get_repo_tree(
                                     req.repo_owner, req.repo_name,
                                     token=token, ref=req.branch_name,
@@ -1776,9 +1912,11 @@ async def api_chat_execute(
     authorization: Optional[str] = Header(None)
 ):
     _maybe_compact_session_for_request(req.session_id)
-    token = get_github_token(authorization)
+    _scope, token = _repo_scope(
+        req.provider, authorization, req.repo_owner, req.repo_name, req.branch_name, req.repo_id,
+    )
 
-    with execution_context(token, ref=req.branch_name):
+    with _scope:
         full_name = f"{req.repo_owner}/{req.repo_name}"
         executor = execute_plan_lite if _is_lite_mode_active() else execute_plan
         try:
@@ -1957,7 +2095,9 @@ async def api_chat_message(req: ChatRequest, authorization: Optional[str] = Head
     dispatches to the appropriate agent (issue, PR, search, review, learning,
     or the existing plan+execute pipeline).
     """
-    token = get_github_token(authorization)
+    _scope, token = _repo_scope(
+        req.provider, authorization, req.repo_owner, req.repo_name, req.branch_name, req.repo_id,
+    )
 
     logger.info(
         "CHAT MESSAGE: %s/%s | message=%r | branch=%r",
@@ -1967,7 +2107,7 @@ async def api_chat_message(req: ChatRequest, authorization: Optional[str] = Head
         req.branch_name,
     )
 
-    with execution_context(token, ref=req.branch_name):
+    with _scope:
         full_name = f"{req.repo_owner}/{req.repo_name}"
         try:
             result = await dispatch_request(
@@ -2042,9 +2182,11 @@ async def api_chat_execute_with_pr(
     authorization: Optional[str] = Header(None),
 ):
     """Execute a plan AND automatically create a pull request afterwards."""
-    token = get_github_token(authorization)
+    _scope, token = _repo_scope(
+        req.provider, authorization, req.repo_owner, req.repo_name, req.branch_name, req.repo_id,
+    )
 
-    with execution_context(token, ref=req.branch_name):
+    with _scope:
         full_name = f"{req.repo_owner}/{req.repo_name}"
         executor = execute_plan_lite if _is_lite_mode_active() else execute_plan
         try:
@@ -2383,9 +2525,9 @@ async def api_chat_route(payload: dict):
 # ============================================================================
 
 @app.get("/api/auth/url", response_model=AuthUrlResponse)
-async def api_get_auth_url():
+async def api_get_auth_url(return_to: Optional[str] = Query(None, max_length=300)):
     """
-    Generate GitHub OAuth authorization URL (Web Flow).
+    Begin GitHub OAuth (Web Flow) with server-side state and S256 PKCE.
 
     The Web Flow needs GITHUB_CLIENT_SECRET to exchange the code for a token.
     When it is not configured we return an empty authorization_url so the
@@ -2393,26 +2535,43 @@ async def api_get_auth_url():
     callback URL required). This prevents bouncing the browser to the GitHub
     App's default localhost callback, which is unreachable in production.
     """
+    from .auth import oauth as _oauth
+    from .auth.web_session import current_session
+
     if not web_flow_available():
         return AuthUrlResponse(authorization_url="", state="")
-    auth_url, state = generate_authorization_url()
-    return AuthUrlResponse(authorization_url=auth_url, state=state)
+    started = _oauth.start("github", current_session(), return_to=return_to)
+    return AuthUrlResponse(authorization_url=started["authorization_url"], state=started["state"])
 
 
-@app.post("/api/auth/callback", response_model=AuthSession)
-async def api_auth_callback(request: AuthCallbackRequest):
+class GitHubCallbackRequest(AuthCallbackRequest):
+    """OAuth callback values; ``return_token`` is for API clients only."""
+
+    return_token: bool = False
+
+
+@app.post("/api/auth/callback")
+async def api_auth_callback(payload: GitHubCallbackRequest, request: Request, response: Response):
     """
-    Handle GitHub OAuth callback (Web Flow).
-    Exchange the authorization code for an access token.
+    Finish GitHub OAuth (Web Flow): validate ``state``, exchange the code with
+    the PKCE verifier, and connect GitHub to the web session.
+
+    The token is stored encrypted server-side and is not returned to the
+    browser. A non-browser client that manages its own token may ask for it
+    with ``return_token: true``.
     """
-    try:
-        session = await exchange_code_for_token(request.code, request.state)
-        return session
-    except ValueError as e:
-        return JSONResponse(
-            {"error": str(e)},
-            status_code=400,
-        )
+    from .auth.session_router import complete_oauth
+
+    result = await complete_oauth("github", payload.code, payload.state, request, response)
+    if payload.return_token:
+        from .auth.web_session import get_store
+
+        sess = get_store().resolve(result.get("session_token"), touch=False)
+        cred = sess.credentials.get("github") if sess else None
+        if cred:
+            result["access_token"] = cred.access_token
+            result["token_type"] = "bearer"
+    return result
 
 
 @app.post("/api/auth/validate", response_model=UserInfoResponse)
@@ -2443,9 +2602,13 @@ async def api_device_code():
 
 
 @app.post("/api/auth/device/poll")
-async def api_device_poll(payload: dict):
+async def api_device_poll(payload: dict, request: Request, response: Response):
     """
     Poll GitHub to check if user authorized the device (Step 2).
+
+    With ``"store": true`` (the web app) the token is kept server-side on the
+    web session and only the identity is returned. Without it (CLI, VS Code)
+    the token is returned to the client as before.
     """
     device_code = payload.get("device_code")
     if not device_code:
@@ -2453,10 +2616,20 @@ async def api_device_poll(payload: dict):
 
     try:
         session = await poll_device_token(device_code)
-        if session:
+        if not session:
+            return JSONResponse({"status": "pending"}, status_code=202)
+        if not payload.get("store"):
             return session
+        from .auth.session_router import connect_credential, session_payload
+        from .auth.web_session import ProviderCredential
 
-        return JSONResponse({"status": "pending"}, status_code=202)
+        profile = {**session.user.model_dump(), "provider": "github", "host": "github.com"}
+        cred = ProviderCredential(provider="github", access_token=session.access_token,
+                                  scope=session.scope, profile=profile)
+        sess, raw = connect_credential(request, response, cred)
+        result = session_payload(sess, session_token=raw)
+        result.update({"provider": "github", "user": profile})
+        return result
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
@@ -2497,9 +2670,9 @@ async def api_check_installation_status():
     if pat_token:
         user = await validate_token(pat_token)
         if user:
+            # The server's own token is never sent to a client.
             return {
                 "installed": True,
-                "access_token": pat_token,
                 "user": user,
                 "auth_type": "pat",
             }
@@ -2546,14 +2719,15 @@ async def api_check_repo_access(
 # ============================================================================
 
 @app.get("/api/sessions")
-async def api_list_sessions(repo: str | None = None, limit: int = 50):
+async def api_list_sessions(repo: str | None = None, limit: int = 50, provider: str | None = None):
     """Saved sessions, newest first.
 
-    ``repo`` filters before the limit is applied, so a sidebar scoped to one
-    repository sees that repository's newest sessions rather than whatever
-    survives a global cut.
+    ``repo`` (and ``provider``) filter before the limit is applied, so a
+    sidebar scoped to one repository sees that repository's newest sessions
+    rather than whatever survives a global cut.
     """
-    return {"sessions": _session_mgr.list_sessions(repo_full_name=repo, limit=limit)}
+    name = _provider_name(provider) if provider else None
+    return {"sessions": _session_mgr.list_sessions(repo_full_name=repo, limit=limit, provider=name)}
 
 
 @app.post("/api/sessions")
@@ -2567,14 +2741,22 @@ async def api_create_session(payload: dict):
     repo = payload.get("repo_full_name", "")
     branch = payload.get("branch")
     name = payload.get("name")  # optional — derived from first user prompt
+    provider = _provider_name(payload.get("provider"))
+    repo_id = payload.get("repo_id")
     session = _session_mgr.create(repo_full_name=repo, branch=branch, name=name)
+    session.provider = provider
+    session.repo_id = str(repo_id) if repo_id not in (None, "") else None
 
     # Multi-repo context support
     if payload.get("repos"):
-        session.repos = payload["repos"]
+        session.repos = [
+            {**r, "provider": _provider_name(r.get("provider") or provider)}
+            for r in payload["repos"] if isinstance(r, dict)
+        ]
         session.active_repo = payload.get("active_repo", repo)
     elif repo:
-        session.repos = [{"full_name": repo, "branch": branch or "main", "mode": "write"}]
+        session.repos = [{"full_name": repo, "branch": branch or "main", "mode": "write",
+                          "provider": provider, "repo_id": session.repo_id}]
         session.active_repo = repo
 
     _session_mgr.save(session)
@@ -2604,6 +2786,8 @@ async def api_get_session(session_id: str):
         "checkpoint_count": len(session.checkpoints),
         "repos": session.repos,
         "active_repo": session.active_repo,
+        "provider": session.provider,
+        "repo_id": session.repo_id,
     }
 
 
@@ -2872,8 +3056,7 @@ async def api_get_project_context(
     repo: str = FPath(...),
 ):
     """Get project conventions and memory for a repository workspace."""
-    from pathlib import Path as StdPath
-    workspace_path = StdPath.home() / ".gitpilot" / "workspaces" / owner / repo
+    workspace_path = _workspace_path(owner, repo)
     if not workspace_path.exists():
         return {"conventions": "", "rules": [], "auto_memory": {}, "system_prompt": ""}
     mgr = MemoryManager(workspace_path)
@@ -2892,8 +3075,7 @@ async def api_init_project_context(
     repo: str = FPath(...),
 ):
     """Initialize .gitpilot/ directory with template GITPILOT.md."""
-    from pathlib import Path as StdPath
-    workspace_path = StdPath.home() / ".gitpilot" / "workspaces" / owner / repo
+    workspace_path = _workspace_path(owner, repo)
     workspace_path.mkdir(parents=True, exist_ok=True)
     mgr = MemoryManager(workspace_path)
     md_path = mgr.init_project()
@@ -2907,11 +3089,10 @@ async def api_add_learned_pattern(
     payload: dict = ...,
 ):
     """Add a learned pattern to auto-memory."""
-    from pathlib import Path as StdPath
     pattern = payload.get("pattern", "")
     if not pattern:
         raise HTTPException(status_code=400, detail="pattern is required")
-    workspace_path = StdPath.home() / ".gitpilot" / "workspaces" / owner / repo
+    workspace_path = _workspace_path(owner, repo)
     workspace_path.mkdir(parents=True, exist_ok=True)
     mgr = MemoryManager(workspace_path)
     mgr.add_learned_pattern(pattern)
@@ -2923,7 +3104,22 @@ async def api_add_learned_pattern(
 # ============================================================================
 
 def _workspace_path(owner: str, repo: str) -> Path:
-    """Resolve the local workspace path for a repo."""
+    """Resolve the local workspace path for a repo.
+
+    GitLab projects use the owner form ``gitlab:group:subgroup`` (colons stand
+    for the slashes a URL path segment cannot carry) and map to the same
+    ``_gitlab/...`` directory the agents read (:func:`gitpilot.scm.workspace_dir`).
+    """
+    if owner.startswith("gitlab:"):
+        from . import scm
+
+        namespace = owner[len("gitlab:"):].replace(":", "/")
+        try:
+            return scm.workspace_dir(f"{namespace}/{repo}", "gitlab")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid GitLab project path.") from exc
+    if any(part in ("", ".", "..") for part in (owner, repo)) or "/" in owner or "\\" in owner:
+        raise HTTPException(status_code=400, detail="Invalid repository path.")
     return Path.home() / ".gitpilot" / "workspaces" / owner / repo
 
 
@@ -3781,6 +3977,19 @@ def _ws_github_token(websocket: WebSocket) -> Optional[str]:
     return _lookup(websocket.query_params, "token")
 
 
+def _ws_provider_token(websocket: WebSocket, provider: Optional[str]) -> Optional[str]:
+    """The caller's credential for ``provider`` on a WebSocket.
+
+    An explicit header / ``?token=`` (see :func:`_ws_github_token`) is used only
+    when it does not visibly belong to the other provider; otherwise the
+    provider connection of the web session (HttpOnly cookie or single-use
+    ``?ticket=``) applies.
+    """
+    from .auth.web_session import resolve_provider_token
+
+    return resolve_provider_token(_provider_name(provider), _ws_github_token(websocket))
+
+
 @app.websocket("/ws/sessions/{session_id}")
 async def session_websocket(websocket: WebSocket, session_id: str):
     """
@@ -3814,6 +4023,10 @@ async def session_websocket(websocket: WebSocket, session_id: str):
         except Exception:
             pass
         return
+
+    # The session's repository decides which provider's credential applies.
+    ws_provider = getattr(session, "provider", None) or "github"
+    ws_token = _ws_provider_token(websocket, ws_provider)
 
     # Send session history on connect (may fail if client already gone)
     if not await _safe_ws_send_json(websocket, {
@@ -3863,7 +4076,12 @@ async def session_websocket(websocket: WebSocket, session_id: str):
                         # is what makes ``github_api._github_token()`` resolve the
                         # caller's token inside the agent's tools, exactly as the
                         # HTTP chat routes do (Batch V4-0D).
-                        with execution_context(ws_token, ref=session.branch):
+                        from . import scm as _scm
+
+                        with _scm.execution_context(
+                            ws_provider, ws_token, ref=session.branch,
+                            repo_full_name=repo_full, repo_id=getattr(session, "repo_id", None),
+                        ):
                             result = await dispatch_request(
                                 user_request=content,
                                 repo_full_name=f"{parts[0]}/{parts[1]}",
@@ -4293,11 +4511,19 @@ async def api_chat_message_v2(req: _ChatMessageRequest):
                 "[chat] session=%s repo=%s → agent pipeline (CrewAI; verbose trace follows)",
                 req.session_id, repo_full,
             )
-            result = await dispatch_request(
-                user_request=req.message,
-                repo_full_name=repo_full,
-                branch_name=session.branch,
-            )
+            from . import scm as _scm
+
+            _send_provider = getattr(session, "provider", None) or "github"
+            _send_token = get_provider_token(_send_provider)
+            with _scm.execution_context(_send_provider, _send_token, ref=session.branch,
+                                        repo_full_name=repo_full,
+                                        repo_id=getattr(session, "repo_id", None)):
+                result = await dispatch_request(
+                    user_request=req.message,
+                    repo_full_name=repo_full,
+                    token=_send_token,
+                    branch_name=session.branch,
+                )
             if isinstance(result, dict):
                 answer = (
                     result.get("result")
@@ -4669,10 +4895,16 @@ async def _stream_agent_loop(
 
     repo_binding = None
     if repo_full_name and "/" in repo_full_name:
+        from . import scm as _scm
         from .agent.runner import RepoBinding as _RepoBinding
 
-        owner, repo = repo_full_name.split("/", 1)
-        repo_binding = _RepoBinding(owner=owner, repo=repo, token=token, branch=branch)
+        provider = getattr(session, "provider", None) or "github"
+        try:
+            owner, repo = _scm.split_full_name(repo_full_name, provider)
+        except ValueError:
+            owner, repo = repo_full_name.split("/", 1)
+        repo_binding = _RepoBinding(owner=owner, repo=repo, token=token, branch=branch,
+                                    provider=provider, repo_id=getattr(session, "repo_id", None))
 
     workspace_root = None
     if workspace is not None and getattr(workspace, "path", None):
@@ -4806,17 +5038,25 @@ async def v2_chat_stream(request: _Request):
     gate = _ApprovalGate(bus, mode=permission_mode)
     _approval_gates[session_id or "ephemeral"] = gate
 
+    # The session's repository decides the provider; the body's ``token`` (older
+    # clients) is treated like an Authorization header and never crosses
+    # providers, and the web session's connection is used otherwise.
+    provider = (getattr(session, "provider", None) if session else None) or _provider_name(body.get("provider"))
+    repo_id = getattr(session, "repo_id", None) if session else None
+    token = get_provider_token(provider, token)
+
     # Resolve workspace (if session has a local workspace)
     workspace = None
     if session and repo_full_name:
         try:
-            parts = repo_full_name.split("/", 1)
-            if len(parts) == 2:
-                ws_mgr = _V2WorkspaceManager()
-                workspace = await ws_mgr.ensure_workspace(
-                    owner=parts[0], repo=parts[1],
-                    token=token, branch=branch,
-                )
+            from . import scm as _scm
+
+            owner_, repo_ = _scm.split_full_name(repo_full_name, provider)
+            ws_mgr = _V2WorkspaceManager()
+            workspace = await ws_mgr.ensure_workspace(
+                owner=owner_, repo=repo_,
+                token=token, branch=branch, provider=provider,
+            )
         except Exception as ws_err:
             logger.warning("Could not resolve workspace: %s", ws_err)
 
@@ -4857,15 +5097,21 @@ async def v2_chat_stream(request: _Request):
 
     async def event_generator():
         """Run agent in background, yield events as SSE."""
-        # Start execution as a background task
-        exec_task = _asyncio.create_task(
-            executor.execute(
-                user_message=user_message,
-                repo_full_name=repo_full_name,
-                branch=branch,
-                token=token,
+        # Start execution as a background task. The task copies the current
+        # context, so binding the provider scope here routes every repository
+        # call it makes to the session's provider.
+        from . import scm as _scm
+
+        with _scm.execution_context(provider, token, ref=branch,
+                                    repo_full_name=repo_full_name or None, repo_id=repo_id):
+            exec_task = _asyncio.create_task(
+                executor.execute(
+                    user_message=user_message,
+                    repo_full_name=repo_full_name,
+                    branch=branch,
+                    token=token,
+                )
             )
-        )
 
         try:
             async for event in bus.stream(sub_id):
@@ -5158,17 +5404,25 @@ async def v2_session_websocket(websocket: WebSocket, session_id: str):
                 session.add_message("user", content)
                 _session_mgr.save(session)
 
-                # Resolve workspace
+                # Resolve workspace with the session provider's credential only.
+                from . import scm as _scm
+
                 workspace = None
                 repo_full = session.repo_full_name or ""
-                parts = repo_full.split("/", 1)
-                if len(parts) == 2:
+                ws_provider = getattr(session, "provider", None) or "github"
+                ws_token = _ws_provider_token(websocket, ws_provider) if not data.get("token") else                     get_provider_token(ws_provider, data.get("token"))
+                try:
+                    owner_, repo_ = _scm.split_full_name(repo_full, ws_provider)
+                except ValueError:
+                    owner_ = repo_ = ""
+                if owner_ and repo_:
                     try:
                         ws_mgr = _V2WorkspaceManager()
                         workspace = await ws_mgr.ensure_workspace(
-                            owner=parts[0], repo=parts[1],
-                            token=data.get("token"),
+                            owner=owner_, repo=repo_,
+                            token=ws_token,
                             branch=session.branch,
+                            provider=ws_provider,
                         )
                     except Exception:
                         pass
@@ -5179,13 +5433,16 @@ async def v2_session_websocket(websocket: WebSocket, session_id: str):
                 )
                 _active_executors[session_id] = executor
 
-                # Run agent (non-blocking)
-                _asyncio.create_task(executor.execute(
-                    user_message=content,
-                    repo_full_name=repo_full,
-                    branch=session.branch,
-                    token=data.get("token"),
-                ))
+                # Run agent (non-blocking) inside the session provider's scope.
+                with _scm.execution_context(ws_provider, ws_token, ref=session.branch,
+                                            repo_full_name=repo_full or None,
+                                            repo_id=getattr(session, "repo_id", None)):
+                    _asyncio.create_task(executor.execute(
+                        user_message=content,
+                        repo_full_name=repo_full,
+                        branch=session.branch,
+                        token=ws_token,
+                    ))
 
             elif event_type == "approval_response":
                 gate.resolve(

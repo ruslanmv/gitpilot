@@ -1,5 +1,6 @@
 import { resolveBackendUrl } from "../utils/backend.js";
-import { apiUrl, getAuthHeaders } from "../utils/api.js";
+import { apiUrl, authFetch, getAuthHeaders } from "../utils/api.js";
+import { fileUrl, providerLabel, repoIdentity } from "../utils/repoApi.js";
 // frontend/components/ChatPanel.jsx
 import React, { useEffect, useRef, useState } from "react";
 import AssistantMessage from "./AssistantMessage.jsx";
@@ -30,12 +31,6 @@ function languageFromPath(path) {
 // Helper to get headers (inline safety if utility is missing)
 const getHeaders = () => ({ "Content-Type": "application/json", ...getAuthHeaders() });
 
-const fileUrl = (repo, path, branch) => {
-  const endpoint = repo.provider === "gitlab"
-    ? `/api/gitlab/projects/${repo.id}/file`
-    : `/api/repos/${repo.owner}/${repo.name}/file`;
-  return `${endpoint}?path=${encodeURIComponent(path)}&ref=${encodeURIComponent(branch)}`;
-};
 
 export default function ChatPanel({
   repo,
@@ -52,9 +47,6 @@ export default function ChatPanel({
   // Initialize state from props or defaults
   const [messages, setMessages] = useState(sessionChatState?.messages || []);
   const [goal, setGoal] = useState("");
-  // GitLab file browsing is available; agent actions still use GitHub-specific
-  // issue/PR and execution tools. Do not send a GitLab credential to those APIs.
-  const gitlabReadOnly = repo?.provider === "gitlab";
   const [plan, setPlan] = useState(sessionChatState?.plan || null);
 
   const [loadingPlan, setLoadingPlan] = useState(false);
@@ -248,7 +240,7 @@ export default function ChatPanel({
   useEffect(() => {
     const onRunFile = (e) => {
       const path = e?.detail?.path;
-      if (!path || !repo || repo.provider === "gitlab") return;
+      if (!path || !repo) return;
       send({ goal: `run ${path}` });
     };
     // "Open in Canvas" handler — fetches the file's content from the
@@ -262,7 +254,7 @@ export default function ChatPanel({
       const branch = currentBranch || "HEAD";
       try {
         const url = fileUrl(repo, path, branch);
-        const res = await fetch(apiUrl(url), { headers: getHeaders() });
+        const res = await authFetch(url);
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           setCanvasError(data.detail || `Could not load ${path} (HTTP ${res.status})`);
@@ -308,7 +300,7 @@ export default function ChatPanel({
       const branch = currentBranch || "HEAD";
       const fetchOnce = async () => {
         const url = fileUrl(repo, path, branch);
-        const res = await fetch(apiUrl(url), { headers: getHeaders() });
+        const res = await authFetch(url);
         const data = await res.json().catch(() => ({}));
         return { res, data };
       };
@@ -419,6 +411,7 @@ export default function ChatPanel({
     }
     fetch(apiUrl(`/api/sessions/${sid}/message`), {
       method: "POST",
+      credentials: "include",
       headers: getHeaders(),
       body: JSON.stringify(body),
     }).catch(() => {}); // best-effort
@@ -505,10 +498,11 @@ export default function ChatPanel({
       try {
         res = await fetch(apiUrl("/api/chat/plan"), {
           method: "POST",
+          credentials: "include",
           headers: getHeaders(),
           body: JSON.stringify({
-            repo_owner: repo.owner,
-            repo_name: repo.name,
+            // provider + stable id + (possibly nested) namespace/name
+            ...repoIdentity(repo),
             goal: text,
             branch_name: effectiveBranch,
             // Lets the backend record this plan as a Task on the
@@ -678,10 +672,10 @@ export default function ChatPanel({
 
       const res = await fetch(apiUrl("/api/chat/execute"), {
         method: "POST",
+        credentials: "include",
         headers: getHeaders(),
         body: JSON.stringify({
-          repo_owner: repo.owner,
-          repo_name: repo.name,
+          ...repoIdentity(repo),
           plan,
           branch_name,
           // Lets the backend persist the new branch on the session
@@ -918,7 +912,7 @@ export default function ChatPanel({
                   <div style={{ whiteSpace: "pre-wrap" }}>{m.content}</div>
                   {m.link && (
                     <a href={m.link} target="_blank" rel="noreferrer" className="success-link">
-                      View Changes on GitHub &rarr;
+                      View Changes on {providerLabel(repo)} &rarr;
                     </a>
                   )}
                 </div>
@@ -983,6 +977,7 @@ export default function ChatPanel({
                 planStatus={planStatus}
                 owner={repo?.owner}
                 repo={repo?.name}
+                repoInfo={repo}
                 onApproveExecution={() => execute()}
                 nextActions={m.nextActions}
                 relatedPlan={linkedPlan}
@@ -1151,13 +1146,6 @@ export default function ChatPanel({
           </div>
         )}
 
-        {gitlabReadOnly && (
-          <div role="note" style={{ padding: "10px 12px", marginBottom: 12, fontSize: 12,
-            color: "#f5c6b3", border: "1px solid #705048", borderRadius: 9, background: "#2b2529" }}>
-            GitLab project browsing is available. AI code execution and merge-request
-            workflows are not yet supported for GitLab projects.
-          </div>
-        )}
         <div className="chat-input-row">
           <textarea
             className="chat-input"
@@ -1175,7 +1163,7 @@ export default function ChatPanel({
                 if (!loadingPlan && !executing) send();
               }
             }}
-            disabled={!canChat || gitlabReadOnly || loadingPlan || executing}
+            disabled={!canChat || loadingPlan || executing}
           />
 
           {/* Always show both buttons (old UX) */}
@@ -1183,7 +1171,7 @@ export default function ChatPanel({
             className="chat-btn primary"
             type="button"
             onClick={send}
-            disabled={!canChat || gitlabReadOnly || loadingPlan || executing || !goal.trim()}
+            disabled={!canChat || loadingPlan || executing || !goal.trim()}
           >
             {loadingPlan ? "Planning..." : wsConnected ? "Send" : "Generate plan"}
           </button>

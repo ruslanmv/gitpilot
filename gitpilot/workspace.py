@@ -8,10 +8,11 @@ this module to ensure path-traversal safety and consistency.
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import os
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,51 @@ class WorkspaceInfo:
     remote_url: str
     is_dirty: bool = False
     last_sync: str | None = None
+    provider: str = "github"
+    # Git config passed through the environment for fetch/push: carries the
+    # credential as an HTTP header for the provider host only. Never persisted
+    # to .git/config and never printed in an error (it is not on the argv).
+    auth_env: dict[str, str] = field(default_factory=dict, repr=False)
+
+
+def _remote_url(owner: str, repo: str, provider: str) -> str:
+    """Credential-free HTTPS clone URL of a hosted repository."""
+    if provider == "gitlab":
+        from gitpilot.gitlab_api import gitlab_base_url
+
+        return f"{gitlab_base_url()}/{owner}/{repo}.git"
+    return f"https://github.com/{owner}/{repo}.git"
+
+
+def _active_key(owner: str, repo: str, provider: str) -> str:
+    # GitHub keeps its historical "owner/repo" key.
+    return f"gitlab:{owner}/{repo}" if provider == "gitlab" else f"{owner}/{repo}"
+
+
+def _with_config(env: dict[str, str], key: str, value: str) -> dict[str, str]:
+    """Append one ``GIT_CONFIG_*`` entry to an environment built by :func:`_auth_env`."""
+    out = dict(env)
+    n = int(out.get("GIT_CONFIG_COUNT", "0"))
+    out[f"GIT_CONFIG_KEY_{n}"] = key
+    out[f"GIT_CONFIG_VALUE_{n}"] = value
+    out["GIT_CONFIG_COUNT"] = str(n + 1)
+    return out
+
+
+def _auth_env(remote_url: str, token: str | None, provider: str) -> dict[str, str]:
+    """``GIT_CONFIG_*`` variables adding an Authorization header for one host."""
+    if not token:
+        return {}
+    user = "oauth2" if provider == "gitlab" else "x-access-token"
+    basic = base64.b64encode(f"{user}:{token}".encode()).decode("ascii")
+    scheme, _, rest = remote_url.partition("://")
+    origin = f"{scheme}://{rest.split('/', 1)[0]}/"
+    return {
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": f"http.{origin}.extraHeader",
+        "GIT_CONFIG_VALUE_0": f"Authorization: Basic {basic}",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
 
 
 class WorkspaceManager:
@@ -51,7 +97,11 @@ class WorkspaceManager:
         self.root.mkdir(parents=True, exist_ok=True)
         self._active: dict[str, WorkspaceInfo] = {}
 
-    def workspace_path(self, owner: str, repo: str) -> Path:
+    def workspace_path(self, owner: str, repo: str, provider: str = "github") -> Path:
+        # GitLab clones live under "_gitlab/" so the same path on both
+        # providers never shares a checkout ("_" cannot start a GitHub login).
+        if provider == "gitlab":
+            return self.root.joinpath("_gitlab", *owner.split("/"), repo)
         return self.root / owner / repo
 
     # ------------------------------------------------------------------
@@ -62,24 +112,39 @@ class WorkspaceManager:
         self,
         owner: str,
         repo: str,
-        token: str,
+        token: str | None,
         branch: str | None = None,
+        provider: str = "github",
     ) -> WorkspaceInfo:
-        """Clone if absent, fetch if present, checkout *branch*."""
-        ws_path = self.workspace_path(owner, repo)
-        remote_url = f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
+        """Clone if absent, fetch if present, checkout *branch*.
+
+        The credential travels as an HTTP header in the git process
+        environment, scoped to the provider host; the stored remote URL has no
+        credential (an older clone that embedded one is rewritten).
+        """
+        ws_path = self.workspace_path(owner, repo, provider)
+        remote_url = _remote_url(owner, repo, provider)
+        auth = _auth_env(remote_url, token, provider)
 
         if not (ws_path / ".git").exists():
             ws_path.mkdir(parents=True, exist_ok=True)
             await self._run_git(
                 ["git", "clone", "--depth=1", remote_url, str(ws_path)],
                 cwd=ws_path.parent,
+                env=auth,
             )
         else:
+            # Fetch from the credential-free URL (a command-scoped override, so
+            # a token an older clone embedded in .git/config is not used), then
+            # rewrite the stored remote so that token is gone for good.
             await self._run_git(
                 ["git", "fetch", "origin", "--prune"],
                 cwd=ws_path,
-                env={"GIT_TERMINAL_PROMPT": "0"},
+                env={"GIT_TERMINAL_PROMPT": "0", **_with_config(auth, "remote.origin.url", remote_url)},
+            )
+            await self._run_git(
+                ["git", "remote", "set-url", "origin", remote_url],
+                cwd=ws_path, check=False,
             )
 
         target_branch = branch or await self._default_branch(ws_path)
@@ -91,15 +156,17 @@ class WorkspaceManager:
             path=ws_path,
             branch=target_branch,
             remote_url=remote_url,
+            provider=provider,
+            auth_env=auth,
         )
-        self._active[f"{owner}/{repo}"] = info
+        self._active[_active_key(owner, repo, provider)] = info
         return info
 
-    async def cleanup(self, owner: str, repo: str) -> bool:
-        ws_path = self.workspace_path(owner, repo)
+    async def cleanup(self, owner: str, repo: str, provider: str = "github") -> bool:
+        ws_path = self.workspace_path(owner, repo, provider)
         if ws_path.exists():
             shutil.rmtree(ws_path)
-            self._active.pop(f"{owner}/{repo}", None)
+            self._active.pop(_active_key(owner, repo, provider), None)
             return True
         return False
 
@@ -197,7 +264,7 @@ class WorkspaceManager:
         cmd = ["git", "push", "-u", "origin", ws.branch]
         if force:
             cmd.insert(2, "--force-with-lease")
-        await self._run_git(cmd, cwd=ws.path)
+        await self._run_git(cmd, cwd=ws.path, env=ws.auth_env or None)
         return {"branch": ws.branch, "status": "pushed"}
 
     async def diff(self, ws: WorkspaceInfo, staged: bool = False) -> str:

@@ -1,34 +1,75 @@
 // frontend/components/AdminTabs/IntegrationsTab.jsx
 import React, { useEffect, useState } from "react";
-import { apiUrl, safeFetchJSON } from "../../utils/api.js";
+import { disconnectProvider, fetchAuthProviders, fetchSession } from "../../utils/api.js";
 
 /**
- * Integrations tab — shows connection status for GitHub (and future
- * third-party integrations) with Connect/Disconnect actions.
+ * Integrations tab — GitHub and GitLab connections of the current session.
  *
- * Best practices applied:
- * - Fetch current status on mount via /api/auth/status
- * - Show connected user info if already authenticated
- * - "Connect GitHub" button opens /api/auth/url in the same window
- *   (OAuth flow will redirect back with ?code=...)
- * - Disconnect clears localStorage token and re-fetches status
- * - Handles both Web OAuth and Device Flow modes
+ * - Status comes from GET /api/auth/session (identity only; the access tokens
+ *   stay encrypted on the server) and GET /api/auth/providers (what this
+ *   server has configured).
+ * - "Connect" runs that provider's OAuth flow from /auth and returns here;
+ *   both providers can be connected at the same time.
+ * - "Disconnect" revokes the token at the provider and removes it from the
+ *   session. Signing out is separate (account menu).
  */
 
-export default function IntegrationsTab({ userInfo, onDisconnect, showToast }) {
-  const [authStatus, setAuthStatus] = useState(null);
+const CARD = {
+  background: "#1a1b26",
+  borderRadius: "8px",
+  padding: "20px",
+  border: "1px solid #2a2b36",
+  marginBottom: "16px",
+};
+
+const PROVIDERS = [
+  { id: "github", name: "GitHub", blurb: "Repositories, branches, pull requests, issues and code search." },
+  { id: "gitlab", name: "GitLab", blurb: "Projects in groups and subgroups, merge requests, issues and branches." },
+];
+
+function Badge({ state }) {
+  const on = state === "connected";
+  return (
+    <span
+      style={{
+        padding: "2px 10px",
+        borderRadius: "10px",
+        fontSize: "11px",
+        fontWeight: 600,
+        background: on ? "#064e3b" : "#374151",
+        color: on ? "#a7f3d0" : "#9ca3af",
+        border: `1px solid ${on ? "#065f46" : "#4b5563"}`,
+      }}
+    >
+      {state === "checking" ? "CHECKING..." : on ? "CONNECTED" : "NOT CONNECTED"}
+    </span>
+  );
+}
+
+export default function IntegrationsTab({ showToast, onSessionChange }) {
+  const [session, setSession] = useState(null);
+  const [available, setAvailable] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [connecting, setConnecting] = useState(false);
+  const [busy, setBusy] = useState("");
   const [error, setError] = useState(null);
+
+  const refresh = async () => {
+    const [info, providers] = await Promise.all([
+      fetchSession().catch(() => null),
+      fetchAuthProviders().catch(() => null),
+    ]);
+    setSession(info);
+    setAvailable(providers);
+    return info;
+  };
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const data = await safeFetchJSON(apiUrl("/api/auth/status"), { timeout: 5000 });
-        if (!cancelled) setAuthStatus(data);
+        await refresh();
       } catch (err) {
-        if (!cancelled) setError(err?.message || "Failed to check auth status");
+        if (!cancelled) setError(err?.message || "Failed to check connections");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -38,183 +79,130 @@ export default function IntegrationsTab({ userInfo, onDisconnect, showToast }) {
     };
   }, []);
 
-  const handleConnect = () => {
-    // Link GitHub without leaving the account: the in-workspace connect flow
-    // runs the GitHub device flow (or web OAuth if a secret is configured) and
-    // returns here. Works the same whether or not an account is already signed
-    // in. See App.jsx (?connect=github) and AuthPage connectMode.
-    setConnecting(true);
+  const connect = (provider) => {
+    setBusy(provider);
     setError(null);
-    window.location.href = "/auth?connect=github&view=github";
+    window.location.href = `/auth?connect=${provider}&view=${provider}`;
   };
 
-  const handleDisconnect = () => {
-    if (!window.confirm("Disconnect GitHub? You will be signed out.")) return;
-    localStorage.removeItem("github_token");
-    localStorage.removeItem("github_user");
-    onDisconnect?.();
-    showToast?.("Disconnected", "GitHub token removed.");
+  const disconnect = async (provider, name) => {
+    if (!window.confirm(`Disconnect ${name}? GitPilot will no longer be able to use your ${name} repositories.`)) return;
+    setBusy(provider);
+    setError(null);
+    try {
+      await disconnectProvider(provider);
+      const info = await refresh();
+      onSessionChange?.(info);
+      showToast?.("Disconnected", `${name} access was revoked.`);
+    } catch (err) {
+      setError(err?.message || `Could not disconnect ${name}.`);
+    } finally {
+      setBusy("");
+    }
   };
 
-  const isConnected = !!(userInfo && userInfo.login);
+  const connections = (session && session.providers) || {};
 
   return (
     <div>
       <h3 style={{ marginBottom: "16px" }}>Integrations</h3>
       <p style={{ fontSize: "12px", opacity: 0.7, marginBottom: "16px" }}>
-        Connect third-party services to unlock additional GitPilot features.
+        Connect GitHub and GitLab to work on their repositories. Access tokens are kept
+        encrypted on the GitPilot server, never in your browser.
       </p>
 
-      {/* GitHub integration card */}
-      <div
-        style={{
-          background: "#1a1b26",
-          borderRadius: "8px",
-          padding: "20px",
-          border: "1px solid #2a2b36",
-          marginBottom: "16px",
-        }}
-      >
+      {error && (
         <div
+          role="alert"
           style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "flex-start",
+            padding: "8px 12px",
+            background: "#7f1d1d",
+            color: "#fecaca",
+            border: "1px solid #991b1b",
+            borderRadius: "4px",
+            fontSize: "11px",
             marginBottom: "12px",
           }}
         >
-          <div>
-            <h4 style={{ marginBottom: "4px" }}>GitHub</h4>
-            <p style={{ fontSize: "12px", opacity: 0.7 }}>
-              Pull requests, issues, and remote repository workflows.
-            </p>
-          </div>
-          <span
-            style={{
-              padding: "2px 10px",
-              borderRadius: "10px",
-              fontSize: "11px",
-              fontWeight: 600,
-              background: isConnected ? "#064e3b" : "#374151",
-              color: isConnected ? "#a7f3d0" : "#9ca3af",
-              border: `1px solid ${isConnected ? "#065f46" : "#4b5563"}`,
-            }}
-          >
-            {loading ? "CHECKING..." : isConnected ? "CONNECTED" : "NOT CONNECTED"}
-          </span>
+          {error}
         </div>
+      )}
 
-        {isConnected && userInfo && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "12px",
-              padding: "12px",
-              background: "#0d0e15",
-              borderRadius: "6px",
-              marginBottom: "12px",
-            }}
-          >
-            {userInfo.avatar_url && (
-              <img
-                src={userInfo.avatar_url}
-                alt={userInfo.login}
-                style={{ width: "36px", height: "36px", borderRadius: "50%" }}
-              />
-            )}
-            <div>
-              <div style={{ fontSize: "13px", fontWeight: 600 }}>
-                {userInfo.name || userInfo.login}
+      {PROVIDERS.map(({ id, name, blurb }) => {
+        const conn = connections[id];
+        const user = conn && conn.user;
+        const configured = !available || (id === "github"
+          ? !!(available.github && (available.github.web || available.github.device))
+          : !!(available.gitlab && available.gitlab.web));
+        const host = id === "gitlab" && available && available.gitlab && available.gitlab.host;
+        return (
+          <section key={id} style={CARD} aria-labelledby={`integration-${id}`}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "12px" }}>
+              <div>
+                <h4 id={`integration-${id}`} style={{ marginBottom: "4px" }}>
+                  {name}{host && host !== "gitlab.com" ? ` (${host})` : ""}
+                </h4>
+                <p style={{ fontSize: "12px", opacity: 0.7 }}>{blurb}</p>
               </div>
-              <div style={{ fontSize: "11px", opacity: 0.6 }}>@{userInfo.login}</div>
+              <Badge state={loading ? "checking" : conn ? "connected" : "disconnected"} />
             </div>
-          </div>
-        )}
 
-        {error && (
-          <div
-            role="alert"
-            style={{
-              padding: "8px 12px",
-              background: "#7f1d1d",
-              color: "#fecaca",
-              border: "1px solid #991b1b",
-              borderRadius: "4px",
-              fontSize: "11px",
-              marginBottom: "12px",
-            }}
-          >
-            {error}
-          </div>
-        )}
+            {user && (
+              <div style={{ display: "flex", alignItems: "center", gap: "12px", padding: "12px", background: "#0d0e15", borderRadius: "6px", marginBottom: "12px" }}>
+                {user.avatar_url && (
+                  <img src={user.avatar_url} alt="" style={{ width: "36px", height: "36px", borderRadius: "50%" }} />
+                )}
+                <div>
+                  <div style={{ fontSize: "13px", fontWeight: 600 }}>{user.name || user.login}</div>
+                  <div style={{ fontSize: "11px", opacity: 0.6 }}>@{user.login}</div>
+                  {conn.expires_at && (
+                    <div style={{ fontSize: "10px", opacity: 0.5 }}>
+                      Token renews automatically{conn.refreshable ? "" : " — reconnect when it expires"}.
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
-        <div style={{ display: "flex", gap: "8px" }}>
-          {isConnected ? (
-            <button
-              type="button"
-              onClick={handleDisconnect}
-              style={{
-                padding: "8px 16px",
-                background: "transparent",
-                color: "#f87171",
-                border: "1px solid #991b1b",
-                borderRadius: "4px",
-                cursor: "pointer",
-                fontSize: "12px",
-                fontWeight: 600,
-              }}
-            >
-              Disconnect
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={handleConnect}
-              disabled={connecting || loading}
-              style={{
-                padding: "8px 16px",
-                background: connecting ? "#555" : "#3B82F6",
-                color: "#fff",
-                border: "none",
-                borderRadius: "4px",
-                cursor: connecting || loading ? "not-allowed" : "pointer",
-                fontSize: "12px",
-                fontWeight: 600,
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "6px",
-              }}
-            >
-              {connecting ? "Connecting..." : "Connect GitHub"}
-            </button>
-          )}
-        </div>
-
-        {authStatus && !isConnected && (
-          <div style={{ fontSize: "10px", opacity: 0.5, marginTop: "10px" }}>
-            Auth mode: {authStatus.mode || "unknown"}
-            {authStatus.oauth_configured && " (Web OAuth)"}
-            {authStatus.pat_configured && " (Personal Access Token)"}
-          </div>
-        )}
-      </div>
-
-      {/* Placeholder for future integrations */}
-      <div
-        style={{
-          background: "#1a1b26",
-          borderRadius: "8px",
-          padding: "20px",
-          border: "1px dashed #2a2b36",
-          opacity: 0.5,
-          textAlign: "center",
-        }}
-      >
-        <p style={{ fontSize: "12px", margin: 0 }}>
-          More integrations coming soon (GitLab, Bitbucket, Jira, Slack)
-        </p>
-      </div>
+            <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+              {conn ? (
+                <button
+                  type="button"
+                  onClick={() => disconnect(id, name)}
+                  disabled={busy === id}
+                  style={{ padding: "8px 16px", background: "transparent", color: "#f87171", border: "1px solid #991b1b", borderRadius: "4px", cursor: "pointer", fontSize: "12px", fontWeight: 600 }}
+                >
+                  {busy === id ? "Disconnecting..." : "Disconnect"}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => connect(id)}
+                  disabled={busy === id || loading || !configured}
+                  title={configured ? undefined : `${name} sign-in is not configured on this server.`}
+                  style={{
+                    padding: "8px 16px",
+                    background: busy === id || !configured ? "#555" : "#3B82F6",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: "4px",
+                    cursor: busy === id || loading || !configured ? "not-allowed" : "pointer",
+                    fontSize: "12px",
+                    fontWeight: 600,
+                  }}
+                >
+                  {busy === id ? "Connecting..." : `Connect ${name}`}
+                </button>
+              )}
+              {!configured && !conn && (
+                <span style={{ fontSize: "11px", opacity: 0.6 }}>
+                  An administrator must configure {name} OAuth (see docs/GITLAB_INTEGRATION.md and docs/auth.md).
+                </span>
+              )}
+            </div>
+          </section>
+        );
+      })}
     </div>
   );
 }

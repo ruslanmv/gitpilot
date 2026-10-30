@@ -7,6 +7,8 @@ const GithubMark = () => (
   </svg>
 );
 
+const PROVIDER_TAB_KEY = "gitpilot_repo_provider_tab";
+
 export default function RepoSelector({ onSelect, workspace, onOpenLocal }) {
   // Runtime mental model (server-authoritative; defaults to local for dev):
   //   cloud → no user filesystem, GitHub is the way in (folder/Git hidden)
@@ -14,22 +16,20 @@ export default function RepoSelector({ onSelect, workspace, onOpenLocal }) {
   const runtime = workspace?.runtime === "cloud" ? "cloud" : "local";
   const isCloud = runtime === "cloud";
 
-  // Initial hint from localStorage to avoid a flash of the search box; the
-  // server's github_connected flag (below) is the source of truth.
-  const [gitProvider, setGitProvider] = useState(() =>
-    localStorage.getItem("gitpilot_git_provider") === "gitlab" ? "gitlab" : "github"
-  );
-  const hasTokenHint =
-    typeof window !== "undefined" && !!localStorage.getItem(
-      gitProvider === "gitlab" ? "gitlab_token" : "github_token"
-    );
-  const [needsGitHub, setNeedsGitHub] = useState(!hasTokenHint);
+  // Which provider's repositories to browse. Only a UI preference: each
+  // request is authenticated by the server session, whose GitHub and GitLab
+  // connections are independent. The server's *_connected flag (below) says
+  // whether the chosen provider is linked.
+  const [gitProvider, setGitProvider] = useState(() => {
+    try { return localStorage.getItem(PROVIDER_TAB_KEY) === "gitlab" ? "gitlab" : "github"; } catch { return "github"; }
+  });
+  const [needsGitHub, setNeedsGitHub] = useState(false);
 
   const switchProvider = (provider) => {
-    localStorage.setItem("gitpilot_git_provider", provider);
+    try { localStorage.setItem(PROVIDER_TAB_KEY, provider); } catch { /* storage may be blocked */ }
     setGitProvider(provider);
     setRepos([]);
-    setNeedsGitHub(!localStorage.getItem(provider === "gitlab" ? "gitlab_token" : "github_token"));
+    setNeedsGitHub(false);
   };
   const providerTabs = (
     <div className="gp-repo-providers" role="group" aria-label="Git provider" style={{ display: "flex", gap: 8, marginBottom: 14 }}>
@@ -357,7 +357,9 @@ export default function RepoSelector({ onSelect, workspace, onOpenLocal }) {
           >
             <div className="repo-item-content">
               <span className="repo-name">{r.name}</span>
-              <span className="repo-owner">{r.owner} · {r.provider === "gitlab" ? "GitLab" : "GitHub"}</span>
+              <span className="repo-owner">
+                {r.owner} · {r.provider === "gitlab" ? "GitLab" : "GitHub"}{r.private ? " · private" : ""}
+              </span>
             </div>
             {r.private && (
               <span className="repo-badge-private">Private</span>

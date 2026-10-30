@@ -45,9 +45,9 @@ build uses five.
 | **Planner** | Strategy | Drafts a safe, step-by-step plan with diffs and surfaces risks before any file is touched |
 | **Coder** | Execution | Writes code, runs your tests, and self-corrects on failure — iterating until the suite passes |
 | **Reviewer** | Quality | Audits changes for security, quality, test coverage and performance, ranked by severity |
-| **Issue Manager** | GitHub | Creates, updates, triages and closes issues |
-| **PR Manager** | GitHub | Opens branches, commits, pushes, and drafts pull requests with a test plan |
-| **Search & Discovery** | GitHub | Searches code, repositories, issues and users |
+| **Issue Manager** | GitHub / GitLab | Creates, updates, triages and closes issues |
+| **PR Manager** | GitHub / GitLab | Opens branches, commits, pushes, and drafts pull requests (GitLab: merge requests) with a test plan |
+| **Search & Discovery** | GitHub / GitLab | Searches code, repositories, issues and users (GitLab: within the project) |
 | **Learning & Guidance** | GitHub | Explains GitHub features and best practices |
 | **Local Editor** | Workspace | Reads and writes files directly in your local workspace |
 | **Terminal** | Workspace | Runs shell commands inside the sandbox |
@@ -261,15 +261,19 @@ no browser, no config files. See the [provider setup guide](docs/vscode/ai-provi
 The web interface includes:
 
 - Chat with real-time responses
-- GitHub integration (connect your repos)
-- GitLab.com OAuth and project browser (branches, file tree, source preview; GitLab agent/merge-request support is planned)
-
-See [GitLab setup and implementation scope](docs/GITLAB_INTEGRATION.md).
-- File tree browser
+- GitHub and GitLab (GitLab.com or one self-managed instance): sign in with either or
+  both, browse repositories and nested-group projects, plan and execute changes, and
+  open pull requests or merge requests
+- File tree browser, branch picker with branch creation
 - Diff viewer with line-by-line changes
-- Pull request creation
+- Pull request / merge request creation
 - Session history with checkpoints
-- Multi-repo support
+- Multi-repo workspaces (repositories from both providers can be mixed)
+- Enterprise sign-in: OAuth with PKCE, server-side encrypted provider tokens,
+  HttpOnly session cookies with CSRF protection, optional email/password accounts
+
+See [GitLab integration](docs/GITLAB_INTEGRATION.md) and
+[Authentication and sessions](docs/auth.md).
 
 
 

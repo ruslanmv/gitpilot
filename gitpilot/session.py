@@ -114,12 +114,20 @@ class Session:
     permission_mode: str = "normal"
 
     # Session mode fields
-    mode: str | None = None        # "folder" | "local_git" | "github"
+    mode: str | None = None        # "folder" | "local_git" | "github" (any hosted repo)
     folder_path: str | None = None
     repo_root: str | None = None
 
+    # Hosting provider of ``repo_full_name`` ("github" | "gitlab") and its
+    # stable id (GitLab numeric project id), so a session reopens against the
+    # right provider even after a rename. Sessions saved before this field are
+    # GitHub sessions.
+    provider: str = "github"
+    repo_id: str | None = None
+
     # Multi-repo context support
-    # Each entry: {"full_name": "owner/repo", "branch": "main", "mode": "read"|"write"}
+    # Each entry: {"full_name": "owner/repo", "branch": "main", "mode": "read"|"write",
+    #              "provider": "github"|"gitlab", "repo_id": "..."}
     repos: list[dict[str, Any]] = field(default_factory=list)
     active_repo: str | None = None  # full_name of the write-target repo
 
@@ -293,6 +301,8 @@ class SessionManager:
             "pr_number": data.get("pr_number"),
             "repos": data.get("repos", []),
             "active_repo": data.get("active_repo"),
+            "provider": data.get("provider") or "github",
+            "repo_id": data.get("repo_id"),
         }
 
     def _list_sessions_dir_fingerprint(self) -> tuple[float, int]:
@@ -343,6 +353,7 @@ class SessionManager:
         self,
         repo_full_name: str | None = None,
         limit: int = 50,
+        provider: str | None = None,
     ) -> list[dict[str, Any]]:
         """Sessions for the picker, newest first.
 
@@ -360,6 +371,9 @@ class SessionManager:
         sessions = self._all_sessions_newest_first()
         if repo_full_name:
             sessions = [s for s in sessions if s["repo"] == repo_full_name]
+        if provider:
+            # ``acme/app`` may exist on both providers; never mix their sessions.
+            sessions = [s for s in sessions if (s.get("provider") or "github") == provider]
         if limit is not None and limit >= 0:
             sessions = sessions[:limit]
         return sessions
@@ -397,6 +411,8 @@ class SessionManager:
         forked = Session(
             repo_full_name=original.repo_full_name,
             branch=original.branch,
+            provider=original.provider,
+            repo_id=original.repo_id,
             name=f"Fork of {original.name or original.id}",
             messages=list(messages),
             metadata={"forked_from": original.id},

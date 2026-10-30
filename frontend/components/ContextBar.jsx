@@ -74,7 +74,9 @@ function RepoChip({ entry, isActive, repoState, onActivate, onRemove, onBranchCh
   const branch = repoState?.currentBranch || entry.branch || repo?.default_branch || "main";
   const defaultBranch = repoState?.defaultBranch || repo?.default_branch || "main";
   const sessionBranches = repoState?.sessionBranches || [];
-  const displayName = repo?.name || entry.repoKey?.split("/")[1] || entry.repoKey;
+  const fullName = repo?.full_name || entry.repoKey;
+  const displayName = repo?.name || String(fullName || "").split("/").pop();
+  const provider = repo?.provider === "gitlab" ? "GitLab" : "GitHub";
 
   const handleChipClick = useCallback(
     (e) => {
@@ -90,13 +92,16 @@ function RepoChip({ entry, isActive, repoState, onActivate, onRemove, onBranchCh
       onClick={handleChipClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      title={isActive ? `Active (write): ${entry.repoKey}` : `Click to activate ${entry.repoKey}`}
+      title={isActive ? `Active (write): ${fullName} · ${provider}` : `Click to activate ${fullName} · ${provider}`}
     >
       {/* Active indicator bar */}
       {isActive && <div className="ctxbar-chip-indicator" />}
 
       {/* Repo name */}
-      <span className="ctxbar-chip-name">{displayName}</span>
+      <span className="ctxbar-chip-name">
+        {repo?.provider === "gitlab" && <span aria-label="GitLab" title="GitLab" style={{ color: "#fc6d26", marginRight: 4 }}>◆</span>}
+        {displayName}
+      </span>
 
       {/* Separator dot */}
       <span className="ctxbar-chip-dot" />

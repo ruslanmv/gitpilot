@@ -1,4 +1,5 @@
 import { resolveBackendUrl } from "./backend.js";
+import { fetchWsTicket } from "./api.js";
 /**
  * WebSocket client for real-time session streaming.
  *
@@ -6,13 +7,6 @@ import { resolveBackendUrl } from "./backend.js";
  * Falls back gracefully — callers should always have an HTTP fallback.
  */
 
-function readGithubToken() {
-  try {
-    return localStorage.getItem('github_token') || '';
-  } catch {
-    return '';   // storage may be blocked
-  }
-}
 
 const WS_RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 16000];
 const HEARTBEAT_INTERVAL = 30000;
@@ -33,6 +27,14 @@ export class SessionWebSocket {
 
   connect() {
     if (this._closed) return;
+    // Authenticate the upgrade with a single-use, 60-second ticket from the
+    // web session: browsers cannot set headers on a WebSocket handshake, and
+    // no GitHub or GitLab token is held by the browser any more.
+    fetchWsTicket().then((ticket) => this._open(ticket), () => this._open(''));
+  }
+
+  _open(ticket) {
+    if (this._closed) return;
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const backendUrl = resolveBackendUrl();
@@ -46,13 +48,8 @@ export class SessionWebSocket {
       wsUrl = `${protocol}//${window.location.host}/ws/sessions/${this._sessionId}`;
     }
 
-    // Carry the GitHub token so repo-mode chat runs as *this* user. The
-    // browser WebSocket API cannot set an Authorization header, so it rides in
-    // the query string; the server prefers the header when a native client
-    // sends one.
-    const githubToken = readGithubToken();
-    if (githubToken) {
-      wsUrl += `?token=${encodeURIComponent(githubToken)}`;
+    if (ticket) {
+      wsUrl += `?ticket=${encodeURIComponent(ticket)}`;
     }
 
     try {
