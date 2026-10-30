@@ -111,12 +111,22 @@ def route_for(model: str, owned_by: str, *, route: str, gateway: str, ollama: st
 
 
 def run_model(client: ChatClient, model: str, tasks: List[Task], *, repeats: int,
-              transcripts, seed: Optional[int]) -> tuple[List[Dict[str, Any]], str]:
+              transcripts, seed: Optional[int],
+              done: Optional[Dict[tuple, tuple]] = None) -> tuple[List[Dict[str, Any]], str]:
+    """Run every task; ``done`` holds already-answered (row, transcript) pairs to keep."""
     rows: List[Dict[str, Any]] = []
     infra_streak = 0
-    any_success = False
+    any_success = bool(done)
     for index, task in enumerate(tasks, 1):
         for repeat in range(1, repeats + 1):
+            kept = (done or {}).get((task.id, repeat))
+            if kept:
+                row, entry = kept
+                rows.append(dict(row))
+                if entry:
+                    transcripts.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                print(f"  kept [{index:>2}/{len(tasks)}] {task.id:<34} (answered in an earlier run)", flush=True)
+                continue
             if infra_streak >= CIRCUIT_BREAKER and not any_success:
                 rows.append(_skipped(task, repeat, "skipped: model unavailable"))
                 continue
@@ -204,6 +214,11 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--match", default="", help="with --new: only model ids containing this text")
     parser.add_argument("--owned-by", default="", help="with --new: only models this provider owns (e.g. ollama, openwebui)")
     parser.add_argument("--limit", type=int, default=3, help="with --new: at most this many models per run")
+    parser.add_argument("--resume", action="store_true",
+                        help="keep tasks a model already answered for this task set; run only the missing "
+                             "or serving-error ones")
+    parser.add_argument("--rate-limit-retries", type=int, default=8,
+                        help="retries for HTTP 429, with Retry-After and adaptive pacing")
     return parser.parse_args(argv)
 
 
@@ -304,14 +319,21 @@ def main(argv: Optional[List[str]] = None) -> int:
             endpoint, route = route_for(model, owned_by, route=args.route,
                                         gateway=args.base_url, ollama=args.ollama_url)
             client = ChatClient(endpoint, api_key=args.api_key if route == "gateway" else "",
-                                timeout_s=args.timeout, retries=args.retries)
+                                timeout_s=args.timeout, retries=args.retries,
+                                rate_limit_retries=args.rate_limit_retries)
             claimed = identify(client, model) if not overrides.get(model) and needs_identity(model) else ""
             name, name_source = display_name(model, override=overrides.get(model), claimed=claimed,
                                              vendor=str(meta.get("upstream_owned_by") or ""))
-            print(f"\n▶ {name}  ({route}, {len(tasks)} tasks × {args.repeats})", flush=True)
+            done = {}
+            if args.resume:
+                from .resume import answered
+
+                done = answered(args.out_dir, manifest["task_set_digest"], model, tasks)
+            print(f"\n▶ {name}  ({route}, {len(tasks)} tasks × {args.repeats}"
+                  f"{f', {len(done)} already answered' if done else ''})", flush=True)
             began = time.monotonic()
             rows, status = run_model(client, model, tasks, repeats=args.repeats,
-                                     transcripts=transcripts, seed=args.seed)
+                                     transcripts=transcripts, seed=args.seed, done=done)
             if "agentic" in suites and status == "ok":
                 from .suites.agentic import run_agentic
 

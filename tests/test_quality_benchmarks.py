@@ -188,7 +188,10 @@ def test_rate_limits_wait_for_retry_after_and_have_their_own_budget(monkeypatch)
     result = client.chat("m", [{"role": "user", "content": "hi"}])
 
     assert result.ok and result.attempts == 3
-    assert waits == [7.0, 4.0], "Retry-After honoured, then exponential back-off"
+    # Retry-After honoured (7), then pacing kicks in before each further request
+    # (5, then 10) alongside the exponential back-off (4).
+    assert waits == [7.0, 5.0, 4.0, 10.0]
+    assert client.pace_s == 7.0, "a success narrows the pace again"
 
 
 def test_rate_limiting_does_not_trip_the_unavailable_breaker():
@@ -203,6 +206,49 @@ def test_rate_limiting_does_not_trip_the_unavailable_breaker():
                                      transcripts=io.StringIO(), seed=7)
     assert status == "ok"
     assert sum(1 for r in rows if r["passed"]) == len(ALL_TASKS) - 5
+
+
+def test_resume_keeps_answers_and_reruns_only_serving_errors(tmp_path):
+    """A rate-limited run is finished later without asking for answers twice."""
+    from benchmarks.resume import answered
+
+    tasks = load_tasks(["reasoning"])
+    digest = task_set_digest(tasks)
+    first, second, third = tasks[0], tasks[1], tasks[2]
+    (tmp_path / "A.json").write_text(json.dumps({
+        "run_id": "A", "manifest": {"task_set_digest": digest},
+        "models": [{"id": "m", "status": "ok"}],
+        "results": [
+            {"model": "m", "task": first.id, "suite": "reasoning", "category": "x", "repeat": 1,
+             "passed": True, "infra_error": False, "detail": "answered"},
+            {"model": "m", "task": second.id, "suite": "reasoning", "category": "x", "repeat": 1,
+             "passed": None, "infra_error": True, "detail": "http_429: slow down"}]}), encoding="utf-8")
+    (tmp_path / "A.transcripts.jsonl").write_text(json.dumps(
+        {"model": "m", "task": first.id, "repeat": 1, "text": "Answer: 5", "error_kind": None}) + "\n",
+        encoding="utf-8")
+    # An interrupted later run left only a transcript: one answer, one 429.
+    (tmp_path / "B.transcripts.jsonl").write_text("\n".join([
+        json.dumps({"model": "m", "task": third.id, "repeat": 1, "text": third.reference.text,
+                    "error_kind": None, "latency_s": 2.0}),
+        json.dumps({"model": "m", "task": second.id, "repeat": 1, "text": "",
+                    "error_kind": "http_429"})]) + "\n", encoding="utf-8")
+
+    done = answered(tmp_path, digest, "m", tasks)
+
+    assert set(done) == {(first.id, 1), (third.id, 1)}, "serving errors are re-run, answers kept"
+    assert done[(third.id, 1)][0]["passed"] is True, "an orphan's answer is graded on the way in"
+
+    asked = []
+
+    class Recording(_ScriptedClient):
+        def chat(self, model, messages, **kwargs):
+            asked.append(next(t.id for t in tasks if t.messages == messages))
+            return super().chat(model, messages, **kwargs)
+
+    rows, status = run_mod.run_model(Recording(), "m", tasks, repeats=1, transcripts=io.StringIO(),
+                                     seed=7, done=done)
+    assert status == "ok" and len(rows) == len(tasks)
+    assert first.id not in asked and third.id not in asked and second.id in asked
 
 
 def test_a_permanent_refusal_is_not_retried(monkeypatch):
