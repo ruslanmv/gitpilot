@@ -15,7 +15,7 @@ OpenAI-compatible gateway instead (:func:`frontier_tier`)::
 
     export GITPILOT_PROVIDER=ollabridge
     export GITPILOT_BENCH_FRONTIER_FAMILY=ollabridge
-    export GITPILOT_BENCH_FRONTIER_MODEL=openwebui/ext-claude-standard
+    export GITPILOT_BENCH_FRONTIER_MODEL=provider/frontier-model
     python -m bench --tiers frontier
 """
 from __future__ import annotations
@@ -52,7 +52,7 @@ class ModelTier:
 
 
 #: The frontier rung can be served by any OpenAI-compatible gateway instead of
-#: the Anthropic API — a local OllaBridge fronting a hosted Claude, say. The claim
+#: the Anthropic API — a local OllaBridge fronting a hosted model, say. The claim
 #: under test does not change (a NATIVE tool-calling model drives the loop); only
 #: where the requests go does, and ``GITPILOT_PROVIDER`` has to agree with the
 #: family, because :func:`gitpilot.agent.providers.build_provider` reads the

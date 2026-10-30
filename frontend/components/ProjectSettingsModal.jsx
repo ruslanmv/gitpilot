@@ -21,7 +21,9 @@ export default function ProjectSettingsModal({
   }, [isOpen]);
 
   const title = useMemo(() => {
-    const repoLabel = owner && repo ? `${owner}/${repo}` : "Project";
+    // "gitlab:group:sub" is the URL-safe form of a nested GitLab namespace.
+    const namespace = String(owner || "").replace(/^gitlab:/, "").replace(/:/g, "/");
+    const repoLabel = owner && repo ? `${namespace}/${repo}` : "Project";
     return `Project Settings — ${repoLabel}`;
   }, [owner, repo]);
 

@@ -33,6 +33,7 @@ def build_default_registry(
     include_testing: bool = True,
     include_todo: bool = True,
     include_web: bool = True,
+    forge_provider: str = "github",
 ) -> ToolRegistry:
     """Return the replay-safe registry holding GitPilot's built-in tools.
 
@@ -45,6 +46,9 @@ def build_default_registry(
     RuntimeToolRegistry behaves exactly like ToolRegistry for direct calls that
     have no run/session identity; durable idempotency activates only inside real
     agent runs, after the policy/approval boundary.
+
+    ``forge_provider`` picks the hosting provider's forge tools (``github.*`` or
+    ``gitlab.*``); a run is only ever offered the tools of its own repository.
     """
     registry = RuntimeToolRegistry()
     if include_filesystem:
@@ -54,7 +58,7 @@ def build_default_registry(
     if include_git:
         git.register(registry)
     if include_forge:
-        forge.register(registry)
+        forge.register(registry, provider=forge_provider)
     if include_testing:
         testing.register(registry)
     if include_todo:

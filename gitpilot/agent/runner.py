@@ -345,6 +345,7 @@ class AgentRunner:
             # would spend a turn discovering that.
             include_git=request.workspace_root is not None,
             include_forge=request.repo is not None,
+            forge_provider=getattr(request.repo, "provider", "github") or "github",
         )
         profile = profile or profile_for_settings(
             model=request.model, workspace=request.workspace_root,
@@ -738,6 +739,7 @@ class AgentRunner:
         registry = build_default_registry(
             include_git=request.workspace_root is not None,
             include_forge=request.repo is not None,
+            forge_provider=getattr(request.repo, "provider", "github") or "github",
         )
 
         from ..flags import is_on

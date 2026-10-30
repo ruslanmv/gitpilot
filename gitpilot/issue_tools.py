@@ -9,8 +9,8 @@ from typing import Optional
 
 from crewai.tools import tool
 
-from .agent_tools import get_repo_context
-from . import github_issues as gi
+from .agent_tools import bound_scm as gi
+from .agent_tools import get_repo_context, get_repo_provider
 from .idempotency import run_legacy_mutation
 
 
@@ -98,7 +98,7 @@ def create_issue(
             "assignees": assignee_list,
         }
         issue = run_legacy_mutation(
-            scope=f"github.issue.create:{owner}/{repo}",
+            scope=f"{get_repo_provider()}.issue.create:{owner}/{repo}",
             idempotency_key=idempotency_key,
             arguments=args,
             operation=lambda: _run_async(
@@ -143,7 +143,7 @@ def update_issue(
         if assignees:
             kwargs["assignees"] = [a.strip() for a in assignees.split(",") if a.strip()]
         issue = run_legacy_mutation(
-            scope=f"github.issue.update:{owner}/{repo}:{issue_number}",
+            scope=f"{get_repo_provider()}.issue.update:{owner}/{repo}:{issue_number}",
             idempotency_key=idempotency_key,
             arguments=kwargs,
             operation=lambda: _run_async(
@@ -168,7 +168,7 @@ def add_issue_comment(
     try:
         owner, repo, token, _branch = get_repo_context()
         comment = run_legacy_mutation(
-            scope=f"github.issue.comment:{owner}/{repo}:{issue_number}",
+            scope=f"{get_repo_provider()}.issue.comment:{owner}/{repo}:{issue_number}",
             idempotency_key=idempotency_key,
             arguments={"body": body},
             operation=lambda: _run_async(

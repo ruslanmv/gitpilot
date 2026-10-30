@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — GitLab support and server-side sign-in sessions
+- **GitLab works end to end.**
+  - Sign in with GitLab (GitLab.com, or one self-managed host set with `GITLAB_BASE_URL`).
+  - Browse membership projects, including private projects and projects in nested groups.
+  - List, create and switch branches.
+  - Read, create, update and delete files as commits.
+  - View commit history and diffs.
+  - Work with issues and merge requests.
+  - Plan and execute AI changes on a working branch and open a merge request.
+  - The same agents serve both providers through the new `gitpilot.scm` dispatch layer;
+    `gitpilot.gitlab_api` returns GitHub-shaped payloads.
+  - The v4 loop gets `gitlab.issue.*`, `gitlab.mr.*` and `gitlab.search.*` tools.
+    Topology grants for `github.*` cover them.
+  - See `docs/GITLAB_INTEGRATION.md`.
+- **Server-side web sessions and an encrypted token vault** (`gitpilot/auth/`).
+  - GitHub and GitLab OAuth use server-side, single-use state with S256 PKCE.
+  - Tokens are stored encrypted with Fernet and never sent to the browser.
+  - Sessions use HttpOnly cookies, with a header fallback for cross-site deployments.
+  - CSRF tokens protect cookie-authenticated writes.
+  - Provider tokens refresh automatically.
+  - New routes: logout and disconnect (both revoke tokens), and single-use WebSocket tickets.
+  - Account sessions are now revocable. A password change or reset signs out other sessions.
+  - Reset links work once.
+  - See `docs/auth.md`.
+- **Sign-in page**: GitLab sign-in works, provider availability is shown, the
+  password-reset view is new, and the OAuth `state` is checked in the browser.
+  Accessibility is improved (landmark, focus management, live regions).
+- **Production and Hugging Face Space deployment.**
+  - Sessions use Postgres when `DATABASE_URL` is set, so they survive Space
+    restarts and redeploys.
+  - Each OAuth sign-in returns to the frontend that started it (production site or
+    Space UI), checked against an allowlist.
+  - `SPACE_HOST` supplies the public URL, a trusted origin and `Secure` cookies.
+  - Inside the embedded huggingface.co page, GitHub sign-in uses the device flow and
+    GitLab continues in a new tab.
+  - A duplicated Space's UI talks to its own backend.
+  - A frontend deployed before its backend keeps users' stored tokens until it can
+    migrate them.
+
+### Security
+- A GitLab token could be sent to `api.github.com` and a GitHub token to GitLab: the
+  frontend picked one token for all requests by a global setting. Credentials are
+  now chosen per repository provider. Each provider's helpers refuse to run inside
+  the other provider's request scope.
+- GitHub OAuth did not actually use PKCE, and the frontend never checked GitHub's
+  `state`. Both are fixed.
+- OAuth state was kept in per-process memory. It is now shared, single-use and bound
+  to the session that started the flow.
+- `GET /api/auth/installation-status` no longer returns the server's own GitHub token.
+- Clones no longer store the access token in `.git/config`.
+- The agent tools' repository context is per run (a context variable), no longer
+  process-global.
+- With `CORS_ORIGINS=*`, session cookies stay `SameSite=Lax`.
+  `CORS_ORIGIN_REGEX` supports preview deployments.
+
+### Changed
+- Browser `localStorage` no longer holds provider tokens. Existing tokens are migrated
+  once, then deleted from the browser.
+- Agent requests, sessions and repository objects carry an explicit `provider` and a
+  stable `repo_id`.
+
 ### Documentation debt (acknowledged)
 This changelog has recorded almost nothing since `0.1.0` while the project
 shipped several substantial programs. They are documented in `docs/`, not here,
@@ -99,7 +160,7 @@ Entries below resume normal per-change logging.
 ### Added — the bench frontier tier can sit behind a gateway
 - **`GITPILOT_BENCH_FRONTIER_MODEL` / `GITPILOT_BENCH_FRONTIER_FAMILY`** point the
   matrix's frontier rung at any OpenAI-compatible gateway (an OllaBridge fronting
-  a hosted Claude, say) instead of requiring `ANTHROPIC_API_KEY`. The claim under
+  a hosted model, say) instead of requiring `ANTHROPIC_API_KEY`. The claim under
   test — a NATIVE tool-calling model drives the loop — does not change, and an
   OllaBridge tier is probed at `/health` like the Ollama tiers are at `/api/tags`.
   `docs/agents.md` describes it, and says plainly that the legacy engine needs a

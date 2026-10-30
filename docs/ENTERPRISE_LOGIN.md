@@ -1,5 +1,11 @@
 # GitPilot Enterprise Login - Implementation Summary
 
+> **Superseded for token storage.** GitHub and GitLab tokens are no longer kept in
+> `localStorage`: they are stored encrypted on the server and the browser holds an
+> HttpOnly session cookie (OAuth uses state + S256 PKCE for both providers). See
+> [Authentication and sessions](auth.md) and [GitLab integration](GITLAB_INTEGRATION.md).
+> The rest of this page describes the original GitHub-only flow.
+
 ## Overview
 
 This document provides an overview of the enterprise GitHub login system implemented for GitPilot, featuring a professional Claude Code-branded authentication interface with OAuth 2.0 and Personal Access Token support.

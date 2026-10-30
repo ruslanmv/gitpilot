@@ -155,14 +155,20 @@ class TestRiskAndCapabilities:
         assert "no repository bound" in result.content
 
 
-class TestGitLabIsNotHalfWired:
-    def test_no_gitlab_tools_are_registered(self, registry):
-        """Tools that would fail on the first call are worse than absent ones."""
-        assert forge_tools.gitlab_available() is False
+class TestGitLabTwins:
+    def test_a_github_run_is_offered_no_gitlab_tools(self, registry):
+        """Only the bound repository's provider contributes forge tools."""
         assert not [tool for tool in registry.ids() if tool.startswith("gitlab.")]
 
-    def test_the_stub_list_is_empty_rather_than_partial(self):
-        assert forge_tools.GITLAB_SPECS == []
+    def test_every_github_tool_has_a_complete_gitlab_twin(self):
+        assert forge_tools.gitlab_available() is True
+        github_ids = [spec.id for spec, _ in forge_tools.SPECS]
+        gitlab_ids = [spec.id for spec, _ in forge_tools.GITLAB_SPECS]
+        assert len(gitlab_ids) == len(github_ids)
+        assert "gitlab.mr.create" in gitlab_ids and "gitlab.issue.create" in gitlab_ids
+        assert all(i.startswith("gitlab.") for i in gitlab_ids)
+        for (gh, gh_handler), (gl, gl_handler) in zip(forge_tools.SPECS, forge_tools.GITLAB_SPECS):
+            assert gh_handler is gl_handler and gh.risk == gl.risk and gh.effects == gl.effects
 
 
 class TestWebProviderAbsent:

@@ -113,7 +113,9 @@ export function dispatchEvent(event, handlers = {}) {
  * Stream a chat message via the V2 SSE endpoint.
  *
  * ``options``: ``headers`` (auth), ``permission_mode`` (default ``normal``),
- * ``topology_id``, ``token`` (GitHub token for repository sessions) and
+ * ``topology_id``, ``token`` (a provider token, for API clients that keep
+ * their own; the web app sends none — the server uses the GitPilot session's
+ * GitHub or GitLab connection, by the session repository's provider) and
  * ``fetch`` (an implementation to use instead of the global, for tests).
  *
  * Returns a function that aborts the stream. Aborting is silent: no handler
@@ -136,7 +138,9 @@ export function streamChat(sessionId, message, handlers = {}, options = {}) {
     try {
       const res = await fetchImpl(apiUrl('/api/v2/chat/stream'), {
         method: 'POST',
-        headers: jsonHeaders(options),
+        credentials: options.credentials || 'include',
+        credentials: options.credentials || 'include',
+      headers: jsonHeaders(options),
         body: JSON.stringify(body),
         signal: controller.signal,
       });
@@ -202,6 +206,7 @@ export async function cancelRun(sessionId, options = {}) {
   try {
     const res = await fetchImpl(apiUrl('/api/v2/agent/cancel'), {
       method: 'POST',
+      credentials: options.credentials || 'include',
       headers: jsonHeaders(options),
       body: JSON.stringify({ session_id: sessionId }),
     });
@@ -220,6 +225,7 @@ export async function respondToApproval(sessionId, requestId, approved, scope = 
   try {
     const res = await fetchImpl(apiUrl('/api/v2/approval/respond'), {
       method: 'POST',
+      credentials: options.credentials || 'include',
       headers: jsonHeaders(options),
       body: JSON.stringify({
         session_id: sessionId,

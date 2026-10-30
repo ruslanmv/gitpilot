@@ -39,7 +39,19 @@ ENV HOME=/home/user \
     OLLABRIDGE_BASE_URL=https://ruslanmv-ollabridge.hf.space \
     GITPILOT_OLLABRIDGE_MODEL=qwen2.5:1.5b \
     CORS_ORIGINS="*" \
-    GITPILOT_CONFIG_DIR=/tmp/gitpilot
+    GITPILOT_CONFIG_DIR=/tmp/gitpilot \
+    GITPILOT_PUBLIC_BASE_URL=https://gitpilot.ruslanmv.com
+
+# Sign-in (docs/auth.md, docs/GITLAB_INTEGRATION.md). This Space is also the
+# backend of the production site, so GITPILOT_PUBLIC_BASE_URL points there:
+# email links and the default OAuth redirect go to gitpilot.ruslanmv.com, while
+# the Space's own UI (https://$SPACE_HOST) gets its OAuth redirect back on
+# itself automatically. Register BOTH https://gitpilot.ruslanmv.com/auth and
+# https://ruslanmv-gitpilot.hf.space/auth as callback URLs in the GitHub App and
+# the GitLab application. Set as Space secrets, not here:
+#   GITPILOT_TOKEN_ENCRYPTION_KEY, GITPILOT_AUTH_SECRET,
+#   GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET, GITLAB_CLIENT_ID / GITLAB_CLIENT_SECRET.
+# Space variables override every default above (e.g. for a duplicated Space).
 
 WORKDIR $HOME/app
 
@@ -58,6 +70,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
         "pydantic>=2.7.0,<2.12.0" \
         "rich>=13.0.0" \
         "pyjwt[crypto]>=2.8.0" \
+        "cryptography>=42.0" \
         "psycopg[binary]>=3.1" \
         "resend>=2.0.0"
 

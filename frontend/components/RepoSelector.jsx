@@ -7,6 +7,8 @@ const GithubMark = () => (
   </svg>
 );
 
+const PROVIDER_TAB_KEY = "gitpilot_repo_provider_tab";
+
 export default function RepoSelector({ onSelect, workspace, onOpenLocal }) {
   // Runtime mental model (server-authoritative; defaults to local for dev):
   //   cloud → no user filesystem, GitHub is the way in (folder/Git hidden)
@@ -14,11 +16,35 @@ export default function RepoSelector({ onSelect, workspace, onOpenLocal }) {
   const runtime = workspace?.runtime === "cloud" ? "cloud" : "local";
   const isCloud = runtime === "cloud";
 
-  // Initial hint from localStorage to avoid a flash of the search box; the
-  // server's github_connected flag (below) is the source of truth.
-  const hasTokenHint =
-    typeof window !== "undefined" && !!localStorage.getItem("github_token");
-  const [needsGitHub, setNeedsGitHub] = useState(!hasTokenHint);
+  // Which provider's repositories to browse. Only a UI preference: each
+  // request is authenticated by the server session, whose GitHub and GitLab
+  // connections are independent. The server's *_connected flag (below) says
+  // whether the chosen provider is linked.
+  const [gitProvider, setGitProvider] = useState(() => {
+    try { return localStorage.getItem(PROVIDER_TAB_KEY) === "gitlab" ? "gitlab" : "github"; } catch { return "github"; }
+  });
+  const [needsGitHub, setNeedsGitHub] = useState(false);
+
+  const switchProvider = (provider) => {
+    try { localStorage.setItem(PROVIDER_TAB_KEY, provider); } catch { /* storage may be blocked */ }
+    setGitProvider(provider);
+    setRepos([]);
+    setNeedsGitHub(false);
+  };
+  const providerTabs = (
+    <div className="gp-repo-providers" role="group" aria-label="Git provider" style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+      {["github", "gitlab"].map((provider) => (
+        <button key={provider} type="button" onClick={() => switchProvider(provider)}
+          aria-pressed={gitProvider === provider}
+          style={{ flex: 1, padding: "9px 12px", borderRadius: 8, cursor: "pointer",
+            border: gitProvider === provider ? "1px solid #ed8464" : "1px solid #343a48",
+            color: "#f0f1f6", background: gitProvider === provider ? "#3b2c2e" : "#202532",
+            fontSize: 12, fontWeight: gitProvider === provider ? 700 : 500 }}>
+          {provider === "github" ? "GitHub" : "GitLab"}
+        </button>
+      ))}
+    </div>
+  );
 
   // Local-project entry (local runtime only).
   const [localKind, setLocalKind] = useState("folder"); // "folder" | "local_git"
@@ -59,13 +85,13 @@ export default function RepoSelector({ onSelect, workspace, onOpenLocal }) {
         params.append("query", searchQuery);
       }
 
-      const url = `/api/repos?${params.toString()}`;
+      const url = `${gitProvider === "gitlab" ? "/api/gitlab/projects" : "/api/repos"}?${params.toString()}`;
       const res = await authFetch(url);
       const data = await res.json().catch(() => ({}));
 
       // GitHub not linked yet → a normal pre-link state, never an error. The
       // backend returns 200 + github_connected:false; a 401 means the same.
-      if (res.status === 401 || data.github_connected === false) {
+      if (res.status === 401 || (gitProvider === "gitlab" ? data.gitlab_connected === false : data.github_connected === false)) {
         setNeedsGitHub(true);
         return;
       }
@@ -106,7 +132,7 @@ export default function RepoSelector({ onSelect, workspace, onOpenLocal }) {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [query]);
+  }, [query, gitProvider]);
 
   /**
    * Load more repositories (next page)
@@ -147,7 +173,7 @@ export default function RepoSelector({ onSelect, workspace, onOpenLocal }) {
   useEffect(() => {
     fetchRepos(1, false, "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [gitProvider]);
 
   /**
    * Format repository count for display
@@ -190,19 +216,18 @@ export default function RepoSelector({ onSelect, workspace, onOpenLocal }) {
     return (
       <div className="repo-search-box">
         <div className="repo-connect-card">
+          {providerTabs}
           <div className="repo-connect-icon"><GithubMark /></div>
-          <div className="repo-connect-title">Connect GitHub to start</div>
+          <div className="repo-connect-title">Connect {gitProvider === "gitlab" ? "GitLab" : "GitHub"} to start</div>
           <div className="repo-connect-text">
-            GitPilot is running in a <strong>cloud workspace</strong>. Link your GitHub
-            account so we can list your repositories and create a working copy to
-            edit, review, and open pull requests.
+            Link your {gitProvider === "gitlab" ? "GitLab" : "GitHub"} account to discover repositories.
+            GitLab projects can be browsed; AI agent and merge-request operations are being integrated.
           </div>
-          <a className="repo-connect-btn" href="/auth?connect=github&view=github">
-            <GithubMark /> Link GitHub account
+          <a className="repo-connect-btn" href={`/auth?connect=${gitProvider}&view=${gitProvider}`}>
+            {gitProvider === "github" && <GithubMark />} Link {gitProvider === "gitlab" ? "GitLab" : "GitHub"} account
           </a>
           <div className="repo-connect-hint">
-            GitHub access is required in cloud mode. You'll authorize GitPilot with a
-            short device code on github.com — no password shared.
+            GitHub supports browser or device authorization. GitLab uses OAuth in your browser.
           </div>
         </div>
       </div>
@@ -229,6 +254,7 @@ export default function RepoSelector({ onSelect, workspace, onOpenLocal }) {
     return (
       <div className="repo-search-box">
         <div className="repo-connect-card">
+          {providerTabs}
           <div className="repo-connect-title">Open a local project</div>
           <div className="repo-connect-text">
             Choose a <strong>folder</strong> or a <strong>local Git repository</strong>{" "}
@@ -257,11 +283,9 @@ export default function RepoSelector({ onSelect, workspace, onOpenLocal }) {
             {opening ? "Opening…" : localKind === "folder" ? "Open folder" : "Open repository"}
           </button>
           <div className="repo-connect-hint">
-            GitHub is optional in local mode.{" "}
-            <a href="/auth?connect=github&view=github" style={{ color: "#8ab4f8" }}>
-              Connect GitHub
-            </a>{" "}
-            later to access private repos or open pull requests.
+            Or <a href={`/auth?connect=${gitProvider}&view=${gitProvider}`} style={{ color: "#f18b68" }}>
+              connect {gitProvider === "gitlab" ? "GitLab" : "GitHub"}
+            </a> to browse your projects.
           </div>
         </div>
       </div>
@@ -270,10 +294,11 @@ export default function RepoSelector({ onSelect, workspace, onOpenLocal }) {
 
   return (
     <div className="repo-search-box">
+      {providerTabs}
       <div style={{ fontSize: "11px", opacity: 0.6, padding: "4px 8px", marginBottom: "8px" }}>
         {isCloud
           ? "Choose a repository to create a working copy in this cloud workspace."
-          : "GitHub is optional. You can also open a local folder or Git repo from Admin → Workspace Modes."}
+          : `${gitProvider === "gitlab" ? "GitLab" : "GitHub"} repositories. Local folders are available in Admin → Workspace Modes.`}
       </div>
       {/* Search Header */}
       <div className="repo-search-header">
@@ -332,7 +357,9 @@ export default function RepoSelector({ onSelect, workspace, onOpenLocal }) {
           >
             <div className="repo-item-content">
               <span className="repo-name">{r.name}</span>
-              <span className="repo-owner">{r.owner}</span>
+              <span className="repo-owner">
+                {r.owner} · {r.provider === "gitlab" ? "GitLab" : "GitHub"}{r.private ? " · private" : ""}
+              </span>
             </div>
             {r.private && (
               <span className="repo-badge-private">Private</span>
@@ -378,8 +405,8 @@ export default function RepoSelector({ onSelect, workspace, onOpenLocal }) {
         )}
       </div>
 
-      {/* GitHub App Installation Notice */}
-      <div className="repo-github-notice">
+      {/* GitHub App Installation Notice (only for GitHub projects) */}
+      {gitProvider === "github" && <div className="repo-github-notice">
         <svg
           className="repo-github-icon"
           height="20"
@@ -407,7 +434,7 @@ export default function RepoSelector({ onSelect, workspace, onOpenLocal }) {
             to access private repositories.
           </div>
         </div>
-      </div>
+      </div>}
     </div>
   );
 }

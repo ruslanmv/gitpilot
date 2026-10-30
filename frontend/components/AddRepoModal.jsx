@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { authFetch } from "../utils/api.js";
+import { repoKey } from "../utils/repoApi.js";
 
 /**
  * AddRepoModal — lightweight portal modal for adding repos to context.
@@ -12,24 +13,34 @@ export default function AddRepoModal({ isOpen, onSelect, onClose, excludeKeys = 
   const [query, setQuery] = useState("");
   const [repos, setRepos] = useState([]);
   const [loading, setLoading] = useState(false);
+  // A workspace may mix GitHub and GitLab repositories: pick the source here.
+  const [provider, setProvider] = useState("github");
+  const [notConnected, setNotConnected] = useState(false);
 
   const fetchRepos = useCallback(
     async (searchQuery) => {
       setLoading(true);
+      setNotConnected(false);
       try {
         const params = new URLSearchParams({ per_page: "50" });
         if (searchQuery) params.set("query", searchQuery);
-        const res = await authFetch(`/api/repos?${params}`);
+        const endpoint = provider === "gitlab" ? "/api/gitlab/projects" : "/api/repos";
+        const res = await authFetch(`${endpoint}?${params}`);
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 401 || data.github_connected === false || data.gitlab_connected === false) {
+          setNotConnected(true);
+          setRepos([]);
+          return;
+        }
         if (!res.ok) return;
-        const data = await res.json();
-        setRepos(data.repositories || []);
+        setRepos((data.repositories || []).map((r) => ({ ...r, provider: r.provider || provider })));
       } catch (err) {
         console.warn("AddRepoModal: fetch failed:", err);
       } finally {
         setLoading(false);
       }
     },
-    []
+    [provider]
   );
 
   useEffect(() => {
@@ -47,10 +58,7 @@ export default function AddRepoModal({ isOpen, onSelect, onClose, excludeKeys = 
   }, [query, isOpen, fetchRepos]);
 
   const excludeSet = new Set(excludeKeys);
-  const filtered = repos.filter((r) => {
-    const key = r.full_name || `${r.owner}/${r.name}`;
-    return !excludeSet.has(key);
-  });
+  const filtered = repos.filter((r) => !excludeSet.has(repoKey(r)));
 
   if (!isOpen) return null;
 
@@ -67,6 +75,20 @@ export default function AddRepoModal({ isOpen, onSelect, onClose, excludeKeys = 
           <button type="button" style={styles.closeBtn} onClick={onClose}>
             &times;
           </button>
+        </div>
+
+        <div role="group" aria-label="Repository provider" style={{ display: "flex", gap: 8, padding: "10px 16px 0" }}>
+          {["github", "gitlab"].map((p) => (
+            <button
+              key={p}
+              type="button"
+              aria-pressed={provider === p}
+              onClick={() => setProvider(p)}
+              style={{ ...styles.providerTab, ...(provider === p ? styles.providerTabActive : {}) }}
+            >
+              {p === "gitlab" ? "GitLab" : "GitHub"}
+            </button>
+          ))}
         </div>
 
         <div style={styles.searchBox}>
@@ -87,7 +109,15 @@ export default function AddRepoModal({ isOpen, onSelect, onClose, excludeKeys = 
           {loading && filtered.length === 0 && (
             <div style={styles.statusRow}>Loading...</div>
           )}
-          {!loading && filtered.length === 0 && (
+          {!loading && notConnected && (
+            <div style={styles.statusRow}>
+              {provider === "gitlab" ? "GitLab" : "GitHub"} is not connected.{" "}
+              <a href={`/auth?connect=${provider}&view=${provider}`} style={{ color: "#f18b68" }}>
+                Connect {provider === "gitlab" ? "GitLab" : "GitHub"}
+              </a>
+            </div>
+          )}
+          {!loading && !notConnected && filtered.length === 0 && (
             <div style={styles.statusRow}>
               {excludeKeys.length > 0 && repos.length > 0
                 ? "All matching repos are already in context"
@@ -95,7 +125,7 @@ export default function AddRepoModal({ isOpen, onSelect, onClose, excludeKeys = 
             </div>
           )}
           {filtered.map((r) => {
-            const key = r.full_name || `${r.owner}/${r.name}`;
+            const key = repoKey(r);
             return (
               <button
                 key={r.id || key}
@@ -105,7 +135,7 @@ export default function AddRepoModal({ isOpen, onSelect, onClose, excludeKeys = 
               >
                 <div style={styles.repoInfo}>
                   <span style={styles.repoName}>{r.name}</span>
-                  <span style={styles.repoOwner}>{r.owner}</span>
+                  <span style={styles.repoOwner}>{r.owner} · {r.provider === "gitlab" ? "GitLab" : "GitHub"}</span>
                 </div>
                 <div style={styles.repoMeta}>
                   {r.private && <span style={styles.privateBadge}>Private</span>}
@@ -125,6 +155,11 @@ export default function AddRepoModal({ isOpen, onSelect, onClose, excludeKeys = 
 }
 
 const styles = {
+  providerTab: {
+    flex: 1, padding: "7px 10px", borderRadius: 6, cursor: "pointer", fontSize: 12,
+    border: "1px solid #343a48", color: "#f0f1f6", background: "#202532",
+  },
+  providerTabActive: { border: "1px solid #ed8464", background: "#3b2c2e", fontWeight: 700 },
   overlay: {
     position: "fixed",
     top: 0,

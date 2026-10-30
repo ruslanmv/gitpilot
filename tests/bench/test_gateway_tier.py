@@ -3,7 +3,7 @@
 
 The three-tier matrix needs a NATIVE tool-calling model, and the only way the
 harness knew to reach one was the Anthropic API with ``ANTHROPIC_API_KEY``. A
-machine with no key but a local OllaBridge fronting a hosted Claude could not run
+machine with no key but a local OllaBridge fronting a hosted model could not run
 the tier at all — so the model and family are configurable, the claim (NATIVE)
 is not, and availability is still probed rather than assumed.
 """
@@ -51,12 +51,12 @@ class TestTheDefaultIsUnchanged:
 class TestPointingTheTierAtAGateway:
     def test_model_and_family_come_from_the_environment(self, monkeypatch):
         monkeypatch.setenv(FRONTIER_FAMILY_ENV, "ollabridge")
-        monkeypatch.setenv(FRONTIER_MODEL_ENV, "openwebui/ext-claude-standard")
+        monkeypatch.setenv(FRONTIER_MODEL_ENV, "provider/frontier-model")
 
         tier = frontier_tier()
 
         assert tier.label == "frontier"
-        assert (tier.family, tier.model) == ("ollabridge", "openwebui/ext-claude-standard")
+        assert (tier.family, tier.model) == ("ollabridge", "provider/frontier-model")
         assert tier.expected_dialect == "native", "the claim under test does not move"
         assert tier.requires == "ollabridge", "availability is probed, not assumed"
 

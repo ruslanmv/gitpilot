@@ -208,14 +208,14 @@ python -m bench.gate results.json          # may the default flip?
 
 The frontier tier defaults to the Anthropic API and needs `ANTHROPIC_API_KEY`.
 It can be served by any OpenAI-compatible gateway instead — a local OllaBridge
-fronting a hosted Claude, for instance — by naming the model and provider family;
+fronting a hosted model, for instance — by naming the model and provider family;
 the provider GitPilot is configured for has to agree, because the tier only
 supplies the model name:
 
 ```bash
 export GITPILOT_PROVIDER=ollabridge
 export GITPILOT_BENCH_FRONTIER_FAMILY=ollabridge
-export GITPILOT_BENCH_FRONTIER_MODEL=openwebui/ext-claude-standard
+export GITPILOT_BENCH_FRONTIER_MODEL=provider/frontier-model
 python -m bench --tiers frontier --out frontier.json
 ```
 

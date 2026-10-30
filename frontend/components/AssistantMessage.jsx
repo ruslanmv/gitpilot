@@ -11,6 +11,7 @@ export default function AssistantMessage({
   planStatus,
   owner,
   repo,
+  repoInfo,
   onApproveExecution,
   nextActions,
   relatedPlan,
@@ -68,6 +69,8 @@ export default function AssistantMessage({
                 code={seg.code}
                 owner={owner}
                 repo={repo}
+                repoInfo={repoInfo}
+                branch={branch}
               />
             ) : (
               <p key={i} className="assistant-answer__p">

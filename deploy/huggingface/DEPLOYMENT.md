@@ -133,9 +133,60 @@ Secrets are configured in the HF Space Settings tab, not in the Dockerfile.
 
 | Secret | Purpose | Required |
 |--------|---------|----------|
-| `GITHUB_TOKEN` | GitHub API access | For repo features |
+| `GITPILOT_TOKEN_ENCRYPTION_KEY` | Fernet key for the server-side token vault (users' GitHub/GitLab tokens are stored encrypted, never in the browser) | Recommended |
+| `GITPILOT_AUTH_SECRET` | HMAC secret for email links; also the vault-key fallback | Recommended |
+| `GITHUB_CLIENT_ID` | GitHub OAuth/GitHub App client id. Without a secret, "Continue with GitHub" uses the device flow, which also works inside the embedded Space page | For GitHub sign-in |
+| `GITHUB_CLIENT_SECRET` | Enables GitHub web OAuth (PKCE) when the app is opened in its own tab | Optional |
+| `GITLAB_CLIENT_ID`, `GITLAB_CLIENT_SECRET` | GitLab OAuth application (scopes `api read_user`) | For GitLab sign-in |
+| `GITLAB_BASE_URL` | A self-managed GitLab instead of GitLab.com | Optional |
+| `GITPILOT_ENABLE_ACCOUNTS`, `RESEND_API_KEY` | Email/password accounts and email delivery | Optional |
+| `GITHUB_TOKEN` | Server-wide GitHub token (single-user Spaces only: every visitor would use it) | Optional |
 | `OPENAI_API_KEY` | OpenAI provider | If using OpenAI |
 | `ANTHROPIC_API_KEY` | Anthropic provider | If using Claude |
+
+### Sign-in on the Space
+
+- **Two frontends, one backend.** This Space serves its own UI and is also the backend
+  of the production site `https://gitpilot.ruslanmv.com` (Vercel). Each OAuth sign-in
+  returns to the frontend that started it. Register **both** callback URLs:
+  - in the GitHub App (GitHub OAuth Apps allow only one callback URL; GitHub Apps allow
+    several), and
+  - in the GitLab application (one URI per line).
+
+  The two callback URLs are:
+
+  ```text
+  https://gitpilot.ruslanmv.com/auth
+  https://ruslanmv-gitpilot.hf.space/auth
+  ```
+
+  The image sets `GITPILOT_PUBLIC_BASE_URL=https://gitpilot.ruslanmv.com`, so email
+  links and the default redirect go to production. The Space UI is recognised as
+  same-origin (`SPACE_HOST`). Add further frontends (e.g. preview deployments) with
+  `GITPILOT_OAUTH_REDIRECT_ORIGINS` or `CORS_ORIGIN_REGEX`. A duplicated Space should
+  set `GITPILOT_PUBLIC_BASE_URL` to its own URL.
+- **Rollout order.** Deploy the backend (this Space) before or together with the
+  production frontend. A new frontend served by an old backend keeps users'
+  previously stored tokens and migrates them on the first load after the backend is
+  upgraded.
+- **Embedded page.** `huggingface.co/spaces/...` shows the app in an iframe. Inside it:
+  - GitHub uses the device flow.
+  - GitLab (and GitHub web OAuth) continue in a new tab, because GitHub and GitLab
+    refuse to render their authorization pages in a frame.
+  - The session falls back from the cookie to a header token when the browser blocks
+    cookies in third-party frames.
+  - Opening `https://ruslanmv-gitpilot.hf.space` directly gives the full first-party
+    experience.
+- **Sessions and storage.** Sessions and encrypted tokens live in SQLite under
+  `GITPILOT_CONFIG_DIR` (`/tmp/gitpilot`). They are lost when the Space restarts, and
+  users then sign in again. With Persistent Storage enabled they are kept in
+  `/data/gitpilot/auth` automatically. Set `GITPILOT_TOKEN_ENCRYPTION_KEY` so tokens
+  remain decryptable across restarts and rebuilds.
+- **Generate a vault key:**
+  `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`.
+
+See `docs/auth.md` and `docs/GITLAB_INTEGRATION.md` in the repository for the full
+security model.
 
 At **build time**, secrets are accessed via `--mount=type=secret`:
 
@@ -213,7 +264,9 @@ curl -N -H "Authorization: Bearer $HF_TOKEN" \
 Data written to disk is **lost on restart** unless you enable
 [Persistent Storage](https://huggingface.co/docs/hub/spaces-storage) (uses the
 `/data` directory). The `/data` volume is only available at runtime, not during
-build.
+build. When `/data` is attached and writable, sign-in sessions and the encrypted
+token vault are stored in `/data/gitpilot/auth` automatically (override with
+`GITPILOT_AUTH_DIR` or `GITPILOT_AUTH_DB`).
 
 ---
 

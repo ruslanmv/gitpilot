@@ -7,8 +7,8 @@ from typing import Optional
 
 from crewai.tools import tool
 
-from .agent_tools import get_repo_context
-from . import github_pulls as gp
+from .agent_tools import bound_scm as gp
+from .agent_tools import get_repo_context, get_repo_provider
 from .idempotency import run_legacy_mutation
 
 
@@ -87,7 +87,7 @@ def create_pull_request(
         owner, repo, token, _branch = get_repo_context()
         args = {"title": title, "head": head, "base": base, "body": body, "draft": draft}
         pr = run_legacy_mutation(
-            scope=f"github.pr.create:{owner}/{repo}",
+            scope=f"{get_repo_provider()}.pr.create:{owner}/{repo}",
             idempotency_key=idempotency_key,
             arguments=args,
             operation=lambda: _run_async(
@@ -125,7 +125,7 @@ def merge_pull_request(
             "commit_title": commit_title,
         }
         result = run_legacy_mutation(
-            scope=f"github.pr.merge:{owner}/{repo}:{pull_number}",
+            scope=f"{get_repo_provider()}.pr.merge:{owner}/{repo}:{pull_number}",
             idempotency_key=idempotency_key,
             arguments=args,
             operation=lambda: _run_async(
@@ -177,7 +177,7 @@ def create_pr_review(
     try:
         owner, repo, token, _branch = get_repo_context()
         review = run_legacy_mutation(
-            scope=f"github.pr.review:{owner}/{repo}:{pull_number}",
+            scope=f"{get_repo_provider()}.pr.review:{owner}/{repo}:{pull_number}",
             idempotency_key=idempotency_key,
             arguments={"body": body, "event": event},
             operation=lambda: _run_async(
@@ -204,7 +204,7 @@ def add_pr_comment(
     try:
         owner, repo, token, _branch = get_repo_context()
         comment = run_legacy_mutation(
-            scope=f"github.pr.comment:{owner}/{repo}:{pull_number}",
+            scope=f"{get_repo_provider()}.pr.comment:{owner}/{repo}:{pull_number}",
             idempotency_key=idempotency_key,
             arguments={"body": body},
             operation=lambda: _run_async(

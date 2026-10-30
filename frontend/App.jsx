@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import StartupScreen from "./components/StartupScreen.jsx";
-import LoginPage from "./components/LoginPage.jsx";
 import LandingPage from "./components/LandingPage.jsx";
 import AuthPage from "./components/AuthPage.jsx";
 import RepoSelector from "./components/RepoSelector.jsx";
@@ -26,12 +25,45 @@ import {
   SandboxTab,
   AccountTab,
 } from "./components/AdminTabs";
-import { apiUrl, safeFetchJSON, fetchStatus, getAuthHeaders, clearSessionToken, startSession } from "./utils/api.js";
+import {
+  apiUrl, safeFetchJSON, fetchStatus, startSession, authFetch,
+  fetchSession, migrateLegacyTokens, hasLegacyTokens, logoutSession,
+} from "./utils/api.js";
 import { initApp } from "./utils/appInit.js";
+import {
+  repoKey as makeRepoKey, repoFullName, repoProvider, providerLabel, splitFullName, treeUrl,
+} from "./utils/repoApi.js";
 
-function makeRepoKey(repo) {
-  if (!repo) return null;
-  return repo.full_name || `${repo.owner}/${repo.name}`;
+// Non-secret hint that this browser had a signed-in session, so a reload shows
+// the startup screen (not the landing page) while the HttpOnly session cookie,
+// which scripts cannot read, is being checked.
+const SIGNED_IN_HINT = "gitpilot_signed_in";
+
+function setSignedInHint(on) {
+  try {
+    if (on) localStorage.setItem(SIGNED_IN_HINT, "1");
+    else localStorage.removeItem(SIGNED_IN_HINT);
+  } catch { /* storage may be blocked */ }
+}
+
+function hasSignedInHint() {
+  try { return localStorage.getItem(SIGNED_IN_HINT) === "1"; } catch { return false; }
+}
+
+// The identity shown in the UI: the GitPilot account if there is one, else
+// the first connected provider's profile.
+function userFromSession(info) {
+  if (!info) return null;
+  const providers = info.providers || {};
+  const linked = Object.entries(providers).map(([name, p]) => ({ ...(p.user || {}), provider: name }));
+  if (info.account) {
+    return {
+      login: info.account.email, name: info.account.name || info.account.email,
+      email: info.account.email, providers: linked,
+    };
+  }
+  const first = linked[0];
+  return first ? { ...first, providers: linked } : null;
 }
 
 function uniq(arr) {
@@ -66,6 +98,8 @@ export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [userInfo, setUserInfo] = useState(null);
+  // Public view of the server session: account + connected providers (no tokens).
+  const [sessionInfo, setSessionInfo] = useState(null);
 
   // Startup / enterprise loader state
   const [startupPhase, setStartupPhase] = useState("booting");
@@ -254,6 +288,24 @@ export default function App() {
 
   const [chatBySession, setChatBySession] = useState({});
 
+  // A session records its repository by full path *and* provider + stable id,
+  // so it reopens against the right provider and lists under the right repo.
+  const sessionPayload = (sessionName) => ({
+    repo_full_name: repoFullName(repo),
+    provider: repoProvider(repo),
+    repo_id: repo && repo.id !== undefined ? String(repo.id) : undefined,
+    branch: currentBranch,
+    name: sessionName || undefined,
+    repos: contextRepos.map((e) => ({
+      full_name: repoFullName(e.repo),
+      provider: repoProvider(e.repo),
+      repo_id: e.repo && e.repo.id !== undefined ? String(e.repo.id) : undefined,
+      branch: e.branch,
+      mode: e.repoKey === activeRepoKey ? "write" : "read",
+    })),
+    active_repo: repoFullName(repo),
+  });
+
   const ensureSession = useCallback(
     async (sessionName, seedMessages) => {
       if (activeSessionId) return activeSessionId;
@@ -262,26 +314,10 @@ export default function App() {
       _creatingSessionRef.current = true;
 
       try {
-        const token = localStorage.getItem("github_token");
-        const headers = {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        };
-
-        const res = await fetch(apiUrl("/api/sessions"), {
+        const res = await authFetch("/api/sessions", {
           method: "POST",
-          headers,
-          body: JSON.stringify({
-            repo_full_name: repoKey,
-            branch: currentBranch,
-            name: sessionName || undefined,
-            repos: contextRepos.map((e) => ({
-              full_name: e.repoKey,
-              branch: e.branch,
-              mode: e.repoKey === activeRepoKey ? "write" : "read",
-            })),
-            active_repo: activeRepoKey,
-          }),
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(sessionPayload(sessionName)),
         });
 
         if (!res.ok) return null;
@@ -305,6 +341,7 @@ export default function App() {
         _creatingSessionRef.current = false;
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [activeSessionId, repo, repoKey, currentBranch, contextRepos, activeRepoKey]
   );
 
@@ -312,25 +349,10 @@ export default function App() {
     setActiveSessionId(null);
 
     try {
-      const token = localStorage.getItem("github_token");
-      const headers = {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      };
-
-      const res = await fetch(apiUrl("/api/sessions"), {
+      const res = await authFetch("/api/sessions", {
         method: "POST",
-        headers,
-        body: JSON.stringify({
-          repo_full_name: repoKey,
-          branch: currentBranch,
-          repos: contextRepos.map((e) => ({
-            full_name: e.repoKey,
-            branch: e.branch,
-            mode: e.repoKey === activeRepoKey ? "write" : "read",
-          })),
-          active_repo: activeRepoKey,
-        }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(sessionPayload()),
       });
 
       if (!res.ok) return;
@@ -376,13 +398,7 @@ export default function App() {
   const fetchSessionMessages = useCallback(async (sessionId) => {
     if (!sessionId) return [];
     try {
-      const token = localStorage.getItem("github_token");
-      const headers = { "Content-Type": "application/json" };
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-
-      const res = await fetch(apiUrl(`/api/sessions/${sessionId}/messages`), {
-        headers,
-      });
+      const res = await authFetch(`/api/sessions/${sessionId}/messages`);
       if (!res.ok) {
         console.warn(`[fetchSessionMessages] ${res.status} for ${sessionId}`);
         return [];
@@ -423,24 +439,16 @@ export default function App() {
     return session.branch || null;
   };
 
-  // Probe whether a branch still exists on GitHub.  We deliberately
-  // reuse the existing tree endpoint instead of adding a new one — a
+  // Probe whether a branch still exists on the repository's provider.  We
+  // deliberately reuse the tree endpoint instead of adding a new one — a
   // 200 means the ref resolves, anything else (most importantly 404)
   // means the branch is gone or otherwise unreachable.  Failure
   // degrades to "branch unknown" so a transient network blip falls
   // back gracefully rather than misleading the user.
-  const probeBranchExists = async (repoFullName, branch) => {
-    if (!repoFullName || !branch) return false;
+  const probeBranchExists = async (targetRepo, branch) => {
+    if (!targetRepo || !branch) return false;
     try {
-      const token = localStorage.getItem("github_token");
-      const headers = {};
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-      const res = await fetch(
-        apiUrl(
-          `/api/repos/${repoFullName}/tree?ref=${encodeURIComponent(branch)}`,
-        ),
-        { headers },
-      );
+      const res = await authFetch(treeUrl(targetRepo, branch));
       return res.ok;
     } catch {
       return false;
@@ -471,23 +479,22 @@ export default function App() {
     //    silently landing on the default would mask data loss.
     const target = resolveSessionBranch(session);
     if (target && target !== currentBranch) {
-      const repoFullName =
-        session.repo ||
-        (Array.isArray(session.repos) && session.repos[0]?.full_name);
-      const exists = await probeBranchExists(repoFullName, target);
+      // The sidebar only lists the active repository's sessions, so the
+      // session's repository is the active one (same path and provider).
+      const exists = await probeBranchExists(repo, target);
       if (exists) {
         handleBranchChange(target);
       } else {
         const fallback = defaultBranch || "main";
         showToast(
           "Branch not found",
-          `'${target}' was not found on GitHub. Switched to ${fallback}.`,
+          `'${target}' was not found on ${providerLabel(repo)}. Switched to ${fallback}.`,
         );
         if (fallback !== currentBranch) handleBranchChange(fallback);
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchSessionMessages, currentBranch, defaultBranch]);
+  }, [fetchSessionMessages, currentBranch, defaultBranch, repo]);
 
   const handleDeleteSession = useCallback(
     (deletedId) => {
@@ -814,62 +821,32 @@ export default function App() {
         setAdminStatus(status);
       }
 
-      const token = localStorage.getItem("github_token");
-      const user = localStorage.getItem("github_user");
-
-      if (token && user) {
-        setStartupPhase("validating-auth");
-        setStartupStatusMessage("Validating authentication...");
-        setStartupDetailMessage(
-          "Restoring your GitHub session and confirming access."
-        );
-
-        try {
-          const data = await safeFetchJSON(apiUrl("/api/auth/validate"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ access_token: token }),
-            timeout: 20000, // 20s — first-load GitHub API validation can be slow
-          });
-
-          if (data.authenticated) {
-            setStartupPhase("restoring-session");
-            setStartupStatusMessage("Restoring workspace...");
-            setStartupDetailMessage(
-              "Loading user profile, reconnecting provider state, and preparing the workspace."
-            );
-
-            setIsAuthenticated(true);
-            setUserInfo(JSON.parse(user));
-            setIsLoading(false);
-            return;
-          }
-        } catch (err) {
-          console.error(err);
-        }
-
-        localStorage.removeItem("github_token");
-        localStorage.removeItem("github_user");
-      }
-
-      // No GitHub token — but a GitPilot account session (HttpOnly cookie) may
-      // exist. Recognise it so email users stay signed in across reloads.
+      // Provider tokens are held server-side; the browser only has a session
+      // (HttpOnly cookie, or a header token on cross-site deployments).
+      // Tokens an earlier version left in localStorage are migrated once.
+      setStartupPhase("validating-auth");
+      setStartupStatusMessage("Validating authentication...");
+      setStartupDetailMessage("Restoring your session and confirming repository access.");
       try {
-        const me = await safeFetchJSON(apiUrl("/api/account/me"), {
-          method: "GET",
-          credentials: "include",
-          headers: getAuthHeaders(), // X-GitPilot-Session survives cross-origin
-          timeout: 8000,
-        });
-        if (me && me.id) {
+        if (hasLegacyTokens()) await migrateLegacyTokens();
+        const info = await fetchSession();
+        if (info && info.authenticated) {
+          setStartupPhase("restoring-session");
+          setStartupStatusMessage("Restoring workspace...");
+          setStartupDetailMessage(
+            "Loading user profile, reconnecting provider state, and preparing the workspace."
+          );
+          setSessionInfo(info);
           setIsAuthenticated(true);
-          setUserInfo({ login: me.email, name: me.name || me.email, email: me.email });
+          setUserInfo(userFromSession(info));
+          setSignedInHint(true);
           setIsLoading(false);
           return;
         }
       } catch (err) {
-        /* no account session — fall through to sign-in */
+        console.warn("Session check failed:", err);
       }
+      setSignedInHint(false);
 
       setStartupPhase("ready");
       setStartupStatusMessage("Preparing sign-in...");
@@ -891,39 +868,44 @@ export default function App() {
     }
   };
 
-  const handleAuthenticated = (session) => {
+  const handleAuthenticated = async (session) => {
+    // Re-read the session so the UI reflects every connected provider (a
+    // GitLab sign-in on top of a GitHub one keeps both).
+    let info = null;
+    try { info = await fetchSession(); } catch { /* use what the sign-in returned */ }
+    setSessionInfo(info);
     setIsAuthenticated(true);
-    setUserInfo(session.user);
+    setUserInfo(userFromSession(info) || session?.user || null);
+    setSignedInHint(true);
   };
 
-  const handleLogout = () => {
-    // Best-effort backend logout (clears the session cookie); ignore failures.
-    try {
-      fetch(apiUrl("/api/account/logout"), {
-        method: "POST",
-        credentials: "include",
-        headers: getAuthHeaders(),
-      }).catch(() => {});
-    } catch { /* ignore */ }
-    localStorage.removeItem("github_token");
-    localStorage.removeItem("github_user");
-    clearSessionToken();
+  const handleLogout = async () => {
+    // Revokes the server session and its provider grants, then clears the
+    // local hint; failures still sign the browser out.
+    await logoutSession();
+    setSignedInHint(false);
+    setSessionInfo(null);
     setIsAuthenticated(false);
     setUserInfo(null);
     clearAllContext();
   };
 
-  // In-workspace "Connect GitHub": let an already-signed-in account user run
-  // the GitHub device flow to link their repos, then return to the workspace.
-  // This renders even when authenticated (unlike the sign-in screen below).
+  // In-workspace "Connect GitHub / GitLab", and every OAuth return to /auth:
+  // the sign-in page links the provider to the current session (or starts
+  // one), then returns to the workspace. This renders even when authenticated
+  // (unlike the sign-in screen below), so a provider can be added to an
+  // existing session.
   if (typeof window !== "undefined") {
     const qs = new URLSearchParams(window.location.search);
-    if (window.location.pathname.startsWith("/auth") && qs.get("connect") === "github") {
+    const onAuth = window.location.pathname.startsWith("/auth");
+    const connect = ["github", "gitlab"].includes(qs.get("connect"));
+    const oauthReturn = !!qs.get("state") && !!(qs.get("code") || qs.get("error"));
+    if (onAuth && (connect || oauthReturn)) {
       return (
         <AuthPage
           onAuthenticated={handleAuthenticated}
           backendReady={!!startupStatusSnapshot}
-          connectMode
+          connectMode={connect}
         />
       );
     }
@@ -936,7 +918,7 @@ export default function App() {
   if (!isAuthenticated) {
     const path = typeof window !== "undefined" ? window.location.pathname : "/";
     const hasGithubToken =
-      typeof window !== "undefined" && !!localStorage.getItem("github_token");
+      typeof window !== "undefined" && (hasSignedInHint() || hasLegacyTokens());
 
     // The auth/device-flow screen lives at "/auth"; it manages its own backend
     // readiness via the backendReady prop, so render it immediately.
@@ -989,7 +971,7 @@ export default function App() {
               {!sidebarCollapsed && (
                 <div>
                   <div className="logo-title">GitPilot</div>
-                  <div className="logo-subtitle">Agentic GitHub Copilot</div>
+                  <div className="logo-subtitle">Agentic GitHub &amp; GitLab Copilot</div>
                 </div>
               )}
             </div>
@@ -1242,9 +1224,12 @@ export default function App() {
 
               {adminTab === "integrations" && (
                 <IntegrationsTab
-                  userInfo={userInfo}
-                  onDisconnect={handleLogout}
                   showToast={showToast}
+                  onSessionChange={(info) => {
+                    setSessionInfo(info);
+                    if (info && !info.authenticated) handleLogout();
+                    else if (info) setUserInfo(userFromSession(info));
+                  }}
                 />
               )}
 
@@ -1343,8 +1328,12 @@ export default function App() {
 
       {repo && (
         <ProjectSettingsModal
-          owner={repo.full_name?.split("/")[0] || repo.owner}
-          repo={repo.full_name?.split("/")[1] || repo.name}
+          // GitLab namespaces may be nested; "gitlab:group:sub" keeps them
+          // in one URL path segment for the project-settings routes.
+          owner={repoProvider(repo) === "gitlab"
+            ? `gitlab:${splitFullName(repoFullName(repo)).owner.replace(/\//g, ":")}`
+            : splitFullName(repoFullName(repo)).owner || repo.owner}
+          repo={splitFullName(repoFullName(repo)).name || repo.name}
           isOpen={settingsOpen}
           onClose={() => setSettingsOpen(false)}
           activeEnvId={activeEnvId}

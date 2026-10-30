@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { apiUrl } from "../utils/api.js";
+import { apiUrl, authFetch } from "../utils/api.js";
+import { getRepoAccess, isGitLab, treeUrl } from "../utils/repoApi.js";
 import FileTree from "./FileTree.jsx";
 import BranchPicker from "./BranchPicker.jsx";
 import SandboxStatusWidget from "./SandboxStatusWidget.jsx";
@@ -99,42 +100,34 @@ export default function ProjectContextPanel({
       retryTimeoutRef.current = null;
     }
 
-    let headers = {};
-    try {
-      const token = localStorage.getItem("github_token");
-      if (token) headers = { Authorization: `Bearer ${token}` };
-    } catch (e) {
-      console.warn("Unable to read github_token:", e);
-    }
-
     let cancelled = false;
-    const cacheBuster = `&_t=${Date.now()}&retry=${retryCount}`;
+    const gitlab = isGitLab(repo);
 
-    // A) Access Check (with Stale Cache Fix)
-    fetch(apiUrl(`/api/auth/repo-access?owner=${repo.owner}&repo=${repo.name}${cacheBuster}`), {
-      headers,
-      cache: "no-cache",
-    })
-      .then(async (res) => {
+    // A) Access check through the repository's own provider: GitHub reports
+    //    push access + GitHub App installation, GitLab the project role.
+    getRepoAccess(repo)
+      .then((access) => {
         if (cancelled) return;
-        const data = await res.json().catch(() => ({}));
-
-        if (!res.ok) {
-          setAccessInfo({ can_write: false, app_installed: false, auth_type: "none" });
-          return;
-        }
-
+        const data = {
+          can_write: access.canWrite,
+          app_installed: gitlab ? access.canWrite : access.appInstalled,
+          auth_type: access.authType,
+          provider: gitlab ? "gitlab" : "github",
+        };
         setAccessInfo(data);
 
         // Auto-retry if user has push access but App is not detected yet (Stale Cache)
-        if (data.can_write && !data.app_installed && retryCount === 0) {
+        if (!gitlab && data.can_write && !data.app_installed && retryCount === 0) {
           retryTimeoutRef.current = setTimeout(() => {
             setRetryCount(1);
           }, 1000);
         }
       })
       .catch(() => {
-        if (!cancelled) setAccessInfo({ can_write: false, app_installed: false, auth_type: "none" });
+        if (!cancelled) {
+          setAccessInfo({ can_write: false, app_installed: false, auth_type: "none",
+            provider: gitlab ? "gitlab" : "github" });
+        }
       });
 
     // B) Tree count for the selected branch
@@ -142,10 +135,7 @@ export default function ProjectContextPanel({
     const hadFileCount = fileCount > 0;
     if (!hadFileCount) setAnalyzing(true);
 
-    fetch(apiUrl(`/api/repos/${repo.owner}/${repo.name}/tree?ref=${encodeURIComponent(branch)}&_t=${Date.now()}`), {
-      headers,
-      cache: "no-cache",
-    })
+    authFetch(treeUrl(repo, branch), { cache: "no-cache" })
       .then(async (res) => {
         if (cancelled) return;
         const data = await res.json().catch(() => ({}));
@@ -154,7 +144,8 @@ export default function ProjectContextPanel({
           setFileCount(0);
           return;
         }
-        setFileCount(Array.isArray(data.files) ? data.files.length : 0);
+        // GitLab trees include directories; count files only, as GitHub does.
+        setFileCount(Array.isArray(data.files) ? data.files.filter((f) => f.type !== "tree").length : 0);
       })
       .catch((err) => {
         if (cancelled) return;
@@ -168,7 +159,7 @@ export default function ProjectContextPanel({
       if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [repo?.owner, repo?.name, branch, refreshTrigger, retryCount]);
+  }, [repo?.provider, repo?.id, repo?.owner, repo?.name, branch, refreshTrigger, retryCount]);
 
   const showToast = (title, msg) => {
     setToast({ visible: true, title, msg });
@@ -402,7 +393,11 @@ export default function ProjectContextPanel({
   let statusColor = theme.textSecondary;
   let showInstallCard = false;
 
-  if (!analyzing && accessInfo) {
+  if (!analyzing && accessInfo && accessInfo.provider === "gitlab") {
+    // GitLab has no app to install: Developer role (or higher) can push.
+    statusText = accessInfo.can_write ? "Write Access ✓" : "Read Only (needs Developer role)";
+    statusColor = accessInfo.can_write ? theme.successColor : theme.warningText;
+  } else if (!analyzing && accessInfo) {
     if (accessInfo.app_installed) {
       statusText = "Write Access ✓";
       statusColor = theme.successColor;

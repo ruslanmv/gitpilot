@@ -3,12 +3,14 @@ Agent Tools for GitPilot Multi-Agent System
 Provides CrewAI-compatible tools for agents to explore and analyze repositories.
 """
 import asyncio
+import contextvars
+import functools
 import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 from crewai.tools import tool
 
-from .github_api import get_file, get_repo_tree
+from . import scm as _scm
 from .glob_match import GLOB_DEFAULT_MAX_RESULTS as _GLOB_DEFAULT_MAX_RESULTS
 from .glob_match import GLOB_HARD_MAX_RESULTS as _GLOB_HARD_MAX_RESULTS
 from .glob_match import glob_match, glob_to_regex
@@ -63,9 +65,14 @@ def _sanitize_tool_arg(value: Any, fallback_key: str = "description") -> str:
         )
     return str(value)
 
-# Global context for current repository
-# Now includes 'token' to ensure tools can authenticate even in threads
-# AND includes 'branch' to ensure tools operate on the correct ref (not default HEAD/main)
+# Current repository context for tools: owner, repo, token, branch and the
+# hosting provider (github | gitlab). It lives in a context variable so
+# concurrent runs never see each other's repository or credential; CrewAI tool
+# threads receive it through ``contextvars.copy_context()``. The process-global
+# copy is only a fallback for a thread started without the context.
+_repo_context_var: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar(
+    "agent_repo_context", default=None
+)
 _current_repo_context: Dict[str, Any] = {}
 _context_lock = threading.RLock()
 
@@ -75,29 +82,105 @@ def set_repo_context(
     repo: str,
     token: Optional[str] = None,
     branch: Optional[str] = None,
+    provider: Optional[str] = None,
 ):
-    """Set the current repository context for tools."""
+    """Set the current repository context for tools.
+
+    ``provider`` defaults to the provider bound by ``scm.execution_context``
+    (GitHub when none is bound), so the credential and the provider it belongs
+    to are always stored together.
+    """
     global _current_repo_context
+    ctx = {
+        "owner": owner,
+        "repo": repo,
+        "token": token,
+        "branch": branch or "HEAD",
+        "provider": _scm.provider_for(provider),
+    }
+    _repo_context_var.set(ctx)
     with _context_lock:
-        _current_repo_context = {
-            "owner": owner,
-            "repo": repo,
-            "token": token,
-            "branch": branch or "HEAD",
-        }
+        _current_repo_context = ctx
+
+
+def _repo_ctx() -> Dict[str, Any]:
+    ctx = _repo_context_var.get()
+    if ctx is not None:
+        return ctx
+    with _context_lock:
+        return dict(_current_repo_context)
 
 
 def get_repo_context() -> Tuple[str, str, Optional[str], str]:
     """Get the current repository context including token and branch."""
-    with _context_lock:
-        owner = _current_repo_context.get("owner", "")
-        repo = _current_repo_context.get("repo", "")
-        token = _current_repo_context.get("token")
-        branch = _current_repo_context.get("branch", "HEAD")
+    ctx = _repo_ctx()
+    owner = ctx.get("owner", "")
+    repo = ctx.get("repo", "")
+    token = ctx.get("token")
+    branch = ctx.get("branch", "HEAD")
 
     if not owner or not repo:
         raise ValueError("Repository context not set. Call set_repo_context first.")
     return owner, repo, token, branch
+
+
+def get_repo_provider() -> str:
+    """Hosting provider of the current repository context ("github" or "gitlab")."""
+    return _repo_ctx().get("provider") or "github"
+
+
+# Provider-bound repository operations used by every tool below. They route to
+# GitHub or GitLab by the provider stored with the repository context.
+
+async def get_repo_tree(owner: str, repo: str, token: Optional[str] = None, ref: str = "HEAD"):
+    """Recursive file list of the context repository's provider."""
+    return await _scm.get_repo_tree(owner, repo, token=token, ref=ref, provider=get_repo_provider())
+
+
+async def get_file(owner: str, repo: str, path: str, token: Optional[str] = None, ref: Optional[str] = None):
+    """Read one file through the context repository's provider."""
+    return await _scm.get_file(owner, repo, path, token=token, ref=ref, provider=get_repo_provider())
+
+
+async def put_file(owner: str, repo: str, path: str, content: str, message: str,
+                   token: Optional[str] = None, branch: Optional[str] = None):
+    """Create or update one file through the context repository's provider."""
+    return await _scm.put_file(owner, repo, path, content, message, token=token, branch=branch,
+                               provider=get_repo_provider())
+
+
+async def delete_file(owner: str, repo: str, path: str, message: str,
+                      token: Optional[str] = None, branch: Optional[str] = None):
+    """Delete one file through the context repository's provider."""
+    return await _scm.delete_file(owner, repo, path, message, token=token, branch=branch,
+                                  provider=get_repo_provider())
+
+
+async def create_branch(owner: str, repo: str, new_branch: str, from_ref: str = "HEAD",
+                        token: Optional[str] = None):
+    """Create a branch through the context repository's provider."""
+    return await _scm.create_branch(owner, repo, new_branch, from_ref, token=token,
+                                    provider=get_repo_provider())
+
+
+class _BoundScm:
+    """:mod:`gitpilot.scm` with the context repository's provider pre-applied.
+
+    ``bound_scm.create_pull_request(owner, repo, ...)`` opens a GitHub pull
+    request or a GitLab merge request depending on the repository context.
+    """
+
+    def __getattr__(self, name: str):
+        fn = getattr(_scm, name)
+        return functools.partial(fn, provider=get_repo_provider())
+
+
+bound_scm = _BoundScm()
+
+
+def _scope(kind: str, owner: str, repo: str, item: str) -> str:
+    # Idempotency scope; GitHub keeps its historical ``github.*`` prefix.
+    return f"{get_repo_provider()}.{kind}:{owner}/{repo}:{item}"
 
 
 async def get_repository_context_summary(
@@ -430,7 +513,6 @@ def edit_file(
     starting with "Error:".
     """
     from .edit_backend import EditError, apply_edit
-    from .github_api import get_file, put_file
 
     file_path = _sanitize_tool_arg(file_path)
     old_string_s = old_string if isinstance(old_string, str) else _sanitize_tool_arg(old_string, fallback_key="value")
@@ -475,7 +557,7 @@ def edit_file(
                 loop.close()
 
         outcome = run_idempotent_mutation(
-            scope=f"github.file.edit:{owner}/{repo}:{file_path}",
+            scope=_scope("file.edit", owner, repo, file_path),
             idempotency_key=idempotency_key,
             arguments=args,
             operation=_operation,
@@ -519,7 +601,6 @@ def apply_patch_to_file(
     Returns the same shape as ``Edit a section of a file``.
     """
     from .edit_backend import EditError, apply_unified_diff
-    from .github_api import get_file, put_file
 
     file_path = _sanitize_tool_arg(file_path)
     diff_s = diff if isinstance(diff, str) else _sanitize_tool_arg(diff, fallback_key="value")
@@ -555,7 +636,7 @@ def apply_patch_to_file(
                 loop.close()
 
         outcome = run_idempotent_mutation(
-            scope=f"github.file.patch:{owner}/{repo}:{file_path}",
+            scope=_scope("file.patch", owner, repo, file_path),
             idempotency_key=idempotency_key,
             arguments=args,
             operation=_operation,
@@ -589,7 +670,6 @@ def write_file(file_path: Any, content: Any, commit_message: Any, idempotency_ke
     commit_message = _sanitize_tool_arg(commit_message, fallback_key="value")
     try:
         owner, repo, token, branch = get_repo_context()
-        from .github_api import put_file
 
         def _operation():
             loop = asyncio.new_event_loop()
@@ -602,7 +682,7 @@ def write_file(file_path: Any, content: Any, commit_message: Any, idempotency_ke
                 loop.close()
 
         result = run_idempotent_mutation(
-            scope=f"github.file.write:{owner}/{repo}:{file_path}",
+            scope=_scope("file.write", owner, repo, file_path),
             idempotency_key=idempotency_key,
             arguments={
                 "file_path": file_path,
@@ -631,7 +711,6 @@ def delete_repo_file(file_path: Any, commit_message: Any, idempotency_key: str) 
     commit_message = _sanitize_tool_arg(commit_message, fallback_key="value")
     try:
         owner, repo, token, branch = get_repo_context()
-        from .github_api import delete_file
 
         def _operation():
             loop = asyncio.new_event_loop()
@@ -644,7 +723,7 @@ def delete_repo_file(file_path: Any, commit_message: Any, idempotency_key: str) 
                 loop.close()
 
         result = run_idempotent_mutation(
-            scope=f"github.file.delete:{owner}/{repo}:{file_path}",
+            scope=_scope("file.delete", owner, repo, file_path),
             idempotency_key=idempotency_key,
             arguments={
                 "file_path": file_path,
@@ -668,7 +747,6 @@ def create_repo_branch(branch_name: str, idempotency_key: str) -> str:
     branch_name = _sanitize_tool_arg(branch_name)
     try:
         owner, repo, token, _branch = get_repo_context()
-        from .github_api import create_branch
 
         def _operation():
             loop = asyncio.new_event_loop()
@@ -681,7 +759,7 @@ def create_repo_branch(branch_name: str, idempotency_key: str) -> str:
                 loop.close()
 
         run_idempotent_mutation(
-            scope=f"github.branch.create:{owner}/{repo}:{branch_name}",
+            scope=_scope("branch.create", owner, repo, branch_name),
             idempotency_key=idempotency_key,
             arguments={"branch_name": branch_name, "from_ref": "HEAD"},
             operation=_operation,

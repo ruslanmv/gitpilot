@@ -41,7 +41,10 @@ def _domain_of(addr: str) -> str:
 
 
 def public_base_url() -> str:
-    return os.getenv("GITPILOT_PUBLIC_BASE_URL", "http://localhost:5173").rstrip("/")
+    """Base URL for links in emails (``https://$SPACE_HOST`` on Hugging Face Spaces)."""
+    from .deployment import public_base_url as _deployment_base
+
+    return _deployment_base("http://localhost:5173") or "http://localhost:5173"
 
 
 def _record(**kw: object) -> None:

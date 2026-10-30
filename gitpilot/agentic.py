@@ -83,22 +83,40 @@ def _split_repo_full_name(repo_full_name: str) -> tuple[str, str]:
     Raises a clear ValueError if the input is missing, empty, or malformed.
     This replaces `owner, repo = _split_repo_full_name(repo_full_name)` which produces
     a cryptic "not enough values to unpack" error on folder/local-git
-    sessions that have no GitHub repository.
+    sessions that have no hosted repository.
+
+    On GitLab the owner may be a nested group path (``group/subgroup``): the
+    provider bound by ``scm.execution_context`` decides which rule applies.
     """
+    from . import scm
+
     if not isinstance(repo_full_name, str) or not repo_full_name.strip():
         raise ValueError(
             "repo_full_name is required but was empty. "
-            "This session is not connected to a GitHub repository — "
+            "This session is not connected to a GitHub or GitLab repository — "
             "the multi-agent planner needs a repo in 'owner/repo' format. "
             "Open the Workspace tab and add a repository before chatting."
         )
-    parts = repo_full_name.strip().split("/")
-    if len(parts) != 2 or not all(p.strip() for p in parts):
+    try:
+        return scm.split_full_name(repo_full_name.strip())
+    except ValueError:
         raise ValueError(
             f"repo_full_name must be in 'owner/repo' format, got: {repo_full_name!r}. "
-            "Example: 'octocat/hello-world'"
-        )
-    return parts[0].strip(), parts[1].strip()
+            "Example: 'octocat/hello-world' (GitLab: 'group/subgroup/project')"
+        ) from None
+
+
+def _repo_workspace_dir(repo_full_name: str):
+    """Local data directory (context pack, memory) for a hosted repository."""
+    from . import scm
+
+    return scm.workspace_dir(repo_full_name)
+
+
+def _host_label() -> str:
+    from . import scm
+
+    return "GitLab" if scm.provider_for() == "gitlab" else "GitHub"
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +186,7 @@ async def _execute_index_action(
     output.  Failures are surfaced as their own line; we never raise
     because that would abort sibling steps in the same plan.
     """
-    from .github_api import get_file, get_repo_tree
+    from .scm import get_file, get_repo_tree
     from .rag.indexer import build_index_from_files
     from .rag_consent import grant_consent
 
@@ -606,8 +624,7 @@ async def generate_plan(
 
     # CONTEXT PACK: Load project context (conventions, active use case, asset chunks)
     # This is additive — if nothing exists, context_pack is empty and agents behave as before.
-    from pathlib import Path as _P
-    workspace_path = _P.home() / ".gitpilot" / "workspaces" / owner / repo
+    workspace_path = _repo_workspace_dir(f"{owner}/{repo}")
     context_pack = build_context_pack(workspace_path, query=goal)
     if context_pack:
         logger.info("[GitPilot] Context pack loaded (%d chars)", len(context_pack))
@@ -1127,7 +1144,7 @@ async def _lite_repo_files(
 ) -> List[str]:
     """Flat list of repo paths for the EXECUTE short-circuit, or ``[]``."""
     try:
-        from .github_api import get_repo_tree
+        from .scm import get_repo_tree
 
         tree = await get_repo_tree(owner, repo, token=token, ref=branch)
         return [t["path"] for t in (tree or []) if t.get("path")]
@@ -1147,7 +1164,7 @@ async def _lite_prefetch_context(
     Returns a string ready to inject into the LLM prompt.  No LLM
     tool-calling involved — everything comes from the GitHub API.
     """
-    from .github_api import get_file as _get_file
+    from .scm import get_file as _get_file
 
     ctx = await _tools()["get_repository_context_summary"](owner, repo, token=token, branch=branch)
 
@@ -1460,7 +1477,7 @@ async def execute_plan_lite(
     - Does not require the LLM to call tools
     - Pre-reads existing file content and injects it into the prompt
     """
-    from .github_api import get_file, put_file, create_branch, get_repo
+    from .scm import get_file, put_file, create_branch
     import re
     import time
 
@@ -1567,7 +1584,7 @@ async def execute_plan_lite(
                         step_summary += f"\n  ! Failed to modify {file.path}: {e}"
 
                 elif file.action == "DELETE":
-                    from .github_api import delete_file
+                    from .scm import delete_file
                     try:
                         await delete_file(owner, repo, file.path,
                                           f"GitPilot Lite: Delete {file.path}", token=token, branch=branch_name)
@@ -1600,7 +1617,7 @@ async def execute_plan_lite(
         "status": "completed",
         "message": f"Lite Mode: executed {len(plan.steps)} steps on {repo_full_name} (branch '{branch_name}')",
         "branch": branch_name,
-        "branch_url": f"https://github.com/{repo_full_name}/tree/{branch_name}",
+        "branch_url": _branch_url(repo_full_name, branch_name),
         "executionLog": {"steps": execution_steps},
         "lite_mode": True,
     }
@@ -1613,7 +1630,7 @@ async def execute_plan(
     branch_name: str | None = None,
 ) -> dict:
     """Execute the approved plan by applying changes to the GitHub repository."""
-    from .github_api import get_file, put_file, create_branch, get_repo
+    from .scm import get_file, put_file, create_branch
     import re
     import time
 
@@ -1809,7 +1826,7 @@ async def execute_plan(
                         step_summary += f"\n  ✗ Failed to modify {file.path}: {str(e)}"
 
                 elif file.action == "DELETE":
-                    from .github_api import delete_file
+                    from .scm import delete_file
 
                     try:
                         await delete_file(
@@ -2015,7 +2032,7 @@ async def execute_plan(
         "status": "completed",
         "message": f"Successfully executed {len(plan.steps)} steps on {repo_full_name} in branch '{branch_name}'",
         "branch": branch_name,
-        "branch_url": f"https://github.com/{repo_full_name}/tree/{branch_name}",
+        "branch_url": _branch_url(repo_full_name, branch_name),
         "executionLog": {"steps": execution_steps},
         "next_actions": next_actions,
     }
@@ -2025,12 +2042,22 @@ async def execute_plan(
 # New Agent Builders (v2 upgrade)
 # ============================================================================
 
+def _change_requests() -> str:
+    return "merge requests" if _host_label() == "GitLab" else "pull requests"
+
+
+def _branch_url(repo_full_name: str, branch_name: str) -> str:
+    from . import scm
+
+    return scm.branch_url(repo_full_name, branch_name)
+
+
 def _build_issue_agent(llm) -> Agent:
     return _crewai()["Agent"](
-        role="GitHub Issue Management Specialist",
-        goal="Create, modify, and manage GitHub issues with proper metadata and relationships",
+        role=f"{_host_label()} Issue Management Specialist",
+        goal=f"Create, modify, and manage {_host_label()} issues with proper metadata and relationships",
         backstory=(
-            "You are an expert in GitHub issue management. You can create new issues "
+            f"You are an expert in {_host_label()} issue management. You can create new issues "
             "with detailed descriptions, modify existing issues and their metadata, "
             "manage labels, milestones, and assignees, and add comments. "
             "You ensure issues are well-organised and provide clear status updates. "
@@ -2045,11 +2072,11 @@ def _build_issue_agent(llm) -> Agent:
 
 def _build_pr_agent(llm) -> Agent:
     return _crewai()["Agent"](
-        role="Pull Request Management Specialist",
-        goal="Create branches, commit changes, and manage pull requests",
+        role="Pull Request Management Specialist" if _host_label() == "GitHub" else "Merge Request Management Specialist",
+        goal=f"Create branches, commit changes, and manage {_change_requests()}",
         backstory=(
-            "You are skilled in pull request workflows. You can create branches, "
-            "create PRs from feature branches, list open PRs, inspect changed files, "
+            f"You are skilled in {_change_requests()} workflows on {_host_label()}. You can create branches, "
+            f"open {_change_requests()} from feature branches, list open ones, inspect changed files, "
             "add reviews, and merge PRs using the appropriate strategy. "
             "You always verify the source and target branches before acting."
         ),
@@ -2324,9 +2351,7 @@ async def dispatch_request(
     _dispatch_ctx_pack = ""
     if repo_full_name:
         try:
-            _d_owner, _d_repo = repo_full_name.split("/")
-            from pathlib import Path as _P
-            _d_ws = _P.home() / ".gitpilot" / "workspaces" / _d_owner / _d_repo
+            _d_ws = _repo_workspace_dir(repo_full_name)
             _dispatch_ctx_pack = build_context_pack(_d_ws, query=user_request)
         except Exception:
             pass
@@ -2394,7 +2419,7 @@ _TOPO_AGENT_MAP = {
                                              "code quality, test coverage, performance issues. "
                                              "Organise findings by severity: Critical, Warning, Suggestion."),
     "git_agent":  (AgentType.PR_MANAGER,    "Create a branch, commit all changes with a descriptive message, "
-                                             "push the branch, and create a GitHub PR. PR should summarise "
+                                             "push the branch, and open a pull request (GitHub) or merge request (GitLab) that summarises "
                                              "the changes clearly with a test plan."),
 }
 
@@ -2429,7 +2454,7 @@ async def _dispatch_pipeline(
         timestamp = str(int(_time.time()))[-6:]
         pipeline_branch = f"gitpilot-{topology.id}-{sanitized}-{timestamp}"
         try:
-            from .github_api import create_branch
+            from .scm import create_branch
             await create_branch(owner, repo, pipeline_branch, from_ref="HEAD", token=token)
             logger.info("[Pipeline] Created branch: %s", pipeline_branch)
         except Exception:
@@ -2490,9 +2515,7 @@ async def _dispatch_pipeline(
     _ctx_pack = ""
     if repo_full_name:
         try:
-            from pathlib import Path as _P
-            _owner, _repo = repo_full_name.split("/")
-            _ws = _P.home() / ".gitpilot" / "workspaces" / _owner / _repo
+            _ws = _repo_workspace_dir(repo_full_name)
             _ctx_pack = build_context_pack(_ws, query=user_request)
         except Exception:
             pass
@@ -2533,7 +2556,7 @@ async def _dispatch_pipeline(
     # Add branch info for pipelines that created a working branch
     if pipeline_branch and _has_writers:
         response["branch"] = pipeline_branch
-        response["branch_url"] = f"https://github.com/{repo_full_name}/tree/{pipeline_branch}"
+        response["branch_url"] = _branch_url(repo_full_name, pipeline_branch)
 
     return response
 
@@ -2693,8 +2716,7 @@ async def create_pr_after_execution(
 
     Returns the PR data dict or None if creation fails.
     """
-    from .github_pulls import create_pull_request
-    from .github_api import get_repo
+    from .scm import create_pull_request, get_repo
 
     owner, repo = _split_repo_full_name(repo_full_name)
 
@@ -2706,13 +2728,14 @@ async def create_pr_after_execution(
 
     # Build PR body from execution log
     steps = execution_log.get("steps", [])
-    body_lines = [f"## GitPilot Auto-PR\n\n**Goal:** {goal}\n"]
+    heading = "Auto-MR" if _host_label() == "GitLab" else "Auto-PR"
+    body_lines = [f"## GitPilot {heading}\n\n**Goal:** {goal}\n"]
     for step in steps:
         body_lines.append(f"- {step.get('summary', '')}")
     body_lines.append(f"\n---\n*Created by GitPilot*")
     body = "\n".join(body_lines)
 
-    # Truncate title to stay within GitHub limits
+    # Truncate title to stay within GitHub/GitLab limits
     title = f"GitPilot: {goal}"
     if len(title) > 256:
         title = title[:253] + "..."

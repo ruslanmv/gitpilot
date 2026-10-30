@@ -8,7 +8,11 @@ Security posture (OWASP Authentication Cheat Sheet):
 - PBKDF2‑SHA256 600k password hashing; never store plaintext.
 - Generic responses on signup / login / forgot‑password (no account enumeration).
 - Email verified before the account is usable.
-- Session is a signed, HttpOnly cookie (not localStorage); logout clears it.
+- Sessions are server-side and revocable (:mod:`gitpilot.auth.web_session`):
+  the browser holds an opaque id in an HttpOnly cookie, logout revokes it, and
+  a password change or reset signs out every other session. Signed tokens
+  issued by earlier versions are still accepted until they expire.
+- Password-reset links stop working once the password has changed.
 
 Mounted only when ``GITPILOT_ENABLE_ACCOUNTS=true`` so it never disturbs the
 existing bring‑your‑own‑GitHub‑token flow.
@@ -32,16 +36,15 @@ from .emailer import (
 )
 from .security import (
     RESET_PASSWORD,
-    SESSION_COOKIE,
-    SESSION_TTL_SECONDS,
     VERIFY_EMAIL,
     hash_password,
     make_link_token,
-    make_session,
+    password_fingerprint,
     read_link_token,
     read_session,
     verify_password,
 )
+from .web_session import clear_session_cookie, current_session, get_store, set_session_cookie
 
 logger = logging.getLogger("gitpilot.auth.router")
 
@@ -121,25 +124,26 @@ def _valid_email(email: str) -> str:
     return e
 
 
-def _issue_session(response: Response, acc: Account) -> str:
-    """Mint a session, set the cookie, and return the token for the body.
+def _issue_session(response: Response, acc: Account, *, fresh: bool = False) -> str:
+    """Start (or upgrade) a server-side session for ``acc`` and set the cookie.
 
-    Production runs the SPA and API on different sites (Vercel + HF Space), so
-    the cookie is set ``SameSite=None; Secure`` to survive cross-site requests,
-    and the same token is returned in the body for header-based auth. Local /
-    same-origin deployments fall back to ``SameSite=Lax``.
+    A session the browser already has (for example one with a GitHub or GitLab
+    connection) is kept, under a new id, so connected providers survive signing
+    in; a session belonging to another account is revoked instead. The raw id
+    is also returned for the body, so SPAs on another site than the API can
+    authenticate with the ``X-GitPilot-Session`` header where cross-site
+    cookies are blocked.
     """
-    token = make_session(acc.id, acc.email)
-    https = public_base_url().startswith("https")
-    response.set_cookie(
-        SESSION_COOKIE,
-        token,
-        max_age=SESSION_TTL_SECONDS,
-        httponly=True,
-        secure=https,
-        samesite="none" if https else "lax",
-        path="/",
-    )
+    store = get_store()
+    current = None if fresh else current_session()
+    if current is not None and current.account_id not in (None, acc.id):
+        store.revoke(current)
+        current = None
+    if current is not None:
+        token = store.rotate(current, account_id=acc.id)
+    else:
+        token, _ = store.create(account_id=acc.id)
+    set_session_cookie(response, token, scheme="https" if public_base_url().startswith("https") else None)
     return token
 
 
@@ -152,11 +156,22 @@ def current_account(
 ) -> Account:
     """The signed‑in account, or 401.
 
-    Accepts the session from the ``X-GitPilot-Session`` header (cross-origin
-    SPAs) or the HttpOnly cookie (same-origin), in that order.
+    The server-side session resolved by the session middleware (header or
+    HttpOnly cookie) wins; a signed token from an earlier version is accepted
+    until it expires.
     """
-    claims = read_session(x_gitpilot_session) or read_session(gitpilot_session)
-    acc = get_account_store().get_by_id(claims["uid"]) if claims else None
+    sess = current_session()
+    if sess is None:
+        # Routers mounted without the session middleware resolve it here.
+        store_ = get_store()
+        sess = store_.resolve(x_gitpilot_session, transport="header") or store_.resolve(gitpilot_session)
+    acc = None
+    if sess is not None and sess.account_id:
+        acc = get_account_store().get_by_id(sess.account_id)
+    if acc is None:
+        claims = read_session(x_gitpilot_session) or read_session(gitpilot_session)
+        uid = claims.get("uid") if claims else None
+        acc = get_account_store().get_by_id(uid) if uid else None
     if acc is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not signed in.")
     return acc
@@ -249,7 +264,10 @@ def build_account_router() -> APIRouter:  # noqa: PLR0915 — nested route handl
 
     @router.post("/logout")
     def logout(response: Response) -> dict[str, str]:
-        response.delete_cookie(SESSION_COOKIE, path="/")
+        sess = current_session()
+        if sess is not None:
+            get_store().revoke(sess)
+        clear_session_cookie(response, scheme="https" if public_base_url().startswith("https") else None)
         return {"message": "Signed out."}
 
     @router.get("/me", response_model=AccountResponse)
@@ -281,8 +299,9 @@ def build_account_router() -> APIRouter:  # noqa: PLR0915 — nested route handl
         except ValueError as exc:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
         store.set_password(acc.email, pw)
-        # Re-issue the session so the change refreshes the active token.
+        # Re-issue this session and sign out every other one.
         token = _issue_session(response, acc)
+        get_store().revoke_account_sessions(acc.id, keep=current_session())
         return _public(acc, session_token=token)
 
     @router.post("/delete")
@@ -299,21 +318,31 @@ def build_account_router() -> APIRouter:  # noqa: PLR0915 — nested route handl
         if acc.password_hash and not verify_password(payload.password or "", acc.password_hash):
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Password is incorrect.")
         store.delete_by_email(acc.email)
-        response.delete_cookie(SESSION_COOKIE, path="/")
+        get_store().revoke_account_sessions(acc.id)
+        clear_session_cookie(response, scheme="https" if public_base_url().startswith("https") else None)
         return {"message": "Your account has been permanently deleted."}
 
     @router.post("/password/forgot")
     def password_forgot(payload: EmailRequest) -> dict[str, str]:
         email = (payload.email or "").strip().lower()
         # Always generic — never reveal whether the account exists.
-        if store.get_by_email(email) is not None:
-            send_reset_email(email, make_link_token(email, RESET_PASSWORD, ttl_seconds=_LINK_TTL))
+        acc = store.get_by_email(email)
+        if acc is not None:
+            send_reset_email(email, make_link_token(
+                email, RESET_PASSWORD, ttl_seconds=_LINK_TTL,
+                fingerprint=password_fingerprint(acc.password_hash),
+            ))
         return {"message": "If an account exists, we'll send a reset link."}
 
     @router.post("/password/reset", response_model=AccountResponse)
     def password_reset(payload: ResetRequest, response: Response) -> AccountResponse:
         email = read_link_token(payload.token, RESET_PASSWORD)
-        if not email:
+        target = store.get_by_email(email) if email else None
+        # The link carries a fingerprint of the password it was issued for, so
+        # it cannot be replayed after a successful reset.
+        if not email or target is None or not read_link_token(
+            payload.token, RESET_PASSWORD, fingerprint=password_fingerprint(target.password_hash),
+        ):
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired link.")
         try:
             pw = hash_password(payload.password)
@@ -323,7 +352,8 @@ def build_account_router() -> APIRouter:  # noqa: PLR0915 — nested route handl
         acc = store.get_by_email(email)
         if acc is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found.")
-        token = _issue_session(response, acc)
+        get_store().revoke_account_sessions(acc.id)
+        token = _issue_session(response, acc, fresh=True)
         return _public(acc, session_token=token)
 
     return router

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host",
+    "test": "node --test tests/",
     "build": "vite build",
     "vercel-build": "vite build",
     "preview": "vite preview",

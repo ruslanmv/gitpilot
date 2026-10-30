@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { apiUrl } from "../utils/api.js";
+import { authFetch } from "../utils/api.js";
+import { repoProvider } from "../utils/repoApi.js";
 import SessionItem from "./SessionItem.jsx";
 
 /**
@@ -28,6 +29,8 @@ export default function SessionSidebar({
   const pollRef = useRef(null);
 
   const repoFullName = repo?.full_name || (repo ? `${repo.owner}/${repo.name}` : null);
+  // The same path can exist on GitHub and GitLab: sessions are per provider.
+  const provider = repoProvider(repo);
 
   // Fetch sessions
   useEffect(() => {
@@ -41,13 +44,11 @@ export default function SessionSidebar({
     const fetchSessions = async () => {
       setLoading(true);
       try {
-        const token = localStorage.getItem("github_token");
-        const headers = token ? { Authorization: `Bearer ${token}` } : {};
         // Filter server-side: the limit is applied after the filter there, so
         // a long global history can't push this repo's sessions off the list.
-        const res = await fetch(
-          apiUrl(`/api/sessions?repo=${encodeURIComponent(repoFullName)}`),
-          { headers, cache: "no-cache" }
+        const res = await authFetch(
+          `/api/sessions?repo=${encodeURIComponent(repoFullName)}&provider=${provider}`,
+          { cache: "no-cache" }
         );
         if (!res.ok) return;
         const data = await res.json();
@@ -56,7 +57,7 @@ export default function SessionSidebar({
         // The server already returns newest-first; sorting again costs nothing
         // and keeps the newest session on top against an older backend.
         const rows = (data.sessions || []).filter(
-          (s) => !s.repo || s.repo === repoFullName
+          (s) => (!s.repo || s.repo === repoFullName) && (s.provider || "github") === provider
         );
         setSessions(sortNewestFirst(rows));
       } catch (err) {
@@ -75,13 +76,11 @@ export default function SessionSidebar({
       cancelled = true;
       if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [repoFullName, refreshNonce]);
+  }, [repoFullName, provider, refreshNonce]);
 
   const handleDelete = async (sessionId) => {
     try {
-      const token = localStorage.getItem("github_token");
-      const headers = token ? { Authorization: `Bearer ${token}` } : {};
-      await fetch(apiUrl(`/api/sessions/${sessionId}`), { method: "DELETE", headers });
+      await authFetch(`/api/sessions/${sessionId}`, { method: "DELETE" });
       setSessions((prev) => prev.filter((s) => s.id !== sessionId));
       // Notify parent so it can clear the chat if this was the active session
       onDeleteSession?.(sessionId);

@@ -109,13 +109,33 @@ VERIFY_EMAIL = "verify-email"
 RESET_PASSWORD = "reset-password"  # noqa: S105 — token-purpose label, not a password
 
 
-def make_link_token(email: str, purpose: str, *, ttl_seconds: int = 900) -> str:
-    return sign({"email": email.lower(), "purpose": purpose}, ttl_seconds=ttl_seconds)
+def password_fingerprint(password_hash: str | None) -> str:
+    """Short digest of the stored password hash.
+
+    Embedded in password-reset links so a link stops working as soon as the
+    password changes: each reset link is effectively single-use.
+    """
+    return hashlib.sha256((password_hash or "").encode("utf-8")).hexdigest()[:16]
 
 
-def read_link_token(token: str, purpose: str) -> str | None:
+def make_link_token(email: str, purpose: str, *, ttl_seconds: int = 900,
+                    fingerprint: str | None = None) -> str:
+    payload: dict[str, Any] = {"email": email.lower(), "purpose": purpose}
+    if fingerprint:
+        payload["pwf"] = fingerprint
+    return sign(payload, ttl_seconds=ttl_seconds)
+
+
+def read_link_token(token: str, purpose: str, *, fingerprint: str | None = None) -> str | None:
+    """The email a link token was issued for, or ``None``.
+
+    With ``fingerprint`` the token must carry the same password fingerprint
+    (see :func:`password_fingerprint`).
+    """
     payload = unsign(token)
     if not payload or payload.get("purpose") != purpose:
+        return None
+    if fingerprint is not None and not hmac.compare_digest(str(payload.get("pwf") or ""), fingerprint):
         return None
     email = payload.get("email")
     return str(email) if email else None
@@ -146,6 +166,7 @@ __all__ = [
     "VERIFY_EMAIL",
     "RESET_PASSWORD",
     "make_link_token",
+    "password_fingerprint",
     "read_link_token",
     "SESSION_COOKIE",
     "SESSION_TTL_SECONDS",
