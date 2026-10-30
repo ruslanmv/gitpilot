@@ -129,11 +129,13 @@ def summarise(merged: Dict[str, Any]) -> Dict[str, Any]:
         by_model[row["model"]].append(row)
 
     suites_present = [s for s in SUITE_ORDER if any(r["suite"] == s for r in merged["results"])]
-    total_tasks = len({r["task"] for r in merged["results"]})
+    # Coverage and the overall score are over the quick suites every model runs.
+    # The agent suite is optional and expensive, so it is reported on its own.
+    total_tasks = len({r["task"] for r in merged["results"] if r["suite"] != "agentic"})
     summary = {"suites": suites_present, "models": [], "total_tasks": total_tasks}
     for model in merged["models"]:
         rows = by_model.get(model["id"], [])
-        attempted = len({r["task"] for r in rows})
+        attempted = len({r["task"] for r in rows if r["suite"] != "agentic"})
         # A model that has not attempted every task (a run still in progress, or
         # one cut short) shows its suite scores but is never ranked: an overall
         # over the suites it happened to finish is not comparable.
@@ -148,7 +150,8 @@ def summarise(merged: Dict[str, Any]) -> Dict[str, Any]:
                 "rate": passed / n if n else None, "passed": passed, "n": n, "errors": errors,
                 "ci": wilson_interval(passed, n) if n else None,
             }
-        rates = [s["rate"] for s in suite_scores.values() if s["rate"] is not None]
+        rates = [score["rate"] for suite, score in suite_scores.items()
+                 if score["rate"] is not None and suite != "agentic"]
         chat_ok = [r for r in rows if r["suite"] != "agentic" and r.get("passed") is not None]
         latencies = [r["latency_s"] for r in chat_ok if r.get("latency_s")]
         speeds = [r["output_tokens"] / r["latency_s"] for r in chat_ok

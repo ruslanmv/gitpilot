@@ -125,8 +125,11 @@ One client-side trap, not an OllaBridge bug: on Windows, a Python client that
 reaches a WSL-hosted gateway through `localhost` waits about 21 seconds per
 connection, because `localhost` resolves to `::1` first and that attempt hangs
 for the Windows connect retry before IPv4 is tried (curl races both and hides
-it). The harness defaults to `127.0.0.1` for that reason; GitPilot's own default
-OllaBridge URL (`http://localhost:11435`) has the same problem on that setup.
+it). The harness defaults to `127.0.0.1` for that reason. GitPilot's async
+clients (the agent loop) race both families and were never affected; its
+synchronous ones (the legacy CrewAI path, the sync inference client, the sandbox
+runner client) were, and `gitpilot/loopback.py` now resolves `localhost` to IPv4
+first for the whole process.
 
 ## Files
 

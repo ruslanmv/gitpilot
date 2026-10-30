@@ -523,6 +523,18 @@ def test_regrading_applies_a_grader_fix_to_saved_replies(tmp_path):
     assert regraded["results"][0]["passed"] is True and "regraded_at" in regraded
 
 
+def test_the_agent_suite_neither_unranks_others_nor_moves_the_overall():
+    quick = [_row("code/a", "code", True), _row("tools/b", "tools", True)]
+    runs = [_run("r1", "D", "qwen9-a", [dict(r) for r in quick] + [_row("agentic/x", "agentic", False)]),
+            _run("r2", "D", "llama9-b", [dict(r) for r in quick])]
+    summary = summarise(merge_runs(runs)[0])
+    by_name = {m["name"]: m for m in summary["models"]}
+    with_agent, without = by_name["qwen9-a"], by_name["llama9-b"]
+    assert not with_agent["partial"] and not without["partial"]
+    assert with_agent["overall"] == without["overall"] == 1.0
+    assert with_agent["suites"]["agentic"]["rate"] == 0.0
+
+
 def test_report_page_renders_for_an_empty_history(tmp_path):
     merged, notes = merge_runs([])
     page = render_html(merged, notes)
