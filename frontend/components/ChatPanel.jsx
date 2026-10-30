@@ -1,5 +1,6 @@
 import { resolveBackendUrl } from "../utils/backend.js";
-import { apiUrl } from "../utils/api.js";
+import { apiUrl, authFetch, getAuthHeaders } from "../utils/api.js";
+import { fileUrl, providerLabel, repoIdentity } from "../utils/repoApi.js";
 // frontend/components/ChatPanel.jsx
 import React, { useEffect, useRef, useState } from "react";
 import AssistantMessage from "./AssistantMessage.jsx";
@@ -12,7 +13,8 @@ import CreatePRButton from "./CreatePRButton.jsx";
 import StreamingMessage from "./StreamingMessage.jsx";
 import SandboxCanvas from "./SandboxCanvas.jsx";
 import FilePreviewPanel from "./FilePreviewPanel.jsx";
-import { SessionWebSocket } from "../utils/ws.js";
+import { cancelRun, checkV2Support, respondToApproval, streamChat } from "../utils/sse.js";
+import { applyStreamEvent, consolidateMessage, initialStreamState } from "../utils/streamState.js";
 import { classifyPlan, planSummary } from "../utils/planKind.js";
 
 // Map a file extension to the canonical sandbox language tag.  Used
@@ -28,10 +30,8 @@ function languageFromPath(path) {
 }
 
 // Helper to get headers (inline safety if utility is missing)
-const getHeaders = () => ({
-  "Content-Type": "application/json",
-  Authorization: `Bearer ${localStorage.getItem("github_token") || ""}`,
-});
+const getHeaders = () => ({ "Content-Type": "application/json", ...getAuthHeaders() });
+
 
 export default function ChatPanel({
   repo,
@@ -59,7 +59,11 @@ export default function ChatPanel({
   const [retryAfterIndexReject, setRetryAfterIndexReject] = useState(null);
 
   // Claude-Code-on-Web: WebSocket streaming + diff + PR
-  const [wsConnected, setWsConnected] = useState(false);
+  // v2 stream availability (Batch V4-H4). ``streamReady`` means the backend
+  // answered and serves /api/v2/chat/stream, so a message runs on the live
+  // stream; otherwise the plan flow below is used, unchanged.
+  const [streamReady, setStreamReady] = useState(false);
+  const [pendingApprovals, setPendingApprovals] = useState([]);
   const [streamingEvents, setStreamingEvents] = useState([]);
   const [diffData, setDiffData] = useState(null);
   const [showDiffViewer, setShowDiffViewer] = useState(false);
@@ -78,11 +82,12 @@ export default function ChatPanel({
   const [previewErrorCode, setPreviewErrorCode] = useState(null);
   // "preview" (narrow drawer) or "workspace" (wide editor).
   const [previewMode, setPreviewMode] = useState("preview");
-  const wsRef = useRef(null);
-
-  // Ref mirrors streamingEvents so WS callbacks avoid stale closures
-  const streamingEventsRef = useRef([]);
-  useEffect(() => { streamingEventsRef.current = streamingEvents; }, [streamingEvents]);
+  // The live run, if one is streaming: its abort function, its finisher and
+  // the reducer state the v2 events fold into (refs, so stream callbacks
+  // never read a stale closure).
+  const stopStreamRef = useRef(null);
+  const finishStreamRef = useRef(null);
+  const streamStateRef = useRef(initialStreamState());
 
   // Tracks files that were just CREATE'd / MODIFY'd by a fresh execution.
   // Used to (a) auto-retry once on 404 (GitHub contents API has brief
@@ -99,22 +104,27 @@ export default function ChatPanel({
   const prevMsgCountRef = useRef((sessionChatState?.messages || []).length);
 
   // ---------------------------------------------------------------------------
-  // WebSocket connection management
+  // Live stream availability (Batch V4-H4)
+  //
+  // This used to open the legacy /ws/sessions socket and consolidate whatever
+  // it pushed. That protocol is frozen and deprecated; the answer now arrives
+  // on the v2 stream that send() opens per message. This effect only decides
+  // whether that stream is there to use, once the backend is reachable (it may
+  // still be starting — common on WSL cold start).
   // ---------------------------------------------------------------------------
   useEffect(() => {
-    // Clean up previous connection
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-      setWsConnected(false);
+    // A session switch abandons any run still streaming for the old one.
+    if (stopStreamRef.current) {
+      stopStreamRef.current();
+      stopStreamRef.current = null;
+      finishStreamRef.current = null;
     }
+    streamStateRef.current = initialStreamState();
+    setPendingApprovals([]);
+    setStreamReady(false);
 
     if (!sessionId) return;
 
-    // Wait for backend to be reachable before opening WebSocket.
-    // Without this, the WS connects immediately on session creation
-    // and fails repeatedly with "closed before established" when the
-    // backend is still starting up (common on WSL cold start).
     let cancelled = false;
     const backendUrl = resolveBackendUrl();
     const pingUrl = backendUrl ? `${backendUrl}/api/ping` : '/api/ping';
@@ -129,70 +139,17 @@ export default function ChatPanel({
       return false;
     };
 
-    waitForBackend().then((ok) => {
-      if (cancelled || !ok) return;
-      connectWs();
-    });
-
-    function connectWs() {
-    const ws = new SessionWebSocket(sessionId, {
-      onConnect: () => setWsConnected(true),
-      onDisconnect: () => setWsConnected(false),
-      onMessage: (data) => {
-        if (data.type === "agent_message") {
-          setStreamingEvents((prev) => [...prev, data]);
-        } else if (data.type === "tool_use" || data.type === "tool_result") {
-          setStreamingEvents((prev) => [...prev, data]);
-        } else if (data.type === "diff_update") {
-          setDiffData(data.stats || data);
-        } else if (data.type === "session_restored") {
-          // Session loaded
-        }
-      },
-      onStatusChange: (newStatus) => {
-        if (newStatus === "waiting") {
-          // Always clear loading state when agent finishes
-          setLoadingPlan(false);
-
-          // Consolidate streaming events into a chat message (use ref to
-          // avoid stale closure — streamingEvents state would be stale here).
-          //
-          // We also commit the FINAL consolidated text to the backend session
-          // here.  Previously this branch never called persistMessage, so the
-          // assistant turn looked correct in the live view but vanished on the
-          // next session reload — the canonical "streaming truncation" symptom.
-          const events = streamingEventsRef.current;
-          if (events.length > 0) {
-            const textParts = events
-              .filter((e) => e.type === "agent_message")
-              .map((e) => e.content);
-            if (textParts.length > 0) {
-              const consolidated = {
-                from: "ai",
-                role: "assistant",
-                answer: textParts.join(""),
-                content: textParts.join(""),
-              };
-              setMessages((prev) => [...prev, consolidated]);
-              persistMessage(sessionId, "assistant", consolidated.content);
-            }
-            setStreamingEvents([]);
-          }
-        }
-      },
-      onError: (err) => {
-        console.warn("[ws] Error:", err);
-        setLoadingPlan(false);
-      },
-    });
-
-    ws.connect();
-    wsRef.current = ws;
-    } // end connectWs
+    waitForBackend()
+      .then((ok) => (ok && !cancelled ? checkV2Support() : false))
+      .then((ok) => { if (!cancelled) setStreamReady(Boolean(ok)); });
 
     return () => {
       cancelled = true;
-      if (wsRef.current) wsRef.current.close();
+      if (stopStreamRef.current) {
+        stopStreamRef.current();
+        stopStreamRef.current = null;
+        finishStreamRef.current = null;
+      }
     };
   }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -254,10 +211,8 @@ export default function ChatPanel({
       setCanvasError(null);
       const branch = currentBranch || "HEAD";
       try {
-        const url = `/api/repos/${repo.owner}/${repo.name}/file`
-                  + `?path=${encodeURIComponent(path)}`
-                  + `&ref=${encodeURIComponent(branch)}`;
-        const res = await fetch(apiUrl(url), { headers: getHeaders() });
+        const url = fileUrl(repo, path, branch);
+        const res = await authFetch(url);
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           setCanvasError(data.detail || `Could not load ${path} (HTTP ${res.status})`);
@@ -302,10 +257,8 @@ export default function ChatPanel({
       } catch (_e) { /* old browser */ }
       const branch = currentBranch || "HEAD";
       const fetchOnce = async () => {
-        const url = `/api/repos/${repo.owner}/${repo.name}/file`
-                  + `?path=${encodeURIComponent(path)}`
-                  + `&ref=${encodeURIComponent(branch)}`;
-        const res = await fetch(apiUrl(url), { headers: getHeaders() });
+        const url = fileUrl(repo, path, branch);
+        const res = await authFetch(url);
         const data = await res.json().catch(() => ({}));
         return { res, data };
       };
@@ -416,6 +369,7 @@ export default function ChatPanel({
     }
     fetch(apiUrl(`/api/sessions/${sid}/message`), {
       method: "POST",
+      credentials: "include",
       headers: getHeaders(),
       body: JSON.stringify(body),
     }).catch(() => {}); // best-effort
@@ -438,6 +392,82 @@ export default function ChatPanel({
     // session reload re-renders the same shape.
     if (m.informational) meta.informational = true;
     return Object.keys(meta).length > 0 ? meta : null;
+  };
+
+  // ---------------------------------------------------------------------------
+  // v2 stream (Batch V4-H4): one message → one run on /api/v2/chat/stream.
+  //
+  // Events fold through applyStreamEvent into the shapes the legacy socket
+  // produced, so StreamingMessage renders them unchanged; done or error
+  // consolidates the text into an assistant message exactly as the old
+  // status_change("waiting") branch did. The backend stores the assistant turn
+  // on the session itself when the run ends (both engines do), so it is not
+  // persisted from here — that would duplicate it on reload.
+  // ---------------------------------------------------------------------------
+  const publishStreamState = () => {
+    const s = streamStateRef.current;
+    setStreamingEvents(s.events);
+    setPendingApprovals(s.approvals);
+    if (s.diff) setDiffData(s.diff);
+    if (s.error) setStatus(`Agent error: ${s.error}`);
+  };
+
+  const streamTurn = (sid, text) =>
+    new Promise((resolve) => {
+      let finished = false;
+      streamStateRef.current = initialStreamState();
+      setStreamingEvents([]);
+      setPendingApprovals([]);
+
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        const consolidated = consolidateMessage(streamStateRef.current);
+        if (consolidated) setMessages((prev) => [...prev, consolidated]);
+        setStreamingEvents([]);
+        setPendingApprovals([]);
+        setLoadingPlan(false);
+        stopStreamRef.current = null;
+        finishStreamRef.current = null;
+        resolve();
+      };
+      finishStreamRef.current = finish;
+
+      const fold = (event) => {
+        streamStateRef.current = applyStreamEvent(streamStateRef.current, event);
+        publishStreamState();
+      };
+
+      stopStreamRef.current = streamChat(
+        sid,
+        text,
+        {
+          onEvent: fold,
+          onDone: finish,
+          onError: (err) => {
+            fold({ type: "error", error: err?.error || String(err) });
+            finish();
+          },
+        },
+        // No provider token from the browser: the server picks the session's
+        // GitHub or GitLab connection by the session repository's provider.
+        { headers: getHeaders() },
+      );
+    });
+
+  const stopStream = () => {
+    if (stopStreamRef.current) stopStreamRef.current();
+    if (sessionId) cancelRun(sessionId, { headers: getHeaders() });
+    if (finishStreamRef.current) finishStreamRef.current();
+  };
+
+  const answerApproval = (approval, approved, scope) => {
+    streamStateRef.current = applyStreamEvent(streamStateRef.current, {
+      type: "approval_resolved",
+      request_id: approval.request_id,
+    });
+    publishStreamState();
+    respondToApproval(sessionId, approval.request_id, approved, scope, { headers: getHeaders() });
   };
 
   const send = async (overrides = {}) => {
@@ -489,6 +519,14 @@ export default function ChatPanel({
     // Persist user message to backend session
     persistMessage(sid, "user", text);
 
+    // Batch V4-H4: with the v2 stream available the turn runs there — text,
+    // tool activity and approvals arrive live. The plan flow below is the
+    // path for a backend without it.
+    if (streamReady && sid) {
+      await streamTurn(sid, text);
+      return;
+    }
+
     // Always use HTTP for plan generation (the original reliable flow).
     // WebSocket is only used for real-time streaming feedback display.
     const effectiveBranch = currentBranch || defaultBranch || "HEAD";
@@ -502,10 +540,11 @@ export default function ChatPanel({
       try {
         res = await fetch(apiUrl("/api/chat/plan"), {
           method: "POST",
+          credentials: "include",
           headers: getHeaders(),
           body: JSON.stringify({
-            repo_owner: repo.owner,
-            repo_name: repo.name,
+            // provider + stable id + (possibly nested) namespace/name
+            ...repoIdentity(repo),
             goal: text,
             branch_name: effectiveBranch,
             // Lets the backend record this plan as a Task on the
@@ -675,10 +714,10 @@ export default function ChatPanel({
 
       const res = await fetch(apiUrl("/api/chat/execute"), {
         method: "POST",
+        credentials: "include",
         headers: getHeaders(),
         body: JSON.stringify({
-          repo_owner: repo.owner,
-          repo_name: repo.name,
+          ...repoIdentity(repo),
           plan,
           branch_name,
           // Lets the backend persist the new branch on the session
@@ -915,7 +954,7 @@ export default function ChatPanel({
                   <div style={{ whiteSpace: "pre-wrap" }}>{m.content}</div>
                   {m.link && (
                     <a href={m.link} target="_blank" rel="noreferrer" className="success-link">
-                      View Changes on GitHub &rarr;
+                      View Changes on {providerLabel(repo)} &rarr;
                     </a>
                   )}
                 </div>
@@ -980,6 +1019,7 @@ export default function ChatPanel({
                 planStatus={planStatus}
                 owner={repo?.owner}
                 repo={repo?.name}
+                repoInfo={repo}
                 onApproveExecution={() => execute()}
                 nextActions={m.nextActions}
                 relatedPlan={linkedPlan}
@@ -1142,6 +1182,47 @@ export default function ChatPanel({
             )}
           </div>
         )}
+        {/* Approval requests from the live run (Batch V4-H4). Each is a tool the
+            policy wants a decision on; the answer goes back over
+            /api/v2/approval/respond and the run continues. */}
+        {pendingApprovals.length > 0 && (
+          <div className="stream-approvals" style={{ marginBottom: 8 }}>
+            {pendingApprovals.map((a) => (
+              <div
+                key={a.request_id}
+                style={{
+                  border: "1px solid rgba(251, 191, 36, 0.45)",
+                  borderRadius: 8,
+                  padding: "8px 10px",
+                  marginBottom: 6,
+                  fontSize: 12,
+                }}
+              >
+                <div style={{ marginBottom: 6 }}>
+                  <strong>{a.tool}</strong>
+                  {a.risk ? <span style={{ opacity: 0.7 }}> · {a.risk} risk</span> : null}
+                  <div>{a.summary}</div>
+                </div>
+                {a.diff_preview && (
+                  <pre style={{ maxHeight: 160, overflow: "auto", fontSize: 11, margin: "0 0 6px" }}>
+                    {a.diff_preview}
+                  </pre>
+                )}
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button className="chat-btn primary" type="button" onClick={() => answerApproval(a, true, "once")}>
+                    Approve
+                  </button>
+                  <button className="chat-btn secondary" type="button" onClick={() => answerApproval(a, true, "session")}>
+                    Approve for session
+                  </button>
+                  <button className="chat-btn ghost" type="button" onClick={() => answerApproval(a, false, "once")}>
+                    Deny
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
         {status && (
           <div style={{ fontSize: 11, color: "#ffb3b7", marginBottom: 8 }}>
             {status}
@@ -1151,7 +1232,7 @@ export default function ChatPanel({
         <div className="chat-input-row">
           <textarea
             className="chat-input"
-            placeholder={wsConnected ? "Send feedback or instructions..." : "Describe the change you want to make..."}
+            placeholder={streamReady ? "Send feedback or instructions..." : "Describe the change you want to make..."}
             value={goal}
             rows={1}
             onChange={(e) => {
@@ -1175,8 +1256,16 @@ export default function ChatPanel({
             onClick={send}
             disabled={!canChat || loadingPlan || executing || !goal.trim()}
           >
-            {loadingPlan ? "Planning..." : wsConnected ? "Send" : "Generate plan"}
+            {loadingPlan ? (streamReady ? "Working..." : "Planning...") : streamReady ? "Send" : "Generate plan"}
           </button>
+
+          {/* Stop the live run (Batch V4-H4): aborts the stream, asks the
+              backend to cancel the run, and keeps what arrived so far. */}
+          {loadingPlan && streamReady && stopStreamRef.current && (
+            <button className="chat-btn ghost" type="button" onClick={stopStream} title="Stop the running agent">
+              Stop
+            </button>
+          )}
 
           {/* Approve & execute — visible only while a plan is awaiting
               approval, or while an execution is already in flight (so
@@ -1229,15 +1318,15 @@ export default function ChatPanel({
           )}
         </div>
 
-        {/* WebSocket connection indicator + context-window meter */}
+        {/* Live-stream indicator + context-window meter */}
         <div style={{ marginTop: 6, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
           <span>
             {sessionId && (
               <span className="ws-indicator">
                 <span className="ws-dot" style={{
-                  backgroundColor: wsConnected ? "#10B981" : "#EF4444",
+                  backgroundColor: streamReady ? "#10B981" : "#EF4444",
                 }} />
-                {wsConnected ? "Live" : "Connecting..."}
+                {streamReady ? "Live" : "Connecting..."}
               </span>
             )}
           </span>

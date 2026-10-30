@@ -253,12 +253,19 @@ class LocalWorkspace:
 
 @dataclass(frozen=True)
 class RepoBinding:
-    """A GitHub repository reached over the API, with no local checkout."""
+    """A hosted repository reached over the API, with no local checkout.
+
+    ``provider`` is ``"github"`` or ``"gitlab"``; ``token`` is that provider's
+    credential and is only ever sent to that provider. On GitLab ``owner`` may
+    be a nested group path and ``repo_id`` is the stable numeric project id.
+    """
 
     owner: str
     repo: str
     token: Optional[str] = None
     branch: Optional[str] = None
+    provider: str = "github"
+    repo_id: Optional[str] = None
 
     @property
     def full_name(self) -> str:

@@ -195,15 +195,20 @@ class StreamingAgentExecutor:
 
     @staticmethod
     def _is_valid_repo_full_name(name: object) -> bool:
-        """True iff `name` is a non-empty 'owner/repo' string with both parts.
+        """True iff `name` is a valid repository name for the bound provider.
 
-        Rejects: None, empty strings, strings without '/', strings with
-        empty owner or repo, and strings containing more than one '/'.
+        GitHub: exactly 'owner/repo'. GitLab: 'group[/subgroup...]/project'.
+        Rejects None, empty strings, strings without '/' and empty segments.
         """
         if not isinstance(name, str) or not name.strip():
             return False
-        parts = name.strip().split("/")
-        return len(parts) == 2 and all(p.strip() for p in parts)
+        from . import scm
+
+        try:
+            scm.split_full_name(name.strip())
+        except ValueError:
+            return False
+        return True
 
     async def _generate_plan(self, goal, repo_full_name, token, branch):
         """Wrap existing plan generators with event streaming."""

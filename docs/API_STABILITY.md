@@ -98,6 +98,15 @@ When a public name needs to go, this is the path:
 3. **Keep** the symbol working for at least one minor release.
 4. **Remove** only on the milestone version named in `removed_in`.
 
+The same process applies to HTTP and WebSocket endpoints; the warning is
+emitted from the handler on the first connection per process.
+
+### Current deprecations
+
+| Deprecated | Since | Use instead | Removal |
+|---|---|---|---|
+| `WS /ws/sessions/{session_id}` — the legacy session protocol | 0.2.9 (Batch V4-H4) | `POST /api/v2/chat/stream`, or `WS /ws/v2/sessions/{session_id}` | 0.3 |
+
 The `deprecated_alias` helper enforces:
 
 * fixed-format warning text (`<old> is deprecated; use <new> instead

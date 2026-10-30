@@ -206,6 +206,25 @@ python -m bench --out results.json         # run the matrix
 python -m bench.gate results.json          # may the default flip?
 ```
 
+The frontier tier defaults to the Anthropic API and needs `ANTHROPIC_API_KEY`.
+It can be served by any OpenAI-compatible gateway instead — a local OllaBridge
+fronting a hosted model, for instance — by naming the model and provider family;
+the provider GitPilot is configured for has to agree, because the tier only
+supplies the model name:
+
+```bash
+export GITPILOT_PROVIDER=ollabridge
+export GITPILOT_BENCH_FRONTIER_FAMILY=ollabridge
+export GITPILOT_BENCH_FRONTIER_MODEL=provider/frontier-model
+python -m bench --tiers frontier --out frontier.json
+```
+
+The legacy engine is a different matter: its CrewAI tools read and write through
+the GitHub REST API, so it needs `--repo owner/name` and a token, and it cannot
+act on the local fixtures the tasks build. On a machine without that binding its
+cells are recorded as unavailable and the report stays incomplete — by design,
+since "legacy scored zero because it could not run here" would flatter the loop.
+
 Dominance on all three metrics is explicitly *not* the gate. A run that reads four
 files before editing one costs more than a run that edits blind, and is worth it.
 

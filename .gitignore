@@ -153,3 +153,7 @@ mcp-stack/
 # GitPilot dry-run/CLI output artifacts
 repair-response.json
 repair-plan.json
+.mcp.env
+mcp-stack/
+.mcp.env
+mcp-stack/

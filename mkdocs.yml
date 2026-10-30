@@ -78,6 +78,9 @@ nav:
       - Batch plan: upgrade-v4-batches.md
   - Other:
       - GitHub setup: GITHUB_SETUP.md
+      - GitLab integration: GITLAB_INTEGRATION.md
+      - Authentication and sessions: auth.md
+      - Sign-in page design: LOGIN_DESIGN.md
       - Enterprise login: ENTERPRISE_LOGIN.md
       - Patch notes: patch-notes.md
 

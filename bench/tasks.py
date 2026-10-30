@@ -143,8 +143,18 @@ def _base_project(root: Path) -> None:
 
 
 def _answer_mentions(answer: str, *needles: str) -> Outcome:
+    """Whether the answer names each needle.
+
+    Needles are written with ``/``; on Windows the tools show the model
+    ``src\app.py`` and a model that echoes that spelling has still found the
+    file, so either separator counts. Found on the first Windows run, where it
+    was the difference between a read task passing and failing.
+    """
     text = (answer or "").lower()
-    missing = [needle for needle in needles if needle.lower() not in text]
+    missing = [
+        needle for needle in needles
+        if needle.lower() not in text and needle.lower().replace("/", "\\") not in text
+    ]
     if missing:
         return Outcome.failed(f"the answer never mentioned {', '.join(missing)}")
     return Outcome.passed()

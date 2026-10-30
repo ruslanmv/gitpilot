@@ -123,13 +123,15 @@ _TOOL_ACTIONS: Mapping[str, Action] = {
     "git.push": Action.GIT_PUSH,
     "github.issue.create": Action.CREATE_ISSUE,
     "github.pr.create": Action.CREATE_PR,
+    "gitlab.issue.create": Action.CREATE_ISSUE,
+    "gitlab.mr.create": Action.CREATE_PR,
 }
 
 #: ``ToolCategory`` → the canonical namespaces it covers, so a mode written as
 #: ``groups: [read, {edit: {fileRegex: ...}}]`` restricts canonical tools.
 _CATEGORY_TOOLS: Mapping[ToolCategory, Tuple[str, ...]] = {
     ToolCategory.READ: ("fs.read", "fs.list", "fs.glob", "fs.grep", "git.read",
-                        "github.read", "test.detect"),
+                        "github.read", "gitlab.read", "test.detect"),
     ToolCategory.EDIT: ("fs.write", "fs.edit", "fs.delete"),
     ToolCategory.COMMAND: ("terminal.", "test.run", "git.branch", "git.commit",
                            "git.stash", "git.push"),
@@ -306,7 +308,14 @@ class CapabilityMask:
 
         Longest-prefix wins, so ``fs.*`` can grant the family while
         ``fs.delete: false`` withholds one member.
+
+        A GitLab forge tool (``gitlab.mr.create``) is governed by its GitHub
+        twin (``github.pr.create``) unless the mask names a ``gitlab.*`` key
+        itself, so every topology written before GitLab support grants the
+        same forge abilities on both providers.
         """
+        if capability.startswith("gitlab.") and not self._names_namespace("gitlab."):
+            capability = _github_twin(capability)
         # Explicit denials first: `{fs.*: true, fs.delete: false}` must withhold
         # fs.delete, and checking the wildcard first would grant it.
         for key in self.denied:
@@ -329,6 +338,9 @@ class CapabilityMask:
             return best[1]
 
         return Qualifier() if self.open_by_default else None
+
+    def _names_namespace(self, prefix: str) -> bool:
+        return any(key.startswith(prefix) for key in (*self.granted, *self.denied))
 
     # -- construction ------------------------------------------------------
 
@@ -380,6 +392,14 @@ class CapabilityMask:
             "granted": sorted(self.granted),
             "denied": sorted(self.denied),
         }
+
+
+def _github_twin(capability: str) -> str:
+    """``gitlab.mr.create`` -> ``github.pr.create``; ``gitlab.issue.list`` -> ``github.issue.list``."""
+    rest = capability[len("gitlab."):]
+    if rest.startswith("mr.") or rest == "mr":
+        rest = "pr" + rest[2:]
+    return "github." + rest
 
 
 def _stricter(a: Qualifier, b: Qualifier) -> Qualifier:

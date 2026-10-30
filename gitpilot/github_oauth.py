@@ -5,10 +5,7 @@ from __future__ import annotations
 
 import logging
 import os
-import secrets
-import time
 from typing import Optional, Dict, Any
-from urllib.parse import urlencode
 
 import httpx
 from pydantic import BaseModel
@@ -45,8 +42,6 @@ class AuthSession(BaseModel):
     scope: str = ""
     user: GitHubUser
 
-# In-memory OAuth state storage (For Web Flow)
-_oauth_states: dict[str, OAuthState] = {}
 
 
 def get_oauth_config() -> OAuthConfig:
@@ -98,7 +93,9 @@ def resolve_redirect_uri(explicit: Optional[str] = None) -> Optional[str]:
     if candidate:
         return candidate.rstrip("/")
 
-    base = os.getenv("GITPILOT_PUBLIC_BASE_URL", "").strip().rstrip("/")
+    from .auth.deployment import public_base_url
+
+    base = public_base_url()  # GITPILOT_PUBLIC_BASE_URL, or https://$SPACE_HOST on HF Spaces
     if base:
         return f"{base}/auth"
 
@@ -110,109 +107,47 @@ def resolve_redirect_uri(explicit: Optional[str] = None) -> Optional[str]:
 
 def generate_authorization_url(redirect_uri: Optional[str] = None) -> tuple[str, str]:
     """
-    Generate GitHub OAuth authorization URL with PKCE (Web Flow).
+    Generate a GitHub OAuth authorization URL (Web Flow) with S256 PKCE.
     Returns: (authorization_url, state)
 
-    An explicit ``redirect_uri`` is sent so GitHub returns the user to *our*
-    frontend instead of the App's registered default callback. It is derived
-    from ``GITHUB_REDIRECT_URI`` / ``GITPILOT_PUBLIC_BASE_URL`` when not passed.
+    The state and PKCE verifier are stored server-side by
+    :mod:`gitpilot.auth.oauth` (shared by every worker, single use, 10-minute
+    lifetime). The redirect URI comes from ``GITHUB_REDIRECT_URI`` /
+    ``GITPILOT_PUBLIC_BASE_URL``; ``redirect_uri`` is accepted for backward
+    compatibility and must match it when given.
     """
-    config = get_oauth_config()
+    from .auth import oauth
 
-    # 1. State for CSRF protection
-    state = secrets.token_urlsafe(32)
-    code_verifier = secrets.token_urlsafe(32)
-
-    # 2. Store state
-    _oauth_states[state] = OAuthState(
-        state=state,
-        code_verifier=code_verifier,
-        timestamp=time.time(),
-    )
-    _cleanup_old_states()
-
-    # 3. Build URL
-    params = {
-        "client_id": config.client_id,
-        "scope": "repo user:email",
-        "state": state,
-        "allow_signup": "true",
-    }
-
-    redirect_uri = resolve_redirect_uri(redirect_uri)
-    if redirect_uri:
-        params["redirect_uri"] = redirect_uri
-
-    auth_url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
-    logger.info(
-        "Generated OAuth authorization URL (redirect_uri=%s)",
-        redirect_uri or "GitHub App default",
-    )
-    return auth_url, state
+    configured = resolve_redirect_uri()
+    if redirect_uri and configured and redirect_uri.rstrip("/") != configured:
+        raise ValueError("redirect_uri does not match the configured GitHub callback.")
+    started = oauth.start("github", None)
+    return started["authorization_url"], started["state"]
 
 
 async def exchange_code_for_token(
-    code: str, state: str, redirect_uri: Optional[str] = None
+    code: str,
+    state: str,
+    redirect_uri: Optional[str] = None,
 ) -> AuthSession:
     """
-    Exchange authorization code for access token (Web Flow).
-    Requires GITHUB_CLIENT_SECRET to be set.
+    Exchange an authorization code (with the stored PKCE verifier) for a token.
+
+    Kept for API compatibility; the web app uses
+    :func:`gitpilot.auth.session_router.complete_oauth`, which also stores the
+    token server-side instead of returning it.
     """
-    config = get_oauth_config()
+    from fastapi import HTTPException
 
-    if not config.client_secret:
-        raise ValueError("Web Flow requires GITHUB_CLIENT_SECRET. Please use Device Flow or configure the secret.")
+    from .auth import oauth
 
-    # 1. Validate State
-    if state not in _oauth_states:
-        logger.error(f"State mismatch or expiration. Received: {state}")
-        raise ValueError("Invalid OAuth state. The session may have expired. Please try again.")
-
-    oauth_state = _oauth_states.pop(state)
-    if time.time() - oauth_state.timestamp > 600:
-        raise ValueError("OAuth interaction timed out.")
-
-    # GitHub requires the same redirect_uri at token exchange that was sent at
-    # the authorize step. Resolve it the same way generate_authorization_url did.
-    token_request = {
-        "client_id": config.client_id,
-        "client_secret": config.client_secret,
-        "code": code,
-    }
-    redirect_uri = resolve_redirect_uri(redirect_uri)
-    if redirect_uri:
-        token_request["redirect_uri"] = redirect_uri
-
-    # 2. Exchange Code
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        try:
-            token_response = await client.post(
-                "https://github.com/login/oauth/access_token",
-                data=token_request,
-                headers={"Accept": "application/json"},
-            )
-            token_response.raise_for_status()
-            token_data = token_response.json()
-        except httpx.HTTPError as e:
-            logger.error(f"HTTP Error contacting GitHub: {e}")
-            raise ValueError("Failed to contact GitHub authentication server.")
-
-        if "error" in token_data:
-            raise ValueError(f"GitHub refused the connection: {token_data.get('error_description')}")
-
-        access_token = token_data.get("access_token")
-        if not access_token:
-            raise ValueError("No access_token returned from GitHub.")
-
-        # 3. Fetch User
-        user = await _fetch_user_profile(client, access_token)
-
-        return AuthSession(
-            access_token=access_token,
-            token_type=token_data.get("token_type", "bearer"),
-            scope=token_data.get("scope", ""),
-            user=user,
-        )
+    try:
+        tokens, _ = await oauth.exchange("github", code, state)
+    except HTTPException as exc:
+        raise ValueError(str(exc.detail)) from exc
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        user = await _fetch_user_profile(client, tokens.access_token)
+    return AuthSession(access_token=tokens.access_token, token_type="bearer", scope=tokens.scope, user=user)
 
 # ============================================================================
 # DEVICE FLOW (No Secret Required)
@@ -333,14 +268,3 @@ async def validate_token(access_token: str) -> Optional[GitHubUser]:
     except Exception as e:
         logger.debug(f"Token validation failed: {e}")
         return None
-
-
-def _cleanup_old_states():
-    """Remove OAuth states older than 10 minutes to prevent memory leaks."""
-    current_time = time.time()
-    expired_states = [
-        state for state, data in _oauth_states.items()
-        if current_time - data.timestamp > 600
-    ]
-    for state in expired_states:
-        _oauth_states.pop(state, None)

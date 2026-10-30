@@ -8,7 +8,7 @@ from typing import Optional
 
 from crewai.tools import tool
 
-from .agent_tools import get_repo_context
+from .agent_tools import bound_scm, get_repo_context
 from . import github_search as gs
 
 
@@ -32,7 +32,7 @@ def search_code(
     try:
         owner, repo, token, _branch = get_repo_context()
         result = _run_async(
-            gs.search_code(
+            bound_scm.search_code(
                 query,
                 owner=owner,
                 repo=repo,
@@ -103,7 +103,7 @@ def search_issues(
         elif is_pr.lower() == "false":
             pr_flag = False
         result = _run_async(
-            gs.search_issues(
+            bound_scm.search_issues(
                 query,
                 owner=owner,
                 repo=repo,

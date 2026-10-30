@@ -8,7 +8,7 @@ One id either way — the model should not have to know which kind of session it
 is in, and a topology that grants ``fs.write`` means the same thing in both.
 
 Every handler wraps the implementation the CrewAI tools already use
-(:class:`gitpilot.workspace.WorkspaceManager`, :mod:`gitpilot.github_api`,
+(:class:`gitpilot.workspace.WorkspaceManager`, :mod:`gitpilot.scm` (GitHub or GitLab),
 :mod:`gitpilot.edit_backend`, :mod:`gitpilot.grep_backend`,
 :mod:`gitpilot.glob_match`) and reproduces its output text exactly, so the
 parity gate in ``tests/toolkit/parity`` can prove the migration changes nothing
@@ -72,10 +72,10 @@ def _workspace_info(ctx: ToolExecutionContext):
 
 
 async def _repo_tree(ctx: ToolExecutionContext) -> List[Dict[str, Any]]:
-    from ..github_api import get_repo_tree
+    from ..scm import get_repo_tree
 
     repo = ctx.require_repo()
-    return await get_repo_tree(repo.owner, repo.repo, token=repo.token, ref=repo.branch)
+    return await get_repo_tree(repo.owner, repo.repo, token=repo.token, ref=repo.branch, provider=repo.provider)
 
 
 def _unified_diff(path: str, before: str, after: str, *, limit: int = 20_000) -> str:
@@ -128,11 +128,11 @@ async def _fs_read(call: ToolCall, ctx: ToolExecutionContext) -> ToolResult:
                 call, f"Error reading {path}: {exc}", error="read_failed",
             )
     else:
-        from ..github_api import get_file
+        from ..scm import get_file
 
         repo = ctx.require_repo()
         try:
-            content = await get_file(repo.owner, repo.repo, path, token=repo.token, ref=repo.branch)
+            content = await get_file(repo.owner, repo.repo, path, token=repo.token, ref=repo.branch, provider=repo.provider)
         except Exception as exc:  # noqa: BLE001 - matches agent_tools.read_file
             return ToolResult.failure(
                 call, f"Error reading file {path}: {exc}", error="read_failed",
@@ -328,7 +328,7 @@ async def _fs_grep(call: ToolCall, ctx: ToolExecutionContext) -> ToolResult:
             data={"matches": matches[:50], "count": len(matches)},
         )
 
-    from ..github_api import get_file
+    from ..scm import get_file
 
     repo = ctx.require_repo()
     try:
@@ -354,7 +354,7 @@ async def _fs_grep(call: ToolCall, ctx: ToolExecutionContext) -> ToolResult:
 
         async def _fetch(path: str) -> Tuple[str, Optional[str]]:
             try:
-                return path, await get_file(repo.owner, repo.repo, path, token=repo.token, ref=repo.branch)
+                return path, await get_file(repo.owner, repo.repo, path, token=repo.token, ref=repo.branch, provider=repo.provider)
             except Exception:  # noqa: BLE001 - a missing file is not a search failure
                 return path, None
 
@@ -435,17 +435,17 @@ async def _fs_write(call: ToolCall, ctx: ToolExecutionContext) -> ToolResult:
             },
         )
 
-    from ..github_api import get_file, put_file
+    from ..scm import get_file, put_file
 
     repo = ctx.require_repo()
     message = call.arguments.get("commit_message") or f"Update {path}"
     try:
         try:
-            before = await get_file(repo.owner, repo.repo, path, token=repo.token, ref=repo.branch) or ""
+            before = await get_file(repo.owner, repo.repo, path, token=repo.token, ref=repo.branch, provider=repo.provider) or ""
         except Exception:  # noqa: BLE001 - a new file has no "before"
             before = ""
         result = await put_file(
-            repo.owner, repo.repo, path, content, message, token=repo.token, branch=repo.branch,
+            repo.owner, repo.repo, path, content, message, token=repo.token, branch=repo.branch, provider=repo.provider,
         )
     except Exception as exc:  # noqa: BLE001 - matches agent_tools.write_file
         return ToolResult.failure(call, f"Error writing file {path}: {exc}", error="write_failed")
@@ -542,12 +542,12 @@ async def _fs_edit(call: ToolCall, ctx: ToolExecutionContext) -> ToolResult:
             },
         )
 
-    from ..github_api import get_file, put_file
+    from ..scm import get_file, put_file
 
     repo = ctx.require_repo()
     message = call.arguments.get("commit_message") or f"Edit {path}"
     try:
-        current = await get_file(repo.owner, repo.repo, path, token=repo.token, ref=repo.branch)
+        current = await get_file(repo.owner, repo.repo, path, token=repo.token, ref=repo.branch, provider=repo.provider)
         new_content, report = apply_edit(
             current or "",
             old_string=old_string,
@@ -555,7 +555,7 @@ async def _fs_edit(call: ToolCall, ctx: ToolExecutionContext) -> ToolResult:
             expected_occurrences=expected,
         )
         result = await put_file(
-            repo.owner, repo.repo, path, new_content, message, token=repo.token, branch=repo.branch,
+            repo.owner, repo.repo, path, new_content, message, token=repo.token, branch=repo.branch, provider=repo.provider,
         )
     except EditError as exc:
         return ToolResult.failure(call, f"Error: {exc}", error="edit_conflict")
@@ -611,13 +611,13 @@ async def _fs_delete(call: ToolCall, ctx: ToolExecutionContext) -> ToolResult:
             call, f"Deleted: {deleted}", data={"path": path, "deleted": bool(deleted)},
         )
 
-    from ..github_api import delete_file
+    from ..scm import delete_file
 
     repo = ctx.require_repo()
     message = call.arguments.get("commit_message") or f"Delete {path}"
     try:
         result = await delete_file(
-            repo.owner, repo.repo, path, message, token=repo.token, branch=repo.branch,
+            repo.owner, repo.repo, path, message, token=repo.token, branch=repo.branch, provider=repo.provider,
         )
     except Exception as exc:  # noqa: BLE001 - matches delete_repo_file
         return ToolResult.failure(call, f"Error deleting file {path}: {exc}", error="delete_failed")

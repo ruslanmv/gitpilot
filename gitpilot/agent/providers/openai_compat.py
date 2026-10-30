@@ -117,6 +117,11 @@ class OpenAICompatibleProvider:
         merged.extend(dict(message) for message in messages)
 
         body: Dict[str, Any] = {"model": self.model, "messages": merged, "stream": stream}
+        if stream:
+            # Without this, OpenAI, vLLM, llama.cpp and Ollama all stream the
+            # text and omit the token counts, so a streamed run's journal records
+            # zero tokens -- which the benchmark then reads as "unobserved".
+            body["stream_options"] = {"include_usage": True}
         if tools and self.supports_native_tools:
             body["tools"] = [
                 {
@@ -387,7 +392,10 @@ def _parse_stream_line(line: str) -> Optional[StreamChunk]:
 
     choices = payload.get("choices") or []
     if not choices:
-        return None
+        # The usage-only trailer that ``stream_options.include_usage`` asks for:
+        # no choices, just the counts for the whole response.
+        usage = _usage(payload)
+        return StreamChunk(usage=usage) if usage is not None else None
     choice = choices[0]
     delta = choice.get("delta") or {}
 

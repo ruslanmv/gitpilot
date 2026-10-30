@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — GitLab support and server-side sign-in sessions
+- **GitLab works end to end.**
+  - Sign in with GitLab (GitLab.com, or one self-managed host set with `GITLAB_BASE_URL`).
+  - Browse membership projects, including private projects and projects in nested groups.
+  - List, create and switch branches.
+  - Read, create, update and delete files as commits.
+  - View commit history and diffs.
+  - Work with issues and merge requests.
+  - Plan and execute AI changes on a working branch and open a merge request.
+  - The same agents serve both providers through the new `gitpilot.scm` dispatch layer;
+    `gitpilot.gitlab_api` returns GitHub-shaped payloads.
+  - The v4 loop gets `gitlab.issue.*`, `gitlab.mr.*` and `gitlab.search.*` tools.
+    Topology grants for `github.*` cover them.
+  - See `docs/GITLAB_INTEGRATION.md`.
+- **Server-side web sessions and an encrypted token vault** (`gitpilot/auth/`).
+  - GitHub and GitLab OAuth use server-side, single-use state with S256 PKCE.
+  - Tokens are stored encrypted with Fernet and never sent to the browser.
+  - Sessions use HttpOnly cookies, with a header fallback for cross-site deployments.
+  - CSRF tokens protect cookie-authenticated writes.
+  - Provider tokens refresh automatically.
+  - New routes: logout and disconnect (both revoke tokens), and single-use WebSocket tickets.
+  - Account sessions are now revocable. A password change or reset signs out other sessions.
+  - Reset links work once.
+  - See `docs/auth.md`.
+- **Sign-in page**: GitLab sign-in works, provider availability is shown, the
+  password-reset view is new, and the OAuth `state` is checked in the browser.
+  Accessibility is improved (landmark, focus management, live regions).
+- **Production and Hugging Face Space deployment.**
+  - Sessions use Postgres when `DATABASE_URL` is set, so they survive Space
+    restarts and redeploys.
+  - Each OAuth sign-in returns to the frontend that started it (production site or
+    Space UI), checked against an allowlist.
+  - `SPACE_HOST` supplies the public URL, a trusted origin and `Secure` cookies.
+  - Inside the embedded huggingface.co page, GitHub sign-in uses the device flow and
+    GitLab continues in a new tab.
+  - A duplicated Space's UI talks to its own backend.
+  - A frontend deployed before its backend keeps users' stored tokens until it can
+    migrate them.
+
+### Security
+- A GitLab token could be sent to `api.github.com` and a GitHub token to GitLab: the
+  frontend picked one token for all requests by a global setting. Credentials are
+  now chosen per repository provider. Each provider's helpers refuse to run inside
+  the other provider's request scope.
+- GitHub OAuth did not actually use PKCE, and the frontend never checked GitHub's
+  `state`. Both are fixed.
+- OAuth state was kept in per-process memory. It is now shared, single-use and bound
+  to the session that started the flow.
+- `GET /api/auth/installation-status` no longer returns the server's own GitHub token.
+- Clones no longer store the access token in `.git/config`.
+- The agent tools' repository context is per run (a context variable), no longer
+  process-global.
+- With `CORS_ORIGINS=*`, session cookies stay `SameSite=Lax`.
+  `CORS_ORIGIN_REGEX` supports preview deployments.
+
+### Changed
+- Browser `localStorage` no longer holds provider tokens. Existing tokens are migrated
+  once, then deleted from the browser.
+- Agent requests, sessions and repository objects carry an explicit `provider` and a
+  stable `repo_id`.
+
 ### Documentation debt (acknowledged)
 This changelog has recorded almost nothing since `0.1.0` while the project
 shipped several substantial programs. They are documented in `docs/`, not here,
@@ -31,6 +92,79 @@ and this note exists so the gap is visible rather than implied:
   entries below.
 
 Entries below resume normal per-change logging.
+
+### Fixed — `make run` could not start MCP Context Forge
+- **The Forge image crash-looped on an MCP SDK it was never tested with.** Its
+  Containerfile installs with `uv pip install .`, which ignores the checkout's
+  lock and resolved `mcp>=1.25.0` to 2.3.0; 2.x renamed `streamablehttp_client`,
+  so gunicorn died at import and Compose reported "container is unhealthy". The
+  install and start scripts now ask the image whether its Forge code needs the
+  old name and its SDK lacks it, and only then add a one-line layer pinning
+  `mcp<2` (`scripts/lib/forge-image.sh`, `deploy/mcp-forge/sdk-pin.Dockerfile`).
+- **The bundled Forge runs 2 gunicorn workers instead of up to 16.** Its default
+  is 2×CPU+1; on a 16-thread laptop that is enough to starve a WSL VM. Override
+  with `MCP_FORGE_WORKERS` in `.mcp.env`.
+
+### Added — MCP host ports fall back to a free one
+- **A port something else holds no longer blocks the MCP stack.** Before starting,
+  `scripts/mcp-stack.sh` checks the Forge, Postgre and Inspector host ports; one
+  held by another process or container moves that service to the next free port,
+  and the move is saved to `.mcp.env` so registration, `stop-mcp`, `logs-mcp` and
+  the smoke test follow it. A port GitPilot's own container already publishes is
+  kept. `make run` passes a moved Forge address to the backend
+  (`GITPILOT_MCP_FORGE_URL`), unless one is already configured.
+
+### Changed — the web app streams over the v2 API (Batch V4-H4)
+- **The chat panel runs a message on `POST /api/v2/chat/stream`** through
+  `frontend/utils/sse.js` instead of opening the legacy `/ws/sessions` socket.
+  Text, tool activity and plan steps arrive live; approval requests show inline
+  (approve once / for the session / deny, over `/api/v2/approval/respond`); Stop
+  aborts the stream and cancels the run server-side. `frontend/utils/streamState.js`
+  folds the v2 vocabulary into the shapes `StreamingMessage` always rendered, and a
+  parity test checks the result against the legacy protocol. The plan flow is
+  unchanged and remains the path when the v2 stream is not reachable.
+- `npm test` in `frontend/` now runs the Node test suite; the package is
+  `"type": "module"`.
+
+### Deprecated — the legacy session WebSocket
+- **`WS /ws/sessions/{session_id}` is frozen.** It still works, and says once per
+  process that it is deprecated (`DeprecationWarning` plus a log line); use
+  `POST /api/v2/chat/stream` or `WS /ws/v2/sessions/{session_id}`. Removal is
+  scheduled for 0.3 with the rest of Batch V4-H5's deletions.
+
+### Fixed — a REACT_TEXT run could only ever write once
+- **Call ids are unique within a run.** The text dialects minted the same id every
+  turn (`react_0`, `lite_act_0`), and the replay-safe registry from the approved-
+  mutation work keys its idempotency ledger on that id — so after one `fs.edit`,
+  the corrected retry was refused with "idempotency_key was already used for
+  different arguments" and the run could never write again. The loop now re-keys
+  a repeated id (`react_0-2`, …) before dispatch for the text dialects; NATIVE ids
+  are the provider's and stay as they are. Found by the first real-model
+  benchmark run on the local 8B tier, where it decided most edit tasks.
+
+### Fixed — streamed runs recorded zero tokens
+- **`OpenAICompatibleProvider` now asks for usage on streams and keeps the trailer.**
+  OpenAI, vLLM, llama.cpp and Ollama all omit token counts from a stream unless
+  `stream_options.include_usage` is sent, and then deliver them in a final chunk
+  with no `choices` — which the stream parser discarded. Every streamed NATIVE and
+  REACT_TEXT run therefore journaled `prompt_tokens: 0`, and the benchmark report
+  showed the tokens column as unobserved for the 8B tier. Found by the first
+  real-model run of `bench/`.
+
+### Fixed — bench read tasks failed on Windows path spelling
+- **`bench/` read checkers accept either path separator.** On Windows the tools
+  render `src\app.py`; a model that echoed that spelling had found the file but
+  the checker only knew `src/app.py`. Found on the first Windows run, where it
+  decided several read cells.
+
+### Added — the bench frontier tier can sit behind a gateway
+- **`GITPILOT_BENCH_FRONTIER_MODEL` / `GITPILOT_BENCH_FRONTIER_FAMILY`** point the
+  matrix's frontier rung at any OpenAI-compatible gateway (an OllaBridge fronting
+  a hosted model, say) instead of requiring `ANTHROPIC_API_KEY`. The claim under
+  test — a NATIVE tool-calling model drives the loop — does not change, and an
+  OllaBridge tier is probed at `/health` like the Ollama tiers are at `/api/tags`.
+  `docs/agents.md` describes it, and says plainly that the legacy engine needs a
+  GitHub binding because its tools speak the GitHub REST API.
 
 ### Added — topologies became policy documents
 - **A topology is a YAML document, not a hand-drawn graph.** It states which engine

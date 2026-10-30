@@ -115,11 +115,17 @@ def test_forgot_password_is_always_generic(client):
 
 def test_reset_password_then_login(client):
     client.post("/api/account/signup", json={"email": "r@x.co", "password": "oldpassword1"})
-    from gitpilot.auth.security import RESET_PASSWORD
+    from gitpilot.auth.accounts import get_account_store
+    from gitpilot.auth.security import RESET_PASSWORD, password_fingerprint
 
-    tok = make_link_token("r@x.co", RESET_PASSWORD)
+    # Reset links carry a fingerprint of the password they were issued for
+    # (exactly as /password/forgot mints them), so each link works once.
+    acc = get_account_store().get_by_email("r@x.co")
+    tok = make_link_token("r@x.co", RESET_PASSWORD, fingerprint=password_fingerprint(acc.password_hash))
     rr = client.post("/api/account/password/reset", json={"token": tok, "password": "newpassword1"})
     assert rr.status_code == 200 and rr.json()["email_verified"] is True  # reset proves ownership
+    replay = client.post("/api/account/password/reset", json={"token": tok, "password": "newpassword2"})
+    assert replay.status_code == 401
     ok = client.post("/api/account/login", json={"email": "r@x.co", "password": "newpassword1"})
     assert ok.status_code == 200
 

@@ -1,0 +1,3 @@
+gate: not met — the default stays on the legacy engine
+  - local_small: incomplete (legacy produced no cells for this tier)
+  - local_8b: incomplete (legacy produced no cells for this tier)

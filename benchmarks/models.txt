@@ -1,0 +1,14 @@
+# Models to benchmark: one id per line, exactly as the gateway lists them
+# (`python -m benchmarks.run --list`). Lines starting with '#' are ignored.
+#
+# Optional display name for the report:   <id> = <public name>
+# Without one, the report shows a generic form of the id, or asks the model
+# to identify itself when the id is an opaque alias.
+#
+# Keep private or internal model ids out of this file. Put them in
+# benchmarks/models.local.txt, which git ignores, and run with
+#   python -m benchmarks.run --models-file benchmarks/models.local.txt
+
+qwen2.5:1.5b
+llama3:8b
+# deepseek-r1:latest

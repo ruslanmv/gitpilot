@@ -1,0 +1,15 @@
+# Public model pages for the report: <display name> = <https URL>.
+# Each link was checked against the Hugging Face API on 2026-10-30 (HTTP 200, public).
+# The build a gateway serves may be quantized or fine-tuned; the link is the public model.
+# Only https links are rendered.
+
+qwen3-8-27b = https://huggingface.co/Qwen/Qwen3.8-27B
+gemma4-31b = https://huggingface.co/google/gemma-4-31B-it
+glm-5.3 = https://huggingface.co/zai-org/GLM-5.3
+glm-5.3-flash = https://huggingface.co/zai-org/GLM-5.3-Flash
+kimi-k3 = https://huggingface.co/moonshotai/Kimi-K3
+deepseek-v4-1-flash = https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash
+gpt-oss-120b = https://huggingface.co/openai/gpt-oss-120b
+qwen2.5:1.5b = https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct
+llama3:8b = https://huggingface.co/meta-llama/Meta-Llama-3-8B-Instruct
+deepseek-r1 = https://huggingface.co/deepseek-ai/DeepSeek-R1-0528-Qwen3-8B

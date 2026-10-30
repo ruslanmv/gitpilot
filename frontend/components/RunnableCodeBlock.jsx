@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { apiUrl } from "../utils/api.js";
+import { writeFile } from "../utils/repoApi.js";
 import SandboxCanvas from "./SandboxCanvas.jsx";
 import ExecutionPlanCard, { fetchExecutionPlan } from "./ExecutionPlanCard.jsx";
 
@@ -65,7 +66,7 @@ function applyMatplotlibShim(language, code) {
  * giving the save call a real target.  When absent the button is
  * hidden — keeps the contract honest: no button without somewhere to
  * save. */
-export default function RunnableCodeBlock({ language, code, owner, repo }) {
+export default function RunnableCodeBlock({ language, code, owner, repo, repoInfo, branch }) {
   const lang = (language || "").trim().toLowerCase();
   const canRun = RUNNABLE.has(lang);
   const [busy, setBusy] = useState(false);
@@ -134,9 +135,9 @@ export default function RunnableCodeBlock({ language, code, owner, repo }) {
     if (navigator?.clipboard) navigator.clipboard.writeText(code).catch(() => {});
   };
 
-  // POST the snippet to /api/repos/{owner}/{repo}/file with a path
-  // chosen by the user.  Pure client-side prompt — no new backend
-  // wiring needed because the endpoint already exists.
+  // Commit the snippet to the active branch at a path chosen by the user,
+  // through the repository's provider (GitHub contents API or a GitLab
+  // commit) with the session's credential.
   const saveToRepo = async (snippet, snippetLang) => {
     if (!owner || !repo) {
       setSaveMsg("No repository context — open this chat inside a repo to save.");
@@ -149,21 +150,14 @@ export default function RunnableCodeBlock({ language, code, owner, repo }) {
     setSaving(true);
     setSaveMsg(null);
     try {
-      const res = await fetch(apiUrl(`/api/repos/${owner}/${repo}/file`), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          path,
-          content: snippet,
-          message: `Save snippet from chat (${path})`,
-        }),
+      const target = repoInfo || { owner, name: repo, full_name: `${owner}/${repo}` };
+      await writeFile(target, {
+        path,
+        content: snippet,
+        message: `Save snippet from chat (${path})`,
+        branch: branch || undefined,
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setSaveMsg(data.detail || `Save failed (HTTP ${res.status})`);
-        return;
-      }
-      setSaveMsg(`Saved to ${path}`);
+      setSaveMsg(`Saved to ${path}${branch ? ` on ${branch}` : ""}`);
     } catch (err) {
       setSaveMsg(err.message || "Save failed");
     } finally {

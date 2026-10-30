@@ -13,6 +13,7 @@ import httpx
 from fastapi import HTTPException
 
 from gitpilot.models import GithubStatusSummary
+from gitpilot.scm_context import _request_provider, token_belongs_to_other_provider
 
 GITHUB_API_BASE = "https://api.github.com"
 
@@ -32,6 +33,8 @@ _request_ref: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 
 @contextmanager
 def execution_context(token: str | None, ref: str | None = None):
+    """Bind a GitHub credential and ref (and the GitHub provider) for one scope."""
+    provider_var = _request_provider.set("github")
     token_var = _request_token.set(token)
     ref_var = _request_ref.set(ref)
     try:
@@ -39,6 +42,7 @@ def execution_context(token: str | None, ref: str | None = None):
     finally:
         _request_token.reset(token_var)
         _request_ref.reset(ref_var)
+        _request_provider.reset(provider_var)
 
 
 def _github_ref(provided_ref: str | None = None) -> str | None:
@@ -53,12 +57,25 @@ def _github_token(provided_token: str | None = None) -> str:
     1. Explicit argument
     2. Request Context (set via execution_context)
     3. Environment variables (Fallback)
+
+    Inside a GitLab scope nothing is sent to GitHub at all: the bound
+    credential is GitLab's, and the server's own GitHub token must not stand in
+    for it either.
     """
+    if _request_provider.get() == "gitlab":
+        raise HTTPException(
+            status_code=400,
+            detail="This operation targets GitHub, but the selected repository is on GitLab.",
+        )
     if provided_token:
+        if token_belongs_to_other_provider(provided_token, "github"):
+            raise HTTPException(status_code=400, detail="A GitLab credential cannot be used for GitHub.")
         return provided_token
 
     ctx_token = _request_token.get()
     if ctx_token:
+        if token_belongs_to_other_provider(ctx_token, "github"):
+            raise HTTPException(status_code=400, detail="A GitLab credential cannot be used for GitHub.")
         return ctx_token
 
     token = os.getenv("GITPILOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
@@ -550,6 +567,99 @@ async def delete_file(
         "path": path,
         "commit_sha": commit.get("sha", ""),
         "commit_url": commit.get("html_url"),
+    }
+
+
+# -----------------------------------------------------------------------------
+# Branches, history and comparisons (same shapes as gitpilot.gitlab_api)
+# -----------------------------------------------------------------------------
+
+async def list_branches(
+    owner: str,
+    repo: str,
+    *,
+    query: str | None = None,
+    page: int = 1,
+    per_page: int = 100,
+    token: str | None = None,
+) -> dict[str, Any]:
+    """Branches in the branch-picker shape, default branch first."""
+    default = await _resolve_head_ref(owner, repo, token)
+    data = await github_request(
+        f"/repos/{owner}/{repo}/branches",
+        params={"page": page, "per_page": min(per_page, 100)},
+        token=token,
+    ) or []
+    q = (query or "").strip().lower()
+    branches = [
+        {
+            "name": b.get("name"),
+            "is_default": b.get("name") == default,
+            "protected": bool(b.get("protected")),
+            "commit_sha": (b.get("commit") or {}).get("sha"),
+        }
+        for b in data
+        if b.get("name") and (not q or q in b["name"].lower())
+    ]
+    branches.sort(key=lambda b: (0 if b["is_default"] else 1, b["name"].lower()))
+    return {"branches": branches, "page": page, "per_page": per_page,
+            "has_more": len(data) == min(per_page, 100), "default_branch": default}
+
+
+def _commit_summary(item: dict[str, Any]) -> dict[str, Any]:
+    commit = item.get("commit") or {}
+    author = commit.get("author") or {}
+    sha = item.get("sha") or ""
+    return {
+        "sha": sha,
+        "short_sha": sha[:7],
+        "message": commit.get("message") or "",
+        "author": {"name": author.get("name"), "email": author.get("email"), "date": author.get("date")},
+        "html_url": item.get("html_url"),
+    }
+
+
+async def list_commits(
+    owner: str,
+    repo: str,
+    *,
+    ref: str | None = None,
+    path: str | None = None,
+    page: int = 1,
+    per_page: int = 30,
+    token: str | None = None,
+) -> list[dict[str, Any]]:
+    """Commit history of ``ref`` (optionally limited to ``path``)."""
+    params: dict[str, Any] = {"page": page, "per_page": min(per_page, 100)}
+    resolved = _github_ref(ref if ref and ref != "HEAD" else None)
+    if resolved and resolved != "HEAD":
+        params["sha"] = resolved
+    if path:
+        params["path"] = path
+    data = await github_request(f"/repos/{owner}/{repo}/commits", params=params, token=token) or []
+    return [_commit_summary(c) for c in data]
+
+
+async def compare_refs(
+    owner: str,
+    repo: str,
+    base: str,
+    head: str,
+    token: str | None = None,
+) -> dict[str, Any]:
+    """Diff of ``head`` against ``base`` (``{commits, files[{filename,status,patch}]}``)."""
+    data = await github_request(f"/repos/{owner}/{repo}/compare/{base}...{head}", token=token) or {}
+    return {
+        "base": base,
+        "head": head,
+        "ahead_by": data.get("ahead_by", 0),
+        "commits": [_commit_summary(c) for c in data.get("commits") or []],
+        "files": [
+            {k: f.get(k) for k in ("filename", "status", "additions", "deletions", "changes",
+                                   "patch", "previous_filename") if k in f}
+            for f in data.get("files") or []
+        ],
+        "provider": "github",
     }
 
 

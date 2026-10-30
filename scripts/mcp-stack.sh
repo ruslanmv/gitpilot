@@ -44,6 +44,10 @@ load_env() {
   set -a; source .mcp.env; set +a
   # shellcheck source=scripts/lib/forge-auth.sh
   source "${SCRIPT_DIR}/lib/forge-auth.sh"
+  # shellcheck source=scripts/lib/mcp-ports.sh
+  source "${SCRIPT_DIR}/lib/mcp-ports.sh"
+  # shellcheck source=scripts/lib/forge-image.sh
+  source "${SCRIPT_DIR}/lib/forge-image.sh"
 }
 
 require_docker() {
@@ -82,6 +86,8 @@ cmd_up() {
     if [[ "${MCP_FORGE_ADOPT:-auto}" == "never" ]]; then
       skip "MCP_FORGE_ADOPT=never — starting GitPilot's own Forge anyway."
     else
+      mcp_claim_port MCP_POSTGRE_PORT 8080 gitpilot-mcp-postgre-server || exit 1
+      mcp_claim_port MCP_INSPECTOR_PORT 8081 gitpilot-mcp-inspector-server || exit 1
       echo "🚀 Starting GitPilot's MCP servers against it..."
       MCP_FORGE_URL="${FORGE_URL}" "${COMPOSE[@]}" up -d --no-deps "${our_servers[@]}" \
         || die "Could not start the MCP servers. Tail logs with: make logs-mcp"
@@ -89,6 +95,20 @@ cmd_up() {
       return 0
     fi
   fi
+
+  # A port something else holds moves our service to the next free one (saved
+  # to .mcp.env); a port our own container already publishes is kept.
+  mcp_claim_port MCP_FORGE_PORT 4444 gitpilot-mcp-context-forge || exit 1
+  mcp_claim_port MCP_POSTGRE_PORT 8080 gitpilot-mcp-postgre-server || exit 1
+  mcp_claim_port MCP_INSPECTOR_PORT 8081 gitpilot-mcp-inspector-server || exit 1
+
+  # Build the Forge image first if it is missing, so the SDK check below runs
+  # before its first start rather than after the first crash.
+  if ! docker image inspect "${FORGE_IMAGE}" >/dev/null 2>&1; then
+    "${COMPOSE[@]}" build mcp-context-forge \
+      || die "Could not build MCP Context Forge. Tail logs with: make logs-mcp"
+  fi
+  forge_image_ensure_sdk || die "MCP Context Forge cannot start with the MCP SDK in its image."
 
   echo "🚀 Starting MCP Context Forge stack..."
   "${COMPOSE[@]}" up -d || die "Could not start the MCP stack. Tail logs with: make logs-mcp"
