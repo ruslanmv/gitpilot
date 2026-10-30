@@ -32,6 +32,79 @@ and this note exists so the gap is visible rather than implied:
 
 Entries below resume normal per-change logging.
 
+### Fixed — `make run` could not start MCP Context Forge
+- **The Forge image crash-looped on an MCP SDK it was never tested with.** Its
+  Containerfile installs with `uv pip install .`, which ignores the checkout's
+  lock and resolved `mcp>=1.25.0` to 2.3.0; 2.x renamed `streamablehttp_client`,
+  so gunicorn died at import and Compose reported "container is unhealthy". The
+  install and start scripts now ask the image whether its Forge code needs the
+  old name and its SDK lacks it, and only then add a one-line layer pinning
+  `mcp<2` (`scripts/lib/forge-image.sh`, `deploy/mcp-forge/sdk-pin.Dockerfile`).
+- **The bundled Forge runs 2 gunicorn workers instead of up to 16.** Its default
+  is 2×CPU+1; on a 16-thread laptop that is enough to starve a WSL VM. Override
+  with `MCP_FORGE_WORKERS` in `.mcp.env`.
+
+### Added — MCP host ports fall back to a free one
+- **A port something else holds no longer blocks the MCP stack.** Before starting,
+  `scripts/mcp-stack.sh` checks the Forge, Postgre and Inspector host ports; one
+  held by another process or container moves that service to the next free port,
+  and the move is saved to `.mcp.env` so registration, `stop-mcp`, `logs-mcp` and
+  the smoke test follow it. A port GitPilot's own container already publishes is
+  kept. `make run` passes a moved Forge address to the backend
+  (`GITPILOT_MCP_FORGE_URL`), unless one is already configured.
+
+### Changed — the web app streams over the v2 API (Batch V4-H4)
+- **The chat panel runs a message on `POST /api/v2/chat/stream`** through
+  `frontend/utils/sse.js` instead of opening the legacy `/ws/sessions` socket.
+  Text, tool activity and plan steps arrive live; approval requests show inline
+  (approve once / for the session / deny, over `/api/v2/approval/respond`); Stop
+  aborts the stream and cancels the run server-side. `frontend/utils/streamState.js`
+  folds the v2 vocabulary into the shapes `StreamingMessage` always rendered, and a
+  parity test checks the result against the legacy protocol. The plan flow is
+  unchanged and remains the path when the v2 stream is not reachable.
+- `npm test` in `frontend/` now runs the Node test suite; the package is
+  `"type": "module"`.
+
+### Deprecated — the legacy session WebSocket
+- **`WS /ws/sessions/{session_id}` is frozen.** It still works, and says once per
+  process that it is deprecated (`DeprecationWarning` plus a log line); use
+  `POST /api/v2/chat/stream` or `WS /ws/v2/sessions/{session_id}`. Removal is
+  scheduled for 0.3 with the rest of Batch V4-H5's deletions.
+
+### Fixed — a REACT_TEXT run could only ever write once
+- **Call ids are unique within a run.** The text dialects minted the same id every
+  turn (`react_0`, `lite_act_0`), and the replay-safe registry from the approved-
+  mutation work keys its idempotency ledger on that id — so after one `fs.edit`,
+  the corrected retry was refused with "idempotency_key was already used for
+  different arguments" and the run could never write again. The loop now re-keys
+  a repeated id (`react_0-2`, …) before dispatch for the text dialects; NATIVE ids
+  are the provider's and stay as they are. Found by the first real-model
+  benchmark run on the local 8B tier, where it decided most edit tasks.
+
+### Fixed — streamed runs recorded zero tokens
+- **`OpenAICompatibleProvider` now asks for usage on streams and keeps the trailer.**
+  OpenAI, vLLM, llama.cpp and Ollama all omit token counts from a stream unless
+  `stream_options.include_usage` is sent, and then deliver them in a final chunk
+  with no `choices` — which the stream parser discarded. Every streamed NATIVE and
+  REACT_TEXT run therefore journaled `prompt_tokens: 0`, and the benchmark report
+  showed the tokens column as unobserved for the 8B tier. Found by the first
+  real-model run of `bench/`.
+
+### Fixed — bench read tasks failed on Windows path spelling
+- **`bench/` read checkers accept either path separator.** On Windows the tools
+  render `src\app.py`; a model that echoed that spelling had found the file but
+  the checker only knew `src/app.py`. Found on the first Windows run, where it
+  decided several read cells.
+
+### Added — the bench frontier tier can sit behind a gateway
+- **`GITPILOT_BENCH_FRONTIER_MODEL` / `GITPILOT_BENCH_FRONTIER_FAMILY`** point the
+  matrix's frontier rung at any OpenAI-compatible gateway (an OllaBridge fronting
+  a hosted Claude, say) instead of requiring `ANTHROPIC_API_KEY`. The claim under
+  test — a NATIVE tool-calling model drives the loop — does not change, and an
+  OllaBridge tier is probed at `/health` like the Ollama tiers are at `/api/tags`.
+  `docs/agents.md` describes it, and says plainly that the legacy engine needs a
+  GitHub binding because its tools speak the GitHub REST API.
+
 ### Added — topologies became policy documents
 - **A topology is a YAML document, not a hand-drawn graph.** It states which engine
   runs, which dialect, which capabilities are granted, who approves what, whether

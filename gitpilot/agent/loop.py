@@ -28,8 +28,8 @@ import asyncio
 import logging
 import time
 import uuid
-from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence
+from dataclasses import dataclass, replace
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Set
 
 from ..toolkit.registry import ToolCall, ToolRegistry, ToolResult
 from .adapter import ModelAdapter
@@ -445,10 +445,16 @@ class AgentLoop:
 
     async def _dispatch(self, ctx: AgentContext, turn: AgentTurn) -> List[ToolResult]:
         results: List[ToolResult] = []
+        used_ids: Set[str] = {entry.call.id for entry in ctx.ledger}
 
-        for call in turn.tool_calls:
+        for requested in turn.tool_calls:
             if self._cancelled:
                 break
+
+            call = requested
+            if ctx.model_profile.dialect is not Dialect.NATIVE:
+                call = _with_unique_id(requested, used_ids)
+            used_ids.add(call.id)
 
             await self.events.emit(
                 "tool_start", id=call.id, name=call.tool, args=call.arguments,
@@ -830,6 +836,31 @@ class AgentLoop:
             answer=answer, status=status, context=ctx, skipped=list(ctx.skipped),
             verified=ctx.verified,
         )
+
+
+def _with_unique_id(call: ToolCall, used: Set[str]) -> ToolCall:
+    """The same call, under an id no earlier call in this run carried.
+
+    The text dialects mint ids from a counter that restarts every turn
+    (``react_0``, ``lite_act_0``), and everything downstream keys on the id: the
+    journal, the events, and the replay-safe registry, whose idempotency ledger
+    refuses a key it has seen with different arguments. So after one ``fs.edit``
+    a REACT_TEXT run could never issue a second — the corrected retry came back
+    "idempotency_key was already used". Found by the first real-model benchmark
+    run (local 8B tier). The ledger seeds ``used``, so a resumed run does not
+    collide with the calls it made before the crash either.
+
+    NATIVE ids are the provider's and are also what the conversation's
+    ``tool_call_id`` fields refer to, so they are left alone.
+    """
+    if call.id not in used:
+        return call
+    n = 2
+    while f"{call.id}-{n}" in used:
+        n += 1
+    unique = f"{call.id}-{n}"
+    logger.debug("call id %s already used in this run; dispatching as %s", call.id, unique)
+    return replace(call, id=unique)
 
 
 def _todo_sink(loop: "AgentLoop", ctx: AgentContext) -> Any:

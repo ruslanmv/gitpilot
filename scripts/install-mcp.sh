@@ -192,6 +192,13 @@ if [[ "${DOCKER_OK}" -eq 1 && "${DAEMON_OK}" -eq 1 && -d mcp-stack/mcp-context-f
       warn "One or more images failed to build. Run 'make run' to see details."
     fi
   fi
+  # An image built against a newer MCP SDK than its Forge code supports starts
+  # and then crash-loops; pin the SDK in place instead (scripts/lib/forge-image.sh).
+  if [[ "${MCP_BUILD}" != "0" ]]; then
+    # shellcheck source=scripts/lib/forge-image.sh
+    source "$(dirname "${BASH_SOURCE[0]}")/lib/forge-image.sh"
+    forge_image_ensure_sdk || warn "MCP Context Forge will not start until its MCP SDK is fixed."
+  fi
 else
   skip "Image build skipped (will happen on first 'make run')."
 fi

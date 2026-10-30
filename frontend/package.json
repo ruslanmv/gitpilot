@@ -2,11 +2,13 @@
   "name": "gitpilot-frontend",
   "version": "0.2.8",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
     "vercel-build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test tests/"
   },
   "dependencies": {
     "react": "^18.2.0",

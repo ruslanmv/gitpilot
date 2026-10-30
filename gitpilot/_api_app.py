@@ -3777,6 +3777,31 @@ def _ws_github_token(websocket: WebSocket) -> Optional[str]:
     return _lookup(websocket.query_params, "token")
 
 
+#: Batch V4-H4. The web app moved to the v2 stream; this protocol is frozen and
+#: served for one release cycle for clients that have not. The text follows the
+#: ``docs/API_STABILITY.md`` §3 template so tooling that looks for deprecations
+#: finds this one too.
+LEGACY_WS_DEPRECATION = (
+    "/ws/sessions/{session_id} is deprecated; use POST /api/v2/chat/stream "
+    "(or /ws/v2/sessions/{session_id}) instead (will be removed in v0.3)"
+)
+LEGACY_WS_DEPRECATION_KEY = "endpoint:/ws/sessions"
+_legacy_ws_logged = False
+
+
+def _warn_legacy_ws_deprecated() -> None:
+    """Say it once per process: a ``DeprecationWarning`` (the API_STABILITY.md
+    mechanism) and one log line, because a server's warnings filter usually
+    hides the former and an operator reads the log."""
+    global _legacy_ws_logged
+    from ._deprecation import _emit_once
+
+    if not _legacy_ws_logged:
+        _legacy_ws_logged = True
+        logger.warning(LEGACY_WS_DEPRECATION)
+    _emit_once(LEGACY_WS_DEPRECATION_KEY, LEGACY_WS_DEPRECATION, stacklevel=2)
+
+
 @app.websocket("/ws/sessions/{session_id}")
 async def session_websocket(websocket: WebSocket, session_id: str):
     """
@@ -3793,8 +3818,11 @@ async def session_websocket(websocket: WebSocket, session_id: str):
     Client events:
       { type: "user_message", content: "..." }
       { type: "cancel" }
+
+    Deprecated since Batch V4-H4 (frozen; see ``LEGACY_WS_DEPRECATION``).
     """
     await websocket.accept()
+    _warn_legacy_ws_deprecated()
 
     # Per-connection credentials (may be None — the env fallback in
     # ``github_api._github_token`` still applies for single-user installs).

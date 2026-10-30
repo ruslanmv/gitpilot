@@ -241,7 +241,8 @@ run-bare:
 	fi; \
 	echo "🚀 Starting GitPilot on http://127.0.0.1:$$RUNPORT..."; \
 	trap 'kill 0; rm -f "$$PORTFILE"' EXIT; \
-	$(UV_ENV) $(UV) run --no-dev python -m gitpilot serve --host 127.0.0.1 \
+	MCP_BACKEND_ENV=$$(bash scripts/lib/mcp-ports.sh --backend-env 2>/dev/null); \
+	env $$MCP_BACKEND_ENV $(UV_ENV) $(UV) run --no-dev python -m gitpilot serve --host 127.0.0.1 \
 		--port $$RUNPORT --no-strict-port --port-file "$$PORTFILE" --no-open & \
 	BACKEND_PID=$$!; \
 	echo "⏳ Waiting for backend to be ready (up to 60s for WSL/first-start)..."; \

@@ -2,14 +2,14 @@
 
 **Companion to:** `docs/upgrade-plan-v4-agentic-runtime.md` (the design; section
 references below like §5.2 point there)
-**Status:** Phases 0, A, B, C, D, E, F and G shipped, plus H1, H2 and H5's docs half — the engine runs a real task,
+**Status:** Phases 0, A, B, C, D, E, F and G shipped, plus H1, H2, H4 and H5's docs half — the engine runs a real task,
 nothing it does executes unauthorized, the console shows what it is doing, a crash
 is recoverable, and every topology is now a declarative policy document over that
 one engine. All twelve registered defects are closed. `default` carries the agentic
 document; the flag that executes it (`agent_loop_default`) stays off until the §18
 benchmark gate is demonstrated, which needs real models. Phase H is in progress:
-H1 (MCP unification) and H2 (the live system payload) have shipped and the docs
-cleanup is done; H3–H6 remain.
+H1 (MCP unification), H2 (the live system payload) and H4 (the web app on the v2
+stream) have shipped and the docs cleanup is done; H3, H5's deletions and H6 remain.
 **Convention:** follows the shipped Phase 1–4 batch discipline
 (summarised in `docs/history.md`) — small additive batches, each behind a
 feature flag, each revertible in one commit.
@@ -585,7 +585,7 @@ Deviations worth knowing:
 | V4-H1 · MCP unification | ✅ | L | A1, D1, 0B | +68 | one transport, real `inputSchema`s, risk mapping, pruning |
 | V4-H2 · System payload | ✅ | M | C2, D1 | +25 | modes + AGENTS.md + rules + prompt cache into the live prefix |
 | V4-H3 · Skills, slash, plugins | ☐ | M | H2 | +12 | message-ingestion expansion, plugin bootstrap |
-| V4-H4 · Web app on v2 | ☐ | M | E4, F2 | +8 | React app off the legacy WS; WS deprecated |
+| V4-H4 · Web app on v2 | ✅ | M | E4, F2 | +18 | React app off the legacy WS; WS deprecated |
 | V4-H5 · Deletions & docs | 🟡 | M | G5, H1–H4 | +31 | docs done; the VS Code tree deleted; the CrewAI/MCP-transport deletions remain |
 | V4-H6 · Stretch: parallel & docker | ☐ | L | E2 | +8 | worktree fan-out via `agent_teams`, `docker.*` namespace |
 
@@ -619,6 +619,51 @@ Deviations worth knowing:
 - **The tool-def digest is computed over the masked render**, not the whole registry,
   which is what stops a cached prefix describing tools the run cannot use.
 
+**First real-model evidence (2026-10-21).** The two local tiers of the §18 matrix
+ran for the first time, on a Windows laptop with a 6 GB GPU (`bench/results/`):
+`qwen2.5:1.5b`/LITE solved 1 of 10 tasks and `llama3:8b`/REACT_TEXT 2 of 13, with the
+legacy engine unavailable on both (its CrewAI tools speak the GitHub REST API, so it
+cannot act on the local fixtures) and the frontier tier unrun (no key here). The
+gate therefore stays unmet, as designed — but the run paid for itself in what the
+journals showed:
+
+- **A REACT_TEXT run could only ever write once.** The dialect mints `react_0` every
+  turn and the replay-safe registry keys its idempotency ledger on the call id, so
+  after one `fs.edit` the corrected retry was refused for the rest of the run. The
+  loop now re-keys repeated ids for the text dialects (`tests/agent/test_loop_call_ids.py`);
+  on re-run the 8B tier gained `add_test` and the 1.5B tier `fix_readme_typo`.
+- **Streamed runs journaled zero tokens** — the OpenAI-compatible provider never asked
+  for usage on a stream. Fixed; the 8B tier's token column is now real.
+- **Read checkers were separator-sensitive**: on Windows the tools show `src\app.py`
+  and a model that echoed it failed `find_symbol`. The checker accepts either now.
+- The rest is the models: the 1.5B model answers read tasks without naming files and
+  emits diffs as prose instead of a write action; the 8B model's edits mostly miss
+  (`old_string` not found, wrong target) and the read-only `count_tests` gives up when
+  `test.run` is denied. Runs are also unseeded — the same cell passed and failed on
+  consecutive runs — so a single matrix is a noisy estimate.
+
+**H4 shipped.** 18 tests added (15 under Node in `frontend/tests/`, which `npm test`
+now runs, and 3 in `tests/test_legacy_ws_deprecation.py`). The chat panel no longer
+opens the legacy `/ws/sessions` socket; a message runs on `POST /api/v2/chat/stream`
+through `frontend/utils/sse.js`, and `frontend/utils/streamState.js` folds the v2
+vocabulary into the shapes `StreamingMessage` always rendered, so the live view and
+the consolidated assistant message are what the legacy protocol produced — the
+parity test replays both and compares. New in the panel: approval requests from the
+run (approve once, approve for the session, deny — over `/api/v2/approval/respond`)
+and a Stop button that aborts the stream *and* calls `/api/v2/agent/cancel`, since
+aborting the fetch alone leaves the agent working. The plan flow (`/api/chat/plan`
+→ ExecutionPlan card → `/api/chat/execute`) is unchanged and is the path when the
+v2 stream is not reachable. Server-side, `/ws/sessions` is frozen and announces its
+deprecation once per process (`DeprecationWarning` in the API_STABILITY.md template
+plus one log line); `ws.js` stays, unimported, until H5 deletes both ends.
+
+Two things worth knowing. The legacy socket in the web app was never a live
+feed: the server only pushed on a `user_message` the panel never sent, so
+"streaming" in the web UI had been the connection pill and nothing else. And the
+frontend package is now `"type": "module"` (its sources already were) so Node's
+test runner can import the modules Vite builds — `backend.js` tolerates the
+missing `import.meta.env` that implies.
+
 **H5 is partly done.** The docs half shipped (see the docs commits), the VS Code
 `src/local/` tree is deleted, and an end-to-end verification exists. What remains of
 H5 is the *Python* deletions: the CrewAI `@tool` wrappers, `streaming.py`'s duplicate
@@ -651,9 +696,9 @@ model is actually *offered*:
   test that asserts the *property* — at every real budget the agent can read, change
   and run — rather than a list of tool names.
 
-**H3, H4 and H6 are not started.** H3 (server-side slash commands, skills
-auto-triggers, plugin bootstrap), H4 (the React app on the v2 stream) and H6 (parallel
-delegation via worktrees, `docker.*`) remain.
+**H3 and H6 are not started.** H3 (server-side slash commands, skills
+auto-triggers, plugin bootstrap) and H6 (parallel delegation via worktrees,
+`docker.*`) remain.
 
 **Ollama was not installable here.** `ollama.com`, `registry.ollama.ai` and
 `huggingface.co` are all refused at CONNECT by this environment's network policy, so
@@ -1445,6 +1490,25 @@ run start running.
   CHANGELOG debt.
 - **Tests:** +6 — no import of deleted modules, TS build green, docs link
   check.
+- **Guardrail — VS Code is a first-class client.** The VS Code extension is a
+  primary way to use GitPilot, alongside the web app and the CLI, and is not
+  being retired. H5 removes obsolete *internal* implementations only (the
+  dormant `src/local/` TS loop, legacy transports); it must not remove or
+  regress any supported VS Code workflow. Before any H5 deletion or legacy
+  endpoint removal (`/ws/sessions`, scheduled for v0.3) merges:
+  1. **Parity audit of `src/local/`.** List each responsibility the deleted tree
+     had (workspace context, local file access, remote-development behaviour,
+     backend-unavailable handling) and name what now provides it, or record it
+     as an explicit, accepted gap.
+  2. **The v2 API is a client contract.** `gitpilot.public_api` only protects
+     Python imports; the HTTP/SSE surface the extension and web app use —
+     event schemas, approvals, cancel, resume — gets its own versioned,
+     tested contract in `docs/API_STABILITY.md`.
+  3. **End-to-end VS Code tests** against a real backend, not only recorded
+     event streams: open a workspace, submit a coding task, read and edit files,
+     show tool progress, approve a mutation, stop a run, resume it.
+  4. **No legacy endpoint is removed** until every supported client (VS Code,
+     web, CLI) has moved off it and passes those tests.
 
 ### V4-H6 · Stretch: parallel delegation & docker
 
@@ -1469,6 +1533,8 @@ run start running.
 - [ ] Suite ≈ 2,285 tests; coverage gate not regressed; strict-mypy list grown
       by the new packages
 - [ ] `docs/agents.md`, VS Code docs, and CHANGELOG describe what the code does
+- [ ] VS Code extension end-to-end suite green against the v2 runtime (see the
+      H5 guardrail); no supported VS Code workflow lost
 
 ## 4. Defect-fix ledger
 

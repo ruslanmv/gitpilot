@@ -1,6 +1,11 @@
 import { resolveBackendUrl } from "./backend.js";
 /**
- * WebSocket client for real-time session streaming.
+ * WebSocket client for the legacy /ws/sessions protocol.
+ *
+ * DEPRECATED (Batch V4-H4): nothing in the web app imports this any more —
+ * the chat panel streams over ``sse.js``. The file stays until Batch V4-H5
+ * deletes it together with the server side of the protocol.
+ *
  *
  * Provides auto-reconnection, heartbeat, and event dispatching.
  * Falls back gracefully — callers should always have an HTTP fallback.

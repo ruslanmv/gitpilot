@@ -1,0 +1,151 @@
+{
+  "verdict": "incomplete",
+  "budget": 1.5,
+  "missing_tiers": [],
+  "tiers": [
+    {
+      "tier": "local_small",
+      "verdict": "incomplete",
+      "reasons": [
+        "legacy produced no cells for this tier"
+      ],
+      "engines": {
+        "loop": {
+          "engine": "loop",
+          "attempted": 2,
+          "succeeded": 0,
+          "unavailable": 0,
+          "skipped": 0,
+          "success_rate": 0.0,
+          "mean_wall_time_s": 6.718,
+          "mean_tokens": 798.0,
+          "approvals": 0,
+          "denials": 0
+        }
+      }
+    },
+    {
+      "tier": "local_8b",
+      "verdict": "incomplete",
+      "reasons": [
+        "legacy produced no cells for this tier"
+      ],
+      "engines": {
+        "loop": {
+          "engine": "loop",
+          "attempted": 2,
+          "succeeded": 0,
+          "unavailable": 0,
+          "skipped": 0,
+          "success_rate": 0.0,
+          "mean_wall_time_s": 33.859,
+          "mean_tokens": 5573.5,
+          "approvals": 0,
+          "denials": 1
+        }
+      }
+    }
+  ],
+  "categories": {
+    "read": {
+      "loop": {
+        "engine": "loop",
+        "attempted": 4,
+        "succeeded": 0,
+        "unavailable": 0,
+        "skipped": 0,
+        "success_rate": 0.0,
+        "mean_wall_time_s": 0.0,
+        "mean_tokens": 0.0,
+        "approvals": 0,
+        "denials": 0
+      }
+    }
+  },
+  "cells": [
+    {
+      "task": "find_symbol",
+      "tier": "local_small",
+      "engine": "loop",
+      "ok": false,
+      "detail": "the answer never mentioned src/app.py",
+      "skipped": false,
+      "unavailable": false,
+      "category": "read",
+      "tags": [],
+      "wall_time_s": 9.625,
+      "prompt_tokens": 695,
+      "completion_tokens": 64,
+      "total_tokens": 759,
+      "approvals": 0,
+      "denials": 0,
+      "iterations": 3,
+      "tool_calls": 3,
+      "status": "completed",
+      "error": ""
+    },
+    {
+      "task": "explain_dataflow",
+      "tier": "local_small",
+      "engine": "loop",
+      "ok": false,
+      "detail": "the answer never mentioned src/app.py",
+      "skipped": false,
+      "unavailable": false,
+      "category": "read",
+      "tags": [],
+      "wall_time_s": 3.812,
+      "prompt_tokens": 703,
+      "completion_tokens": 134,
+      "total_tokens": 837,
+      "approvals": 0,
+      "denials": 0,
+      "iterations": 3,
+      "tool_calls": 3,
+      "status": "completed",
+      "error": ""
+    },
+    {
+      "task": "find_symbol",
+      "tier": "local_8b",
+      "engine": "loop",
+      "ok": false,
+      "detail": "the answer never mentioned src/app.py",
+      "skipped": false,
+      "unavailable": false,
+      "category": "read",
+      "tags": [],
+      "wall_time_s": 60.281,
+      "prompt_tokens": 9213,
+      "completion_tokens": 497,
+      "total_tokens": 9710,
+      "approvals": 0,
+      "denials": 0,
+      "iterations": 11,
+      "tool_calls": 8,
+      "status": "degraded",
+      "error": ""
+    },
+    {
+      "task": "explain_dataflow",
+      "tier": "local_8b",
+      "engine": "loop",
+      "ok": false,
+      "detail": "the answer never mentioned src/app.py, src/util.py",
+      "skipped": false,
+      "unavailable": false,
+      "category": "read",
+      "tags": [],
+      "wall_time_s": 7.438,
+      "prompt_tokens": 1381,
+      "completion_tokens": 56,
+      "total_tokens": 1437,
+      "approvals": 0,
+      "denials": 1,
+      "iterations": 2,
+      "tool_calls": 1,
+      "status": "completed",
+      "error": ""
+    }
+  ]
+}

@@ -81,6 +81,10 @@ services:
       ENVIRONMENT: ${MCP_FORGE_ENVIRONMENT:-development}
       SECURE_COOKIES: "${MCP_FORGE_SECURE_COOKIES:-false}"
       LOG_LEVEL: ${MCP_FORGE_LOG_LEVEL:-INFO}
+      # Forge's gunicorn defaults to 2*CPU+1 workers (capped at 16), each a full
+      # copy of the app. On a 16-thread laptop that is 16 workers, which is
+      # several GB and enough to starve a WSL VM. A local dev gateway needs two.
+      GUNICORN_WORKERS: "${MCP_FORGE_WORKERS:-2}"
     # Lets an adopted Forge (and ours) dial the host on native Linux, where
     # host.docker.internal is not defined by default.
     extra_hosts:
@@ -90,7 +94,9 @@ services:
       interval: 10s
       timeout: 3s
       retries: 6
-      start_period: 30s
+      # First boot runs database migrations and imports a large app per worker;
+      # on a busy WSL VM that alone can pass 30s, and Compose then gives up.
+      start_period: 120s
     volumes:
       - forge-data:/var/lib/forge
 
