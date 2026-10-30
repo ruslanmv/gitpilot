@@ -129,9 +129,17 @@ def summarise(merged: Dict[str, Any]) -> Dict[str, Any]:
         by_model[row["model"]].append(row)
 
     suites_present = [s for s in SUITE_ORDER if any(r["suite"] == s for r in merged["results"])]
-    summary = {"suites": suites_present, "models": []}
+    # Coverage and the overall score are over the quick suites every model runs.
+    # The agent suite is optional and expensive, so it is reported on its own.
+    total_tasks = len({r["task"] for r in merged["results"] if r["suite"] != "agentic"})
+    summary = {"suites": suites_present, "models": [], "total_tasks": total_tasks}
     for model in merged["models"]:
         rows = by_model.get(model["id"], [])
+        attempted = len({r["task"] for r in rows if r["suite"] != "agentic"})
+        # A model that has not attempted every task (a run still in progress, or
+        # one cut short) shows its suite scores but is never ranked: an overall
+        # over the suites it happened to finish is not comparable.
+        partial = attempted < total_tasks
         suite_scores = {}
         for suite in suites_present:
             graded = [r for r in rows if r["suite"] == suite and r.get("passed") is not None]
@@ -142,7 +150,8 @@ def summarise(merged: Dict[str, Any]) -> Dict[str, Any]:
                 "rate": passed / n if n else None, "passed": passed, "n": n, "errors": errors,
                 "ci": wilson_interval(passed, n) if n else None,
             }
-        rates = [s["rate"] for s in suite_scores.values() if s["rate"] is not None]
+        rates = [score["rate"] for suite, score in suite_scores.items()
+                 if score["rate"] is not None and suite != "agentic"]
         chat_ok = [r for r in rows if r["suite"] != "agentic" and r.get("passed") is not None]
         latencies = [r["latency_s"] for r in chat_ok if r.get("latency_s")]
         speeds = [r["output_tokens"] / r["latency_s"] for r in chat_ok
@@ -155,7 +164,9 @@ def summarise(merged: Dict[str, Any]) -> Dict[str, Any]:
             "route": ROUTE_LABELS.get(model.get("route", ""), "API gateway"),
             "status": model.get("status", "ok"),
             "profile_key": profile_key(model["id"]),
-            "suggestion": suggest_dialect(suite_scores) if model.get("status", "ok") == "ok" else None,
+            "suggestion": (suggest_dialect(suite_scores)
+                           if model.get("status", "ok") == "ok" and not partial else None),
+            "partial": partial, "attempted": attempted,
             "suites": suite_scores,
             "overall": sum(rates) / len(rates) if rates else None,
             "overall_ci": wilson_interval(pooled_pass, pooled_n) if pooled_n else None,
@@ -167,7 +178,7 @@ def summarise(merged: Dict[str, Any]) -> Dict[str, Any]:
             "consistency": consistency,
             "rows": rows,
         })
-    summary["models"].sort(key=lambda m: (m["overall"] is None, -(m["overall"] or 0), m["name"]))
+    summary["models"].sort(key=lambda m: (m["overall"] is None, m["partial"], -(m["overall"] or 0), m["name"]))
     return summary
 
 
@@ -184,8 +195,12 @@ def _consistency(rows: List[Dict[str, Any]]) -> Optional[float]:
 
 
 def findings(summary: Dict[str, Any]) -> List[str]:
-    models = [m for m in summary["models"] if m["overall"] is not None]
+    models = [m for m in summary["models"] if m["overall"] is not None and not m.get("partial")]
     out: List[str] = []
+    partial = [m for m in summary["models"] if m.get("partial") and m["status"] == "ok"]
+    if partial:
+        out.append("Partial, not ranked yet: " + esc(", ".join(
+            f"{m['name']} ({m['attempted']} of {summary.get('total_tasks', '?')} tasks)" for m in partial)) + ".")
     unavailable = [m["name"] for m in summary["models"] if m["status"] != "ok" or m["overall"] is None]
     if not models:
         out.append("No model produced a gradable answer; see the errors column.")
@@ -347,7 +362,7 @@ def render_html(merged: Dict[str, Any], notes: List[str], links: Optional[Dict[s
     tasks = sorted({r["task"] for r in merged["results"]},
                    key=lambda t: (SUITE_ORDER.index(t.split("/")[0]) if t.split("/")[0] in SUITE_ORDER else 9, t))
 
-    best = next((m for m in models if m["overall"] is not None), None)
+    best = next((m for m in models if m["overall"] is not None and not m.get("partial")), None)
     tiles = [
         ("Models tested", str(len(models))),
         ("Tasks per model", str(len(tasks))),
@@ -378,7 +393,7 @@ def render_html(merged: Dict[str, Any], notes: List[str], links: Optional[Dict[s
     chart_items = [(m["name"], m["overall"], m["overall_ci"],
                     f"{m['name']}: {pct(m['overall'])} overall (macro average of suites); "
                     f"95% CI of pooled pass rate {pct(m['overall_ci'][0])}–{pct(m['overall_ci'][1])}")
-                   for m in models if m["overall"] is not None]
+                   for m in models if m["overall"] is not None and not m.get("partial")]
     out += ["<h2>Overall score</h2><div class='card'>",
             _bar_chart(chart_items, max_value=1.0, unit="%", title="Overall score by model"),
             "<p class='note'>Bar: average of the suite scores. Whisker: 95% Wilson interval of the pooled "
@@ -404,7 +419,9 @@ def render_html(merged: Dict[str, Any], notes: List[str], links: Optional[Dict[s
         suggestion = m.get("suggestion")
         dialect = (f"<span title='{esc(suggestion['why'])}'>{esc(suggestion['dialect'].upper())}</span>"
                    if suggestion else "<span class='muted'>–</span>")
-        out.append(f"<td class='num'><b>{pct(m['overall'])}</b></td><td class='num'>{latency}{p90}</td>"
+        overall = (f"<span class='muted'>{pct(m['overall'])}</span><div class='ci'>partial · "
+                   f"{m['attempted']}/{summary['total_tasks']}</div>" if m.get("partial") else f"<b>{pct(m['overall'])}</b>")
+        out.append(f"<td class='num'>{overall}</td><td class='num'>{latency}{p90}</td>"
                    f"<td class='num'>{speed}</td><td class='num'>{m['errors']}</td><td>{dialect}</td>"
                    f"<td class='muted'>{esc(m['route'])}</td></tr>")
     out.append("</tbody></table><p class='note'>Cell shade: darker is a higher pass rate. "

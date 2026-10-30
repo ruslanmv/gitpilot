@@ -93,6 +93,19 @@ and this note exists so the gap is visible rather than implied:
 
 Entries below resume normal per-change logging.
 
+### Fixed — 21-second waits reaching local services through `localhost` on Windows
+- **`localhost` now resolves to IPv4 first, for the whole GitPilot process.** On
+  Windows, `localhost` resolves to `::1` before `127.0.0.1`, and a service that WSL
+  forwards with mirrored networking (OllaBridge, an MCP gateway, a sandbox runner)
+  leaves that IPv6 attempt hanging for the Windows connect retry, about 21 seconds,
+  before IPv4 is tried. Synchronous clients paid it on every request: the legacy
+  CrewAI path through LiteLLM, the synchronous inference client and the sandbox
+  runner client. The agent loop's async clients race both families and were not
+  affected. `gitpilot/loopback.py` reorders resolution for loopback names only, the
+  way Node's `dns.setDefaultResultOrder("ipv4first")` does, so IPv6 remains the
+  fallback and URLs already saved in settings are covered too. Measured: 21.3 s
+  before, 0.03 to 0.31 s after. Opt out with `GITPILOT_LOCALHOST_IPV4_FIRST=0`.
+
 ### Fixed — `make run` could not start MCP Context Forge
 - **The Forge image crash-looped on an MCP SDK it was never tested with.** Its
   Containerfile installs with `uv pip install .`, which ignores the checkout's

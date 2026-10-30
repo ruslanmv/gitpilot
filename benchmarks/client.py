@@ -114,7 +114,7 @@ class ChatClient:
         retries: int = 1,
         backoff_s: float = 3.0,
         rate_limit_retries: int = 4,
-        max_wait_s: float = 120.0,
+        max_wait_s: float = 300.0,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -126,6 +126,11 @@ class ChatClient:
         self.rate_limit_retries = max(0, rate_limit_retries)
         self.max_wait_s = max_wait_s
         self.sleep = time.sleep  # injectable for tests
+        #: Seconds to wait before each request. A 429 widens it, a success narrows
+        #: it again, so a run settles just under the provider's limit instead of
+        #: hammering it and burning every retry.
+        self.pace_s = 0.0
+        self.max_pace_s = 120.0
 
     @property
     def url(self) -> str:
@@ -166,11 +171,17 @@ class ChatClient:
         attempt = failures = throttles = 0
         while True:
             attempt += 1
+            if self.pace_s:
+                self.sleep(self.pace_s)
             result = self._once(payload)
             result.attempts = attempt
-            if result.ok or not result.is_retryable:
+            if result.ok:
+                self.pace_s = round(self.pace_s * 0.7, 2) if self.pace_s >= 1 else 0.0
+                return result
+            if not result.is_retryable:
                 return result
             if result.error_kind == "http_429":
+                self.pace_s = min(max(self.pace_s * 2, 5.0), self.max_pace_s)
                 throttles += 1
                 if throttles > self.rate_limit_retries:
                     return result
