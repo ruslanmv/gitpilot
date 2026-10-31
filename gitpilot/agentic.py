@@ -1280,8 +1280,12 @@ async def generate_plan_lite(
             f"Repository: {repo_full_name} (branch: {active_ref})\n\n"
             f"{context_text}\n\n"
             f"Question: {goal}\n\n"
-            f"Answer the question based on the repository information above. "
-            f"Be specific — mention actual file names and directories you can see."
+            "Answer the question based on the repository information above.\n"
+            "- Answer exactly what was asked, briefly (a few sentences or a short list).\n"
+            "- \"How many files\": give the number and list the paths.\n"
+            "- \"What is in this repo\": list the files and say in one or two sentences "
+            "what the project is.\n"
+            "- Use actual file names. Do not copy file contents unless the user asks to see them."
         )
         expected = "A direct answer to the user's question about the repository"
     else:
@@ -1339,6 +1343,9 @@ async def generate_plan_lite(
 
     # PARSE RESPONSE based on intent
     if intent == "question":
+        # The prefetch marks cut files with "[truncated, N chars total]"; a small
+        # model may copy it into the answer, where it means nothing to the user.
+        raw_text = _re_runnable.sub(r"(?m)^[ \t]*\[truncated, \d+ chars total\][ \t]*\n?", "", raw_text).strip()
         # Pure Q&A — no file actions, just wrap the answer.
         # summary = full answer text (shown in the "Answer" section of the chat)
         return PlanResult(
