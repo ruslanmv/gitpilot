@@ -54,11 +54,13 @@ test("session header only in header mode, CSRF token whenever known", () => {
   assert.deepEqual(api.getAuthHeaders(), { "X-GitPilot-Session": "gps_header", "X-GitPilot-CSRF": "csrf-1" });
 });
 
-test("authFetch sends cookies and the CSRF header", async () => {
+test("authFetch sends the cookie only same-origin, and the CSRF header", async () => {
   api.setCsrfToken("csrf-2");
   mockFetch(() => ({ body: {} }));
   await api.authFetch("/api/x", { method: "POST" });
-  assert.equal(calls[0].opts.credentials, "include");
+  // Never "include": the Hugging Face proxy's preflight has no
+  // Access-Control-Allow-Credentials, so production would fail to fetch.
+  assert.equal(calls[0].opts.credentials, "same-origin");
   assert.equal(calls[0].opts.headers["X-GitPilot-CSRF"], "csrf-2");
 });
 

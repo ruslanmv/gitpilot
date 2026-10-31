@@ -275,8 +275,10 @@ ul.gp-auth-features { list-style: none; padding: 0; }
 .gp-hint { margin: -6px 0 16px; color: #98a1ae; font-size: 11.5px; }
 .gp-block-link { display: block; margin: 14px auto 0; }
 .gp-field input.gp-no-icon { padding-left: 16px; }
-.gp-auth h2:focus { outline: none; }
-.gp-auth h2:focus-visible { outline: 2px solid var(--coral); outline-offset: 4px; border-radius: 6px; }
+/* The card title receives focus on every view change so screen readers
+   announce it. It is not a control (tabindex -1, never in the tab order), so
+   it gets no focus ring. */
+.gp-auth h2:focus, .gp-auth h2:focus-visible { outline: none; }
 .gp-auth-light .gp-provider-note, .gp-auth-light .gp-hint { color: #5d6a7e; }
 .gp-auth-light .gp-github:disabled:hover, .gp-auth-light .gp-gitlab:disabled:hover { background: #f6f8fb; }
 @media (max-width: 990px) {

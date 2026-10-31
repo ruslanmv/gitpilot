@@ -1,6 +1,7 @@
 import { resolveBackendUrl } from "../utils/backend.js";
 import { apiUrl, authFetch, getAuthHeaders } from "../utils/api.js";
 import { fileUrl, providerLabel, repoIdentity } from "../utils/repoApi.js";
+import { API_CREDENTIALS } from "../utils/backend.js";
 // frontend/components/ChatPanel.jsx
 import React, { useEffect, useRef, useState } from "react";
 import AssistantMessage from "./AssistantMessage.jsx";
@@ -369,7 +370,7 @@ export default function ChatPanel({
     }
     fetch(apiUrl(`/api/sessions/${sid}/message`), {
       method: "POST",
-      credentials: "include",
+      credentials: API_CREDENTIALS,
       headers: getHeaders(),
       body: JSON.stringify(body),
     }).catch(() => {}); // best-effort
@@ -540,7 +541,7 @@ export default function ChatPanel({
       try {
         res = await fetch(apiUrl("/api/chat/plan"), {
           method: "POST",
-          credentials: "include",
+          credentials: API_CREDENTIALS,
           headers: getHeaders(),
           body: JSON.stringify({
             // provider + stable id + (possibly nested) namespace/name
@@ -714,7 +715,7 @@ export default function ChatPanel({
 
       const res = await fetch(apiUrl("/api/chat/execute"), {
         method: "POST",
-        credentials: "include",
+        credentials: API_CREDENTIALS,
         headers: getHeaders(),
         body: JSON.stringify({
           ...repoIdentity(repo),

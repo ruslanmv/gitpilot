@@ -37,3 +37,14 @@ export function resolveBackendUrl() {
 }
 
 export const HOSTED_BACKEND_URL = HOSTED_BACKEND;
+
+// Credentials mode for every API request. "same-origin": the session cookie is
+// sent when the page and the API share an origin (the Space's own UI, local dev
+// through the Vite proxy), and never across sites. Production
+// (gitpilot.ruslanmv.com → *.hf.space) authenticates with the
+// X-GitPilot-Session header instead: the Hugging Face proxy answers CORS
+// preflights itself without Access-Control-Allow-Credentials, so any
+// credentialed request that needs a preflight (JSON bodies, the session header)
+// is blocked by the browser ("Failed to fetch"). Cross-site cookies are blocked
+// anyway (SameSite=Lax, third-party cookie blocking). Do not change to "include".
+export const API_CREDENTIALS = "same-origin";

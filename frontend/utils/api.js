@@ -1,7 +1,7 @@
 /**
  * API utilities for authenticated requests
  */
-import { resolveBackendUrl } from "./backend.js";
+import { resolveBackendUrl, API_CREDENTIALS } from "./backend.js";
 
 /**
  * Backend base URL — VITE_BACKEND_URL if set, else the hosted GitPilot backend
@@ -174,7 +174,7 @@ export async function authFetch(url, options = {}) {
   // Resolve root-relative paths against the configured backend so callers that
   // pass "/api/..." work on the split frontend(Vercel)/backend(HF) deployment.
   return fetch(apiUrl(url), {
-    credentials: 'include',
+    credentials: API_CREDENTIALS,
     ...options,
     headers,
   });
@@ -231,7 +231,7 @@ export async function adoptSession(data) {
   // Account sign-in responses carry no CSRF token, so the probe's is used.
   let cookieWorks = false;
   try {
-    const probe = await fetch(apiUrl('/api/auth/session'), { credentials: 'include' });
+    const probe = await fetch(apiUrl('/api/auth/session'), { credentials: API_CREDENTIALS });
     const body = await probe.json().catch(() => ({}));
     cookieWorks = !!(body && body.authenticated && body.transport === 'cookie'
       && (!data.csrf_token || body.csrf_token === data.csrf_token));
@@ -302,7 +302,7 @@ export async function disconnectProvider(provider) {
 
 /** Which sign-in methods this server offers ({github:{web,device}, gitlab:{web,host}, accounts}). */
 export async function fetchAuthProviders() {
-  const res = await fetch(apiUrl('/api/auth/providers'), { credentials: 'include' });
+  const res = await fetch(apiUrl('/api/auth/providers'), { credentials: API_CREDENTIALS });
   if (!res.ok) throw new Error('Could not load sign-in options.');
   return res.json();
 }

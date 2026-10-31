@@ -1,4 +1,4 @@
-import { resolveBackendUrl } from "./backend.js";
+import { API_CREDENTIALS, resolveBackendUrl } from "./backend.js";
 /**
  * SSE client for the GitPilot v2 streaming API.
  *
@@ -138,9 +138,8 @@ export function streamChat(sessionId, message, handlers = {}, options = {}) {
     try {
       const res = await fetchImpl(apiUrl('/api/v2/chat/stream'), {
         method: 'POST',
-        credentials: options.credentials || 'include',
-        credentials: options.credentials || 'include',
-      headers: jsonHeaders(options),
+        credentials: options.credentials || API_CREDENTIALS,
+        headers: jsonHeaders(options),
         body: JSON.stringify(body),
         signal: controller.signal,
       });
@@ -206,7 +205,7 @@ export async function cancelRun(sessionId, options = {}) {
   try {
     const res = await fetchImpl(apiUrl('/api/v2/agent/cancel'), {
       method: 'POST',
-      credentials: options.credentials || 'include',
+      credentials: options.credentials || API_CREDENTIALS,
       headers: jsonHeaders(options),
       body: JSON.stringify({ session_id: sessionId }),
     });
@@ -225,7 +224,7 @@ export async function respondToApproval(sessionId, requestId, approved, scope = 
   try {
     const res = await fetchImpl(apiUrl('/api/v2/approval/respond'), {
       method: 'POST',
-      credentials: options.credentials || 'include',
+      credentials: options.credentials || API_CREDENTIALS,
       headers: jsonHeaders(options),
       body: JSON.stringify({
         session_id: sessionId,
