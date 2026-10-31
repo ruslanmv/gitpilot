@@ -299,10 +299,11 @@ def build_llm() -> Any:
         model = settings.ollabridge.model or os.getenv("GITPILOT_OLLABRIDGE_MODEL", "qwen2.5:1.5b")
         from .settings import OLLABRIDGE_DEFAULT_BASE_URL
 
-        base_url = settings.ollabridge.base_url or os.getenv(
-            "OLLABRIDGE_BASE_URL", OLLABRIDGE_DEFAULT_BASE_URL
-        )
-        api_key = settings.ollabridge.api_key or os.getenv("OLLABRIDGE_API_KEY", "")
+        from .ollabridge_auth import resolve as _resolve_ollabridge
+
+        # The signed-in user's paired account (and its server) first.
+        base_url, api_key = _resolve_ollabridge(settings)
+        base_url = base_url or OLLABRIDGE_DEFAULT_BASE_URL
 
         # Validate required configuration
         if not base_url:
@@ -578,14 +579,15 @@ async def test_provider_connection(settings) -> ProviderSummary:
             elif provider == LLMProvider.ollabridge:
                 from .settings import OLLABRIDGE_DEFAULT_BASE_URL
 
-                base = settings.ollabridge.base_url or OLLABRIDGE_DEFAULT_BASE_URL
-                base = base.rstrip("/")
-                if base.endswith("/v1"):
-                    base = base[:-3]
+                from .ollabridge_auth import resolve as _resolve_ollabridge
+
+                if (settings.ollabridge.base_url or "").rstrip("/").endswith("/v1"):
                     summary.warning = (
                         "Do not include /v1; GitPilot adds it automatically."
                     )
-                api_key = settings.ollabridge.api_key or "ollabridge"
+                base, api_key = _resolve_ollabridge(settings)
+                base = base or OLLABRIDGE_DEFAULT_BASE_URL
+                api_key = api_key or "ollabridge"
                 resp = await client.get(
                     f"{base}/v1/models",
                     headers={"Authorization": f"Bearer {api_key}"},

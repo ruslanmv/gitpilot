@@ -871,6 +871,9 @@ class SettingsResponse(BaseModel):
     # field is Optional so older serialised payloads continue to validate
     # even though the runtime always writes a value today.
     sandbox: Optional[dict] = None
+    #: ``{"scope": "session"|"server", "base_url", ...}`` when an OllaBridge
+    #: account is paired for this caller; never contains the token.
+    ollabridge_pairing: Optional[dict] = None
 
 
 class ProviderModelsResponse(BaseModel):
@@ -1314,6 +1317,8 @@ def settings_response_from(s: AppSettings) -> SettingsResponse:
     # browser devtools.
     token = sandbox_dump.pop("matrixlab_token", "")
     sandbox_payload = {**sandbox_dump, "has_token": bool(token)}
+    from .ollabridge_auth import pairing_status
+
     return SettingsResponse(
         provider=s.provider,
         providers=[
@@ -1335,6 +1340,7 @@ def settings_response_from(s: AppSettings) -> SettingsResponse:
         langflow_url=s.langflow_url,
         has_langflow_plan_flow=bool(s.langflow_plan_flow_id),
         sandbox=sandbox_payload,
+        ollabridge_pairing=pairing_status(s),
     )
 
 

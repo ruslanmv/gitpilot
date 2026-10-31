@@ -177,6 +177,12 @@ Secrets are configured in the HF Space Settings tab, not in the Dockerfile.
     cookies in third-party frames.
   - Opening `https://ruslanmv-gitpilot.hf.space` directly gives the full first-party
     experience.
+- **OllaBridge Cloud.** Its address is `https://app.ollabridge.com`. Every call needs an
+  account token, so the shared default model only works after pairing. Each user pairs
+  once in **Admin → AI Providers → Device Pairing**, with the code from the OllaBridge
+  pairing screen. The token is stored encrypted on that user's session, alongside their
+  GitHub and GitLab tokens, and is used only for their requests. To give every visitor one
+  shared account instead, set an `OLLABRIDGE_API_KEY` Space secret.
 - **Sessions and storage.** Sessions and encrypted tokens live in SQLite under
   `GITPILOT_CONFIG_DIR` (`/tmp/gitpilot`). They are lost when the Space restarts, and
   users then sign in again. With Persistent Storage enabled they are kept in

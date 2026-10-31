@@ -152,9 +152,10 @@ def _list_ollabridge_models(settings: AppSettings) -> Tuple[List[str], Optional[
         points_at_gitpilot_server,
     )
 
-    base_url = getattr(settings.ollabridge, "base_url", None) or os.getenv(
-        "OLLABRIDGE_BASE_URL", OLLABRIDGE_DEFAULT_BASE_URL
-    )
+    from .ollabridge_auth import resolve
+
+    # The signed-in user's paired account (and its server) first.
+    base_url, api_key = resolve(settings)
     if points_at_gitpilot_server(base_url):
         return [], (
             f"OllaBridge base URL {base_url} is GitPilot's own server address. "
@@ -162,7 +163,6 @@ def _list_ollabridge_models(settings: AppSettings) -> Tuple[List[str], Optional[
             f"{OLLABRIDGE_DEFAULT_BASE_URL})."
         )
 
-    api_key = getattr(settings.ollabridge, "api_key", None) or os.getenv("OLLABRIDGE_API_KEY", "")
     url = f"{base_url.rstrip('/')}/v1/models"
 
     headers: Dict[str, str] = {}
@@ -175,6 +175,18 @@ def _list_ollabridge_models(settings: AppSettings) -> Tuple[List[str], Optional[
         data = resp.json().get("data", [])
         models = sorted({m.get("id", "") for m in data if m.get("id")})
         return models, None
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code == 401:
+            if api_key:
+                return [], (
+                    f"OllaBridge at {base_url} rejected the saved token (it may have been "
+                    "revoked in OllaBridge). Unpair, then pair again with a new code."
+                )
+            return [], (
+                f"OllaBridge at {base_url} needs your account: choose Device Pairing, "
+                "enter the code from your OllaBridge pairing screen and click Pair."
+            )
+        return [], f"Error listing OllaBridge models from {url}: {e}"
     except Exception as e:
         return [], f"Error listing OllaBridge models from {url}: {e}"
 

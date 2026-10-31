@@ -99,14 +99,15 @@ def resolve_endpoint(settings: Any = None) -> ChatEndpoint | None:
     if provider == LLMProvider.ollabridge:
         from .settings import OLLABRIDGE_DEFAULT_BASE_URL
 
-        base = settings.ollabridge.base_url or _env(
-            "OLLABRIDGE_BASE_URL", OLLABRIDGE_DEFAULT_BASE_URL
-        )
+        from .ollabridge_auth import resolve as _resolve_ollabridge
+
+        # The signed-in user's paired account (and its server) first.
+        base, api_key = _resolve_ollabridge(settings)
         return ChatEndpoint(
             provider="ollabridge",
-            base_url=openai_compatible_api_base(base),
+            base_url=openai_compatible_api_base(base or OLLABRIDGE_DEFAULT_BASE_URL),
             model=settings.ollabridge.model or _env("GITPILOT_OLLABRIDGE_MODEL", "qwen2.5:1.5b"),
-            api_key=settings.ollabridge.api_key or _env("OLLABRIDGE_API_KEY") or "ollabridge",
+            api_key=api_key or "ollabridge",
         )
 
     if provider == LLMProvider.openwebui:

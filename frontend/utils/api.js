@@ -362,7 +362,8 @@ export async function fetchProviderStatus() {
 export async function testProvider(providerConfig) {
   return safeFetchJSON(apiUrl("/api/providers/test"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    credentials: API_CREDENTIALS,
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     body: JSON.stringify(providerConfig),
   });
 }

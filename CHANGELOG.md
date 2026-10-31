@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — OllaBridge device pairing
+- **Paired tokens are saved and used.** "Paired successfully!" was followed by a
+  401 on Load Models and on every model call: the device token only went into
+  the form and was never saved or sent.
+- **On shared deployments the token stays with the user who paired.** On the
+  Hugging Face Space and other multi-user servers, it is stored encrypted on that
+  user's GitPilot session and used only for their requests, only with the server
+  that issued it. It is never written to the shared settings or sent to the browser.
+  A request without a session is refused before the single-use code is spent.
+- **Single-user installs** keep saving the token in the server settings.
+- **Unpair** is new: `DELETE /api/ollabridge/pair`.
+- **OllaBridge Cloud's address is now `https://app.ollabridge.com`**, the URL its
+  pairing screen shows, everywhere: web UI, Space image, VS Code extension and docs.
+  The old address still counts as the same service.
+- **GitPilot names itself in the OllaBridge device list.**
+
 ### Added — GitLab support and server-side sign-in sessions
 - **GitLab works end to end.**
   - Sign in with GitLab (GitLab.com, or one self-managed host set with `GITLAB_BASE_URL`).

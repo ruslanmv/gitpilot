@@ -12,7 +12,7 @@ gitpilot.ruslanmv.com  (Vercel, Vite/React UI)
 ruslanmv-gitpilot.hf.space  (Hugging Face Docker Space, FastAPI backend)
         │  GITPILOT_PROVIDER=ollabridge
         ▼
-ruslanmv-ollabridge.hf.space  (OllaBridge, OpenAI-compatible /v1 gateway)
+app.ollabridge.com  (OllaBridge Cloud, OpenAI-compatible /v1 gateway)
 ```
 
 - **Frontend (Vercel):** the `frontend/` Vite app, built per `vercel.json`.
@@ -26,9 +26,13 @@ ruslanmv-ollabridge.hf.space  (OllaBridge, OpenAI-compatible /v1 gateway)
   `main`** (or manual `workflow_dispatch`). The Space needs the repo secrets
   `HF_TOKEN`, `HF_USERNAME` (`ruslanmv`), `SPACE_NAME` (`gitpilot`).
 - **Inference (OllaBridge):** the HF Space sets `GITPILOT_PROVIDER=ollabridge`
-  and `OLLABRIDGE_BASE_URL=https://ruslanmv-ollabridge.hf.space`. GitPilot routes
+  and `OLLABRIDGE_BASE_URL=https://app.ollabridge.com`. GitPilot routes
   LLM calls through litellm with an `openai/<model>` prefix pointed at
-  `${OLLABRIDGE_BASE_URL}/v1`.
+  `${OLLABRIDGE_BASE_URL}/v1`. OllaBridge Cloud authenticates every call with
+  an account token: each user pairs their account in **Admin → AI Providers →
+  Device Pairing** (code from the OllaBridge pairing screen). On this multi-user
+  deployment the token is kept encrypted on that user's GitPilot session and is
+  used only for their requests.
 
 ## Backend environment (HF Space)
 
@@ -37,7 +41,7 @@ Set on the Space (already baked into `deploy/huggingface/Dockerfile`):
 | Variable | Value |
 |---|---|
 | `GITPILOT_PROVIDER` | `ollabridge` |
-| `OLLABRIDGE_BASE_URL` | `https://ruslanmv-ollabridge.hf.space` |
+| `OLLABRIDGE_BASE_URL` | `https://app.ollabridge.com` |
 | `GITPILOT_OLLABRIDGE_MODEL` | `qwen2.5:1.5b` |
 | `CORS_ORIGINS` | `*` (allows `gitpilot.ruslanmv.com` → Space cross-origin) |
 | `GITPILOT_CONFIG_DIR` | `/tmp/gitpilot` |
@@ -60,8 +64,8 @@ curl https://ruslanmv-gitpilot.hf.space/api/health           # {"status":"health
 curl https://ruslanmv-gitpilot.hf.space/api/health/deep      # provider:"ollabridge", provider_reachable:true
 
 # Inference (OllaBridge) — the chat/plan path
-curl https://ruslanmv-ollabridge.hf.space/v1/chat/completions \
-  -H 'content-type: application/json' -H 'authorization: Bearer ollabridge' \
+curl https://app.ollabridge.com/v1/chat/completions \
+  -H 'content-type: application/json' -H 'authorization: Bearer <device token from pairing>' \
   -d '{"model":"qwen2.5:1.5b","messages":[{"role":"user","content":"ping"}],"max_tokens":8}'
 ```
 
