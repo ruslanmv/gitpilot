@@ -1626,6 +1626,25 @@ def _maybe_compact_session_for_request(session_id: Optional[str]) -> None:
         logger.debug("[compact] hook failed: %s", exc)
 
 
+async def _answer_if_read_only(plan: Any, req: "ChatPlanRequest", token: Optional[str],
+                               repo_paths: List[str]) -> None:
+    """A plan that only READs answers a question: give the chat the answer.
+
+    Without this the chat showed the planner's description of what it would
+    read ("Inspect the single existing file…") as the reply. See
+    :mod:`gitpilot.plan_answer`. Never fails the request.
+    """
+    try:
+        from .plan_answer import answer_read_only_plan
+
+        await answer_read_only_plan(
+            plan, goal=req.goal, owner=req.repo_owner, repo=req.repo_name,
+            token=token, ref=req.branch_name, repo_paths=repo_paths,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("[plan-answer] skipped: %s", exc)
+
+
 @app.post("/api/chat/plan")
 @_track_task(kind="plan", title_fn=lambda req: req.goal)
 async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Header(None)):
@@ -1782,6 +1801,7 @@ async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Hea
             except Exception as _rescue_err:  # pragma: no cover - defensive
                 logger.debug("[router] post-LLM execute rescue skipped: %s", _rescue_err)
 
+            await _answer_if_read_only(plan, req, token, repo_paths)
             return plan
         except Exception as exc:
             error_msg = str(exc)
@@ -1867,7 +1887,7 @@ async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Hea
                     error_msg,
                 )
                 try:
-                    return await generate_plan_lite(
+                    lite_plan = await generate_plan_lite(
                         req.goal,
                         full_name,
                         token=token,
@@ -1875,6 +1895,8 @@ async def api_chat_plan(req: ChatPlanRequest, authorization: Optional[str] = Hea
                         routing_hint=routing_hint,
                         intent=routing_intent,
                     )
+                    await _answer_if_read_only(lite_plan, req, token, repo_paths)
+                    return lite_plan
                 except Exception as lite_exc:
                     logger.exception(
                         "[GitPilot] Lite planner fallback also failed after parse error: %s",
@@ -4672,8 +4694,12 @@ async def api_security_scan_workspace(path: str = Query(default=".")):
 STATIC_DIR = Path(__file__).resolve().parent / "web"
 ASSETS_DIR = STATIC_DIR / "assets"
 
+from .web_static import INDEX_HTML_HEADERS as _INDEX_HTML_HEADERS, BuildAssets, spa_response
+
 if ASSETS_DIR.exists():
-    app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
+    # Content-hashed: cached for a year; a missing one tells a stale page's
+    # browser to drop its cache (see gitpilot.web_static).
+    app.mount("/assets", BuildAssets(directory=ASSETS_DIR), name="assets")
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -4789,14 +4815,7 @@ async def healthz():
     return {"status": "healthy", "service": "gitpilot-backend"}
 
 
-#: ``index.html`` names the content-hashed bundle of one build. Without an
-#: explicit policy browsers cache it heuristically (from Last-Modified) and keep
-#: loading a previous build after a deploy, whose CSS/JS no longer exist —
-#: the sign-in page then renders unstyled. Always revalidate it.
-_INDEX_HTML_HEADERS = {"Cache-Control": "no-cache"}
-
-
-@app.get("/", include_in_schema=False)
+@app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
 async def index():
     """Serve the React App entry point."""
     index_file = STATIC_DIR / "index.html"
@@ -4808,23 +4827,17 @@ async def index():
     )
 
 
-@app.get("/{full_path:path}", include_in_schema=False)
+@app.api_route("/{full_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
 async def catch_all_spa_routes(full_path: str):
     """
-    Catch-all route to serve index.html for frontend routing.
-    Excludes '/api' paths to ensure genuine API 404s are returned as JSON.
+    Serve the web app for its client-side routes (``/auth``, ...).
+
+    API paths get a JSON 404; root build files (``favicon.svg``, ...) are
+    served as files; dotfiles and other file-like paths that do not exist
+    (``/.env``, ``/wp-login.php``) get a plain 404 instead of the app page.
+    See :func:`gitpilot.web_static.spa_response`.
     """
-    if full_path.startswith("api/"):
-        return JSONResponse({"detail": "Not Found"}, status_code=404)
-
-    index_file = STATIC_DIR / "index.html"
-    if index_file.exists():
-        return FileResponse(index_file, headers=_INDEX_HTML_HEADERS)
-
-    return JSONResponse(
-        {"message": "GitPilot UI not built. The static files directory is missing."},
-        status_code=500,
-    )
+    return spa_response(full_path, STATIC_DIR)
 
 # ---------------------------------------------------------------------------
 # OllaBridge Cloud Extension (additive, non-destructive)

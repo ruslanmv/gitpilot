@@ -36,6 +36,33 @@ function jsonHeaders(options) {
 // Active abort controllers keyed by sessionId
 const activeControllers = new Map();
 
+// 503 is the one answer worth retrying: uvicorn's concurrency guard (and the
+// proxies in front of it) send it before the request reaches the app, so no
+// run started and a retry cannot start a second one. A 502 or 504 may come
+// after the run began, so those are reported, not retried.
+const BUSY_STATUS = 503;
+const DEFAULT_BUSY_RETRY_DELAYS_MS = [1500, 4000];
+const MAX_RETRY_AFTER_MS = 10000;
+
+/** The server's ``Retry-After`` in ms (capped), else ``fallbackMs``. */
+function retryDelayMs(res, fallbackMs) {
+  const header = res.headers?.get?.('retry-after');
+  const seconds = Number(header);
+  if (header != null && header !== '' && Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(seconds * 1000, MAX_RETRY_AFTER_MS);
+  }
+  return fallbackMs;
+}
+
+/** Wait ``ms``, or less if ``signal`` aborts first. */
+function sleep(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+  });
+}
+
 /**
  * One SSE block ("data: {...}" lines, possibly alongside ``id:`` / ``event:``
  * lines) as an event object, or null for framing noise and ``[DONE]``.
@@ -115,8 +142,13 @@ export function dispatchEvent(event, handlers = {}) {
  * ``options``: ``headers`` (auth), ``permission_mode`` (default ``normal``),
  * ``topology_id``, ``token`` (a provider token, for API clients that keep
  * their own; the web app sends none — the server uses the GitPilot session's
- * GitHub or GitLab connection, by the session repository's provider) and
+ * GitHub or GitLab connection, by the session repository's provider),
+ * ``busyRetryDelaysMs`` (waits before each retry of a 503; default
+ * ``[1500, 4000]``, a ``Retry-After`` header wins, capped at 10 s) and
  * ``fetch`` (an implementation to use instead of the global, for tests).
+ *
+ * ``onRetry({attempt, status, delayMs})`` fires before each retry. When the
+ * retries are spent, ``onError`` gets ``{status: 503, busy: true}``.
  *
  * Returns a function that aborts the stream. Aborting is silent: no handler
  * fires, because the caller asked for it.
@@ -134,18 +166,36 @@ export function streamChat(sessionId, message, handlers = {}, options = {}) {
   if (options.topology_id) body.topology_id = options.topology_id;
   if (options.token) body.token = options.token;
 
+  const busyRetryDelays = options.busyRetryDelaysMs || DEFAULT_BUSY_RETRY_DELAYS_MS;
+
   const run = async () => {
     try {
-      const res = await fetchImpl(apiUrl('/api/v2/chat/stream'), {
-        method: 'POST',
-        credentials: options.credentials || API_CREDENTIALS,
-        headers: jsonHeaders(options),
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
+      let res;
+      for (let attempt = 0; ; attempt++) {
+        res = await fetchImpl(apiUrl('/api/v2/chat/stream'), {
+          method: 'POST',
+          credentials: options.credentials || API_CREDENTIALS,
+          headers: jsonHeaders(options),
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+        if (res.status !== BUSY_STATUS || attempt >= busyRetryDelays.length) break;
+        try { await res.body?.cancel(); } catch { /* already closed */ }
+        const delayMs = retryDelayMs(res, busyRetryDelays[attempt]);
+        handlers.onRetry?.({ attempt: attempt + 1, status: res.status, delayMs });
+        await sleep(delayMs, controller.signal);
+        if (controller.signal.aborted) return;
+      }
 
       if (!res.ok || !res.body) {
-        handlers.onError?.({ type: 'error', error: `Server returned ${res.status}` });
+        // ``busy``: turned away before the run started, retries spent — the
+        // caller may send the message another way.
+        handlers.onError?.({
+          type: 'error',
+          error: `Server returned ${res.status}`,
+          status: res.status,
+          busy: res.status === BUSY_STATUS,
+        });
         return;
       }
 

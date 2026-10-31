@@ -32,3 +32,39 @@ def test_api_paths_are_not_the_spa(client):
     resp = client.get("/api/definitely-not-a-route")
     assert resp.status_code == 404
     assert resp.headers["content-type"].startswith("application/json")
+
+
+@pytest.mark.parametrize("path", ["/.env", "/.env.production", "/.git/config", "/.streamlit/secrets.toml",
+                                  "/file%3D../.env", "/wp-login.php", "/backup.zip", "/assets-old/app.js"])
+def test_scanner_paths_get_a_plain_404_not_the_app(client, path):
+    resp = client.get(path)
+    assert resp.status_code == 404
+    assert "root" not in resp.text
+
+
+def test_root_build_files_are_served_as_files(client, tmp_path):
+    (tmp_path / "robots.txt").write_text("User-agent: *\n", encoding="utf-8")
+    resp = client.get("/robots.txt")
+    assert resp.status_code == 200 and resp.text.startswith("User-agent")
+    assert "text/plain" in resp.headers["content-type"]
+
+
+def test_head_on_the_app_is_allowed(client):
+    assert client.head("/").status_code == 200
+    assert client.head("/auth").status_code == 200
+
+
+def test_hashed_assets_are_immutable_and_a_missing_one_clears_a_stale_cache(tmp_path):
+    from fastapi import FastAPI
+
+    from gitpilot.web_static import BuildAssets
+
+    (tmp_path / "index-NEW.css").write_text("body{}", encoding="utf-8")
+    app = FastAPI()
+    app.mount("/assets", BuildAssets(directory=tmp_path), name="assets")
+    c = TestClient(app)
+    hit = c.get("/assets/index-NEW.css")
+    assert hit.status_code == 200 and "immutable" in hit.headers["cache-control"]
+    miss = c.get("/assets/index-OLD.css")                  # requested by a cached old page
+    assert miss.status_code == 404
+    assert miss.headers["clear-site-data"] == '"cache"'

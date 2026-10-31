@@ -52,12 +52,14 @@ echo ""
 
 # -- Start GitPilot (foreground) ----------------------------------------------
 # --workers 2: prevent one stuck request from blocking the entire app
-# --limit-concurrency 10: reject excess requests instead of queueing forever
-# --timeout-keep-alive 120: keep connections alive for streaming responses
+# --limit-concurrency 200: counts open connections, idle keep-alive ones
+#   included; at 10 a scanner burst plus polling turned chat streams into 503s
+# --timeout-keep-alive 75: longer than the proxy's idle timeout, so the proxy
+#   never reuses a connection uvicorn has just closed (that would be a 502)
 exec python -m uvicorn gitpilot.api:app \
     --host "${HOST:-0.0.0.0}" \
     --port "${PORT:-7860}" \
     --workers 2 \
-    --limit-concurrency 10 \
-    --timeout-keep-alive 120 \
+    --limit-concurrency 200 \
+    --timeout-keep-alive 75 \
     --no-access-log

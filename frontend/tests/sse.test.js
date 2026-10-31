@@ -100,12 +100,78 @@ test("a final block without a trailing blank line is still delivered", async () 
 
 test("a non-2xx answer is reported through onError, not thrown", async () => {
   const errors = [];
+  const calls = [];
   await new Promise((resolve) => {
     streamChat("s3", "hi", { onError: (e) => { errors.push(e); resolve(); } }, {
-      fetch: scriptedFetch(streamResponse([], { ok: false, status: 503 })),
+      fetch: scriptedFetch(streamResponse([], { ok: false, status: 500 }), calls),
     });
   });
-  assert.deepEqual(errors, [{ type: "error", error: "Server returned 503" }]);
+  assert.deepEqual(errors, [{ type: "error", error: "Server returned 500", status: 500, busy: false }]);
+  assert.equal(calls.length, 1, "only a 503 is retried");
+});
+
+// A fetch that answers with each response in turn (the last one repeats).
+function sequenceFetch(responses, calls = []) {
+  return async (url, init) => {
+    calls.push({ url: String(url), init });
+    return responses[Math.min(calls.length, responses.length) - 1];
+  };
+}
+
+function busyResponse(headers = {}) {
+  return { ...streamResponse([], { ok: false, status: 503 }), headers: new Headers(headers) };
+}
+
+test("a 503 is retried and the run goes ahead when the server has room", async () => {
+  const calls = [];
+  const retries = [];
+  const events = await streamToEnd("s5", "hi", { onRetry: (r) => retries.push(r) }, {
+    busyRetryDelaysMs: [0, 0],
+    fetch: sequenceFetch([busyResponse(), streamResponse(['data: {"type":"done"}\n\n'])], calls),
+  });
+  assert.equal(calls.length, 2);
+  assert.deepEqual(retries, [{ attempt: 1, status: 503, delayMs: 0 }]);
+  assert.deepEqual(events, [{ type: "done" }]);
+});
+
+test("when every retry is turned away the error says the server was busy", async () => {
+  const calls = [];
+  const retries = [];
+  const errors = [];
+  await new Promise((resolve) => {
+    streamChat("s6", "hi", {
+      onRetry: (r) => retries.push(r.attempt),
+      onError: (e) => { errors.push(e); resolve(); },
+    }, { busyRetryDelaysMs: [0, 0], fetch: sequenceFetch([busyResponse()], calls) });
+  });
+  assert.equal(calls.length, 3, "the first try and two retries");
+  assert.deepEqual(retries, [1, 2]);
+  assert.deepEqual(errors, [{ type: "error", error: "Server returned 503", status: 503, busy: true }]);
+});
+
+test("Retry-After sets the wait, capped at ten seconds", async () => {
+  const retries = [];
+  const stop = streamChat("s7", "hi", { onRetry: (r) => retries.push(r.delayMs) }, {
+    busyRetryDelaysMs: [0],
+    fetch: sequenceFetch([busyResponse({ "Retry-After": "120" })]),
+  });
+  await new Promise((r) => setTimeout(r, 20));
+  stop(); // ends the 10 s wait
+  assert.deepEqual(retries, [10000]);
+});
+
+test("stopping during a retry wait is silent and sends nothing more", async () => {
+  const calls = [];
+  const fired = [];
+  const stop = streamChat("s8", "hi", {
+    onError: (e) => fired.push(e),
+    onDone: (e) => fired.push(e),
+  }, { busyRetryDelaysMs: [5000], fetch: sequenceFetch([busyResponse()], calls) });
+  await new Promise((r) => setTimeout(r, 10));
+  stop();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(calls.length, 1);
+  assert.deepEqual(fired, []);
 });
 
 test("aborting the stream is silent", async () => {
