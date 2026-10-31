@@ -19,6 +19,7 @@ import {
 import {
   inferOllaBridgeMode,
   OLLABRIDGE_CLOUD_URL,
+  OLLABRIDGE_CLOUD_LEGACY_URL,
   OLLABRIDGE_LINK_URL,
   OLLABRIDGE_LOCAL_URL,
   PROVIDER_CATALOG,
@@ -1472,7 +1473,8 @@ function isPlainHttpRemote(url: string): boolean {
 /** The browser sign-in page belonging to a given OllaBridge gateway. */
 function deriveLinkUrl(baseUrl?: string): string {
   const base = (baseUrl || "").trim();
-  if (!base || base.replace(/\/+$/, "") === OLLABRIDGE_CLOUD_URL) {
+  const trimmed = base.replace(/\/+$/, "");
+  if (!base || trimmed === OLLABRIDGE_CLOUD_URL || trimmed === OLLABRIDGE_CLOUD_LEGACY_URL) {
     return OLLABRIDGE_LINK_URL;
   }
   try {

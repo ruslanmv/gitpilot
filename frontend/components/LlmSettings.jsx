@@ -1,5 +1,13 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { testProvider, apiUrl } from "../utils/api";
+import { testProvider, authFetch } from "../utils/api";
+
+// The server OllaBridge Cloud's pairing screen tells users to use.
+const OLLABRIDGE_CLOUD_URL = "https://app.ollabridge.com";
+
+/** Host name of a URL for messages ("app.ollabridge.com"). */
+const hostOf = (url) => {
+  try { return new URL(url).host; } catch { return url || ""; }
+};
 
 const PROVIDERS = ["ollabridge", "openai", "claude", "watsonx", "ollama"];
 
@@ -85,7 +93,7 @@ export default function LlmSettings() {
         setLoadingSlow(true);
       }, 1500);
 
-      const res = await fetch(apiUrl("/api/settings"));
+      const res = await authFetch("/api/settings");
       const data = await res.json();
 
       if (!res.ok) {
@@ -93,6 +101,14 @@ export default function LlmSettings() {
       }
 
       setSettings(data);
+      // Open the matching authentication mode: a paired account → Device
+      // Pairing; a typed key → API Key; OllaBridge Cloud without either →
+      // Device Pairing (it needs an account); otherwise Local Trust.
+      const ob = data.ollabridge || {};
+      const cloud = !ob.base_url || /ollabridge\.com|hf\.space/.test(ob.base_url);
+      setAuthMode(
+        data.ollabridge_pairing ? "device" : ob.api_key ? "apikey" : cloud ? "device" : "local",
+      );
     } catch (e) {
       console.error(e);
       setError(e.message || "Failed to load settings");
@@ -122,7 +138,7 @@ export default function LlmSettings() {
     setSavedMsg("");
 
     try {
-      const res = await fetch(apiUrl("/api/settings/llm"), {
+      const res = await authFetch("/api/settings/llm", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(settings),
@@ -147,7 +163,7 @@ export default function LlmSettings() {
     setLoadingModelsFor(provider);
 
     try {
-      const res = await fetch(apiUrl(`/api/settings/models?provider=${provider}`));
+      const res = await authFetch(`/api/settings/models?provider=${provider}`);
       const data = await res.json();
 
       if (!res.ok || data.error) {
@@ -173,32 +189,69 @@ export default function LlmSettings() {
     setPairResult(null);
 
     try {
-      const baseUrl =
-        settings?.ollabridge?.base_url || "https://ruslanmv-ollabridge.hf.space";
+      const baseUrl = settings?.ollabridge?.base_url || OLLABRIDGE_CLOUD_URL;
 
-      const res = await fetch(apiUrl("/api/ollabridge/pair"), {
+      const res = await authFetch("/api/ollabridge/pair", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ base_url: baseUrl, code: pairCode.trim() }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
-      if (data.success) {
-        setPairResult({ ok: true, message: "Paired successfully!" });
-        if (data.token) {
-          updateField("ollabridge", "api_key", data.token);
-        }
+      if (res.ok && data.success) {
+        const pairedBase = data.base_url || baseUrl;
+        setPairCode("");
+        setPairResult({ ok: true, message: `Paired with ${hostOf(pairedBase)}.` });
+        // A multi-user server keeps the token on this user's session and never
+        // returns it; a single-user server saved it in its settings (token
+        // returned) — mirror that in the form so a later Save keeps it.
+        setSettings((prev) => ({
+          ...prev,
+          ollabridge: {
+            ...prev.ollabridge,
+            base_url: pairedBase,
+            ...(data.token ? { api_key: data.token } : {}),
+          },
+          ollabridge_pairing: {
+            scope: data.stored || "server",
+            base_url: pairedBase,
+            device_id: data.device_id,
+          },
+        }));
+        loadModelsForProvider("ollabridge");
       } else {
         setPairResult({
           ok: false,
-          message: data.error || "Pairing failed",
+          message: data.error || data.detail || "Pairing failed",
         });
       }
     } catch (e) {
       setPairResult({ ok: false, message: e.message || "Pairing failed" });
     } finally {
       setPairing(false);
+    }
+  };
+
+  const handleUnpair = async () => {
+    setPairResult(null);
+    try {
+      const res = await authFetch("/api/ollabridge/pair", { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || "Could not unpair");
+      }
+      setSettings((prev) => ({
+        ...prev,
+        ollabridge: {
+          ...prev.ollabridge,
+          ...(prev.ollabridge_pairing?.scope === "server" ? { api_key: "" } : {}),
+        },
+        ollabridge_pairing: null,
+      }));
+      setModelsByProvider((prev) => ({ ...prev, ollabridge: [] }));
+    } catch (e) {
+      setPairResult({ ok: false, message: e.message || "Could not unpair" });
     }
   };
 
@@ -301,8 +354,8 @@ export default function LlmSettings() {
         <div className="settings-upsell-body">
           <div className="settings-upsell-title">
             {provider === "ollabridge"
-              ? "You're on OllaBridge Cloud — free, no setup required."
-              : "Tip: OllaBridge Cloud is free and needs no setup."}
+              ? "You're on OllaBridge Cloud — free, just pair your account once."
+              : "Tip: OllaBridge Cloud is free — pair your account once."}
           </div>
           <div className="settings-upsell-text">
             Perfect for getting started. Need sharper results? Switch to a premium
@@ -347,7 +400,7 @@ export default function LlmSettings() {
           <div className="settings-title">OllaBridge Cloud Configuration</div>
           <div className="settings-hint" style={{ marginBottom: 12 }}>
             Connect to OllaBridge Cloud or any OllaBridge instance for LLM
-            inference. No API key required for public endpoints.
+            inference. OllaBridge Cloud uses your account: pair it with a code.
           </div>
 
           <label className="settings-label">Authentication Mode</label>
@@ -374,6 +427,19 @@ export default function LlmSettings() {
                 Enter the pairing code from your OllaBridge console and click
                 Pair.
               </div>
+              {settings.ollabridge_pairing && (
+                <div className="settings-success-banner ob-paired-row">
+                  <span>
+                    Paired with {hostOf(settings.ollabridge_pairing.base_url || OLLABRIDGE_CLOUD_URL)}
+                    {settings.ollabridge_pairing.scope === "session"
+                      ? " — your OllaBridge account, for your sessions only."
+                      : "."}
+                  </span>
+                  <button type="button" className="settings-secondary-btn" onClick={handleUnpair}>
+                    Unpair
+                  </button>
+                </div>
+              )}
               <div className="ob-pair-row">
                 <input
                   className="settings-input ob-pair-input"
@@ -412,7 +478,7 @@ export default function LlmSettings() {
             onChange={(e) =>
               updateField("ollabridge", "base_url", e.target.value)
             }
-            placeholder="https://your-ollabridge-endpoint"
+            placeholder={OLLABRIDGE_CLOUD_URL}
           />
 
           {(authMode === "apikey" || authMode === "local") && (

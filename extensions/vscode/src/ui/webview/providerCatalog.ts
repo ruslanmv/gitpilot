@@ -5,8 +5,11 @@
  */
 import { OllaBridgeMode, ProviderName } from "../../core/types";
 
-/** OllaBridge Cloud's hosted gateway — the zero-setup default. */
-export const OLLABRIDGE_CLOUD_URL = "https://ruslanmv-ollabridge.hf.space";
+/** OllaBridge Cloud's hosted gateway — the default (pair an account to use it). */
+export const OLLABRIDGE_CLOUD_URL = "https://app.ollabridge.com";
+
+/** Earlier address of the same OllaBridge Cloud service, still found in saved settings. */
+export const OLLABRIDGE_CLOUD_LEGACY_URL = "https://ruslanmv-ollabridge.hf.space";
 
 /**
  * A self-hosted OllaBridge gateway. Note the port: 11435, *not* 8000.

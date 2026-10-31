@@ -34,6 +34,19 @@ def on_hf_space() -> bool:
     return bool(os.getenv("SPACE_ID") or space_host())
 
 
+def multi_user() -> bool:
+    """True when several people share this server (hosted deployments).
+
+    A Hugging Face Space, enabled accounts, or ``GITPILOT_MULTI_USER=true``.
+    Per-person credentials then belong on the person's web session, never in
+    the server-wide ``settings.json``.
+    """
+    def _on(name: str) -> bool:
+        return (os.getenv(name) or "").strip().lower() in ("1", "true", "yes", "on")
+
+    return on_hf_space() or _on("GITPILOT_ENABLE_ACCOUNTS") or _on("GITPILOT_MULTI_USER")
+
+
 def public_base_url(default: Optional[str] = None) -> Optional[str]:
     """Public URL of the web app (no trailing slash)."""
     explicit = (os.getenv("GITPILOT_PUBLIC_BASE_URL") or "").strip().rstrip("/")
@@ -114,5 +127,5 @@ def persistent_auth_dir() -> Optional[Path]:
     return None
 
 
-__all__ = ["space_host", "on_hf_space", "public_base_url", "trusted_public_origins", "frontend_origins",
+__all__ = ["space_host", "on_hf_space", "multi_user", "public_base_url", "trusted_public_origins", "frontend_origins",
            "allowed_frontend_origin", "persistent_auth_dir"]

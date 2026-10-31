@@ -68,7 +68,7 @@ Configure via HF Spaces secrets:
 | Variable | Description | Default |
 |---|---|---|
 | `GITPILOT_PROVIDER` | LLM provider | `ollabridge` |
-| `OLLABRIDGE_BASE_URL` | OllaBridge Cloud URL | `https://ruslanmv-ollabridge.hf.space` |
+| `OLLABRIDGE_BASE_URL` | OllaBridge Cloud URL | `https://app.ollabridge.com` |
 | `GITHUB_TOKEN` | GitHub personal access token | - |
 | `OPENAI_API_KEY` | OpenAI API key (if using OpenAI) | - |
 | `ANTHROPIC_API_KEY` | Anthropic API key (if using Claude) | - |
