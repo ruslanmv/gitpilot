@@ -84,6 +84,7 @@ test("events split across chunks arrive whole and in order", async () => {
   assert.equal(calls.length, 1);
   assert.match(calls[0].url, /\/api\/v2\/chat\/stream$/);
   assert.equal(calls[0].init.method, "POST");
+  assert.equal(calls[0].init.credentials, "same-origin"); // cross-site: header auth only
   assert.equal(calls[0].init.headers.Authorization, "Bearer x");
   assert.equal(calls[0].init.headers["Content-Type"], "application/json");
   assert.deepEqual(JSON.parse(calls[0].init.body), {

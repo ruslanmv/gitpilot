@@ -28,6 +28,15 @@ detects that right after sign-in and sends the same session id in the
 `X-GitPilot-Session` header instead, keeping it in `localStorage`. Provider tokens
 stay server-side either way.
 
+Every API request uses `credentials: "same-origin"` (`API_CREDENTIALS` in
+`frontend/utils/backend.js`), never `"include"`. The Hugging Face proxy answers CORS
+preflights itself and never sends `Access-Control-Allow-Credentials`. A credentialed
+request from `gitpilot.ruslanmv.com` that needs a preflight (a JSON body or the session
+header) is therefore blocked by the browser, and the user sees "Failed to fetch".
+
+The backend serves `index.html` with `Cache-Control: no-cache`, so browsers never keep
+loading a previous build's asset names after a deploy.
+
 ## Sign-in flows
 
 ### GitHub and GitLab (OAuth 2.0 authorization code + PKCE)

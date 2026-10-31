@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { apiUrl, getAuthHeaders, clearSessionToken } from "../../utils/api.js";
+import { API_CREDENTIALS } from "../../utils/backend.js";
 
 // Account settings — the GitPilot account (your email/password identity).
 // This is intentionally separate from the GitHub connection, which only grants
@@ -35,7 +36,7 @@ export default function AccountTab({ onLogout }) {
     setLoadError("");
     try {
       const res = await fetch(apiUrl("/api/account/me"), {
-        credentials: "include",
+        credentials: API_CREDENTIALS,
         headers: getAuthHeaders(),
       });
       if (res.status === 401) {
@@ -65,7 +66,7 @@ export default function AccountTab({ onLogout }) {
     try {
       const res = await fetch(apiUrl("/api/account/profile"), {
         method: "PATCH",
-        credentials: "include",
+        credentials: API_CREDENTIALS,
         headers: jsonHeaders(),
         body: JSON.stringify({ name: name.trim() || null }),
       });
@@ -95,7 +96,7 @@ export default function AccountTab({ onLogout }) {
     try {
       const res = await fetch(apiUrl("/api/account/password/change"), {
         method: "POST",
-        credentials: "include",
+        credentials: API_CREDENTIALS,
         headers: jsonHeaders(),
         body: JSON.stringify({ current_password: curPw, new_password: newPw }),
       });
@@ -116,7 +117,7 @@ export default function AccountTab({ onLogout }) {
     try {
       const res = await fetch(apiUrl("/api/account/delete"), {
         method: "POST",
-        credentials: "include",
+        credentials: API_CREDENTIALS,
         headers: jsonHeaders(),
         body: JSON.stringify({ password: delPw || null }),
       });

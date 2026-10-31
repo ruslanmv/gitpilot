@@ -4783,12 +4783,19 @@ async def healthz():
     return {"status": "healthy", "service": "gitpilot-backend"}
 
 
+#: ``index.html`` names the content-hashed bundle of one build. Without an
+#: explicit policy browsers cache it heuristically (from Last-Modified) and keep
+#: loading a previous build after a deploy, whose CSS/JS no longer exist —
+#: the sign-in page then renders unstyled. Always revalidate it.
+_INDEX_HTML_HEADERS = {"Cache-Control": "no-cache"}
+
+
 @app.get("/", include_in_schema=False)
 async def index():
     """Serve the React App entry point."""
     index_file = STATIC_DIR / "index.html"
     if index_file.exists():
-        return FileResponse(index_file)
+        return FileResponse(index_file, headers=_INDEX_HTML_HEADERS)
     return JSONResponse(
         {"message": "GitPilot UI not built. The static files directory is missing."},
         status_code=500,
@@ -4806,7 +4813,7 @@ async def catch_all_spa_routes(full_path: str):
 
     index_file = STATIC_DIR / "index.html"
     if index_file.exists():
-        return FileResponse(index_file)
+        return FileResponse(index_file, headers=_INDEX_HTML_HEADERS)
 
     return JSONResponse(
         {"message": "GitPilot UI not built. The static files directory is missing."},
