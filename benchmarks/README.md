@@ -1,7 +1,7 @@
 # GitPilot model benchmarks
 
 Small, repeatable quality checks for the models GitPilot can drive, served
-through [OllaBridge](../../ollabridge) or any OpenAI-compatible endpoint. One
+through [OllaBridge](https://github.com/ruslanmv/ollabridge) or any OpenAI-compatible endpoint. One
 command runs them, keeps the history, renders `report.html`, and suggests how
 GitPilot should drive each model.
 

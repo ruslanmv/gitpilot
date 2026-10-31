@@ -17,6 +17,14 @@ services:
       - key: GITHUB_CLIENT_SECRET
         sync: false  # Set in Render dashboard
 
+      # Optional: GitLab OAuth application (docs/GITLAB_INTEGRATION.md)
+      - key: GITLAB_CLIENT_ID
+        sync: false
+      - key: GITLAB_CLIENT_SECRET
+        sync: false
+      - key: GITLAB_REDIRECT_URI
+        sync: false  # the frontend's sign-in page, e.g. https://your-vercel-app.vercel.app/auth
+
       # Required: LLM Provider (choose one)
       - key: OPENAI_API_KEY
         sync: false
