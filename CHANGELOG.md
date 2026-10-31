@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — web chat answers on the live stream
+- **The first message of a new chat uses the live stream.** It went to the plan
+  flow instead: the check for the v2 stream ran only once a session existed, and
+  that message is what creates the session. A question then got a plan
+  description back ("Inspect the single existing file…") instead of an answer.
+- **A busy server no longer ends the turn.** A 503 on `/api/v2/chat/stream` is
+  retried twice, honouring `Retry-After` up to 10 s, then the message falls back
+  to the plan flow with a note. 502 and 504 are not retried, since the run may
+  have started.
+
 ### Fixed — OllaBridge device pairing
 - **Paired tokens are saved and used.** "Paired successfully!" was followed by a
   401 on Load Models and on every model call: the device token only went into

@@ -103,9 +103,16 @@ EXPOSE 7860
 # in-memory per worker, so multiple workers would scatter a run's status/diff/
 # logs across processes and 404 intermittently. One worker keeps run state
 # consistent; back the registry with a shared store to scale workers later.
+#
+# --limit-concurrency counts every open connection, idle keep-alive ones
+# included. At 10, a burst of scanner requests plus each user's polling filled
+# it and real chat streams got "503 Exceeded concurrency limit". 200 is still a
+# memory guard for this one async worker. Keep-alive (75 s) must stay longer
+# than the Hugging Face proxy's idle timeout: if uvicorn closed an idle
+# connection the proxy then reused, that request would fail with a 502.
 CMD ["python", "-m", "uvicorn", "gitpilot.api:app", \
      "--host", "0.0.0.0", \
      "--port", "7860", \
      "--workers", "1", \
-     "--limit-concurrency", "10", \
-     "--timeout-keep-alive", "120"]
+     "--limit-concurrency", "200", \
+     "--timeout-keep-alive", "75"]

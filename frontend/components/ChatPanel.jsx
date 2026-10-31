@@ -109,11 +109,68 @@ export default function ChatPanel({
   //
   // This used to open the legacy /ws/sessions socket and consolidate whatever
   // it pushed. That protocol is frozen and deprecated; the answer now arrives
-  // on the v2 stream that send() opens per message. This effect only decides
-  // whether that stream is there to use, once the backend is reachable (it may
-  // still be starting — common on WSL cold start).
+  // on the v2 stream that send() opens per message.
+  //
+  // Whether that stream is there is a property of the server, not of a
+  // session, so it is probed once, when the panel mounts and the backend is
+  // reachable (it may still be starting — common on WSL cold start). It used
+  // to be probed per session, which sent the first message of every new chat
+  // down the plan flow: that message creates its session, and the probe for it
+  // had not run yet. send() awaits the probe instead of reading streamReady.
   // ---------------------------------------------------------------------------
+  const streamProbeRef = useRef(null);
+  const unmountedRef = useRef(false);
+
+  const probeStream = (attempts) => {
+    const backendUrl = resolveBackendUrl();
+    const pingUrl = backendUrl ? `${backendUrl}/api/ping` : '/api/ping';
+    const waitForBackend = async () => {
+      for (let i = 0; i < attempts && !unmountedRef.current; i++) {
+        if (i > 0) await new Promise(r => setTimeout(r, 1500));
+        try {
+          const res = await fetch(pingUrl, { method: 'GET', signal: AbortSignal.timeout(2000) });
+          if (res.ok) return true;
+        } catch { /* retry */ }
+      }
+      return false;
+    };
+    const probe = waitForBackend()
+      .then((ok) => (ok && !unmountedRef.current ? checkV2Support() : false))
+      .then((ok) => {
+        if (!unmountedRef.current) setStreamReady(Boolean(ok));
+        return Boolean(ok);
+      });
+    streamProbeRef.current = probe;
+    return probe;
+  };
+
+  // The probe's answer, waiting for it if it is still running. A server that
+  // was not ready is asked once more: it may have finished starting since.
+  const streamAvailable = async () => {
+    const ok = await (streamProbeRef.current || probeStream(1));
+    return ok || probeStream(1);
+  };
+
+  // The session the live run belongs to. The first message of a new chat
+  // starts its run before the new session id reaches the effect below, which
+  // must not mistake that for a switch away and abort the run.
+  const streamSessionRef = useRef(null);
+
   useEffect(() => {
+    unmountedRef.current = false;
+    probeStream(10);
+    return () => {
+      unmountedRef.current = true;
+      if (stopStreamRef.current) {
+        stopStreamRef.current();
+        stopStreamRef.current = null;
+        finishStreamRef.current = null;
+      }
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (stopStreamRef.current && streamSessionRef.current === sessionId) return;
     // A session switch abandons any run still streaming for the old one.
     if (stopStreamRef.current) {
       stopStreamRef.current();
@@ -122,36 +179,6 @@ export default function ChatPanel({
     }
     streamStateRef.current = initialStreamState();
     setPendingApprovals([]);
-    setStreamReady(false);
-
-    if (!sessionId) return;
-
-    let cancelled = false;
-    const backendUrl = resolveBackendUrl();
-    const pingUrl = backendUrl ? `${backendUrl}/api/ping` : '/api/ping';
-    const waitForBackend = async () => {
-      for (let i = 0; i < 10 && !cancelled; i++) {
-        try {
-          const res = await fetch(pingUrl, { method: 'GET', signal: AbortSignal.timeout(2000) });
-          if (res.ok) return true;
-        } catch { /* retry */ }
-        await new Promise(r => setTimeout(r, 1500));
-      }
-      return false;
-    };
-
-    waitForBackend()
-      .then((ok) => (ok && !cancelled ? checkV2Support() : false))
-      .then((ok) => { if (!cancelled) setStreamReady(Boolean(ok)); });
-
-    return () => {
-      cancelled = true;
-      if (stopStreamRef.current) {
-        stopStreamRef.current();
-        stopStreamRef.current = null;
-        finishStreamRef.current = null;
-      }
-    };
   }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------------------------------------------------------------------------
@@ -413,14 +440,18 @@ export default function ChatPanel({
     if (s.error) setStatus(`Agent error: ${s.error}`);
   };
 
+  // Resolves "busy" when the server turned the run away before it started
+  // (503 after the client's retries); send() then uses the plan flow.
   const streamTurn = (sid, text) =>
     new Promise((resolve) => {
       let finished = false;
+      let retried = false;
       streamStateRef.current = initialStreamState();
+      streamSessionRef.current = sid;
       setStreamingEvents([]);
       setPendingApprovals([]);
 
-      const finish = () => {
+      const finish = (outcome) => {
         if (finished) return;
         finished = true;
         const consolidated = consolidateMessage(streamStateRef.current);
@@ -430,11 +461,15 @@ export default function ChatPanel({
         setLoadingPlan(false);
         stopStreamRef.current = null;
         finishStreamRef.current = null;
-        resolve();
+        resolve(outcome);
       };
       finishStreamRef.current = finish;
 
       const fold = (event) => {
+        if (retried) {
+          retried = false;
+          setStatus("");
+        }
         streamStateRef.current = applyStreamEvent(streamStateRef.current, event);
         publishStreamState();
       };
@@ -444,8 +479,16 @@ export default function ChatPanel({
         text,
         {
           onEvent: fold,
-          onDone: finish,
+          onDone: () => finish(),
+          onRetry: () => {
+            retried = true;
+            setStatus("The server is busy, retrying...");
+          },
           onError: (err) => {
+            if (err?.busy) {
+              finish("busy");
+              return;
+            }
             fold({ type: "error", error: err?.error || String(err) });
             finish();
           },
@@ -522,10 +565,13 @@ export default function ChatPanel({
 
     // Batch V4-H4: with the v2 stream available the turn runs there — text,
     // tool activity and approvals arrive live. The plan flow below is the
-    // path for a backend without it.
-    if (streamReady && sid) {
-      await streamTurn(sid, text);
-      return;
+    // path for a backend without it, and for a run the server turned away
+    // because it was busy.
+    if (sid && (await streamAvailable())) {
+      const outcome = await streamTurn(sid, text);
+      if (outcome !== "busy") return;
+      setLoadingPlan(true);
+      setStatus("The server is busy, so this message uses the plan flow instead.");
     }
 
     // Always use HTTP for plan generation (the original reliable flow).
