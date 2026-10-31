@@ -632,19 +632,20 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
   }
 
   // ── Email / password card (sign in + create account share this shell) ──
+  // Only providers this server has configured are offered (while that is
+  // still unknown, both are shown and report a clear error if unavailable).
+  const offeredProviders = ["github", "gitlab"].filter((p) => providerAvailable(p));
   const providerButton = (p) => {
-    const enabled = providerAvailable(p);
     const host = p === "gitlab" && available && available.gitlab && available.gitlab.host;
     return (
       <button type="button" className={p === "gitlab" ? "gp-gitlab" : "gp-github"} key={p}
-        onClick={() => chooseProvider(p)} disabled={!enabled} aria-describedby={enabled ? undefined : `gp-${p}-off`}>
+        onClick={() => chooseProvider(p)}>
         <ProviderMark provider={p} /> Continue with {PROVIDER_NAMES[p]}
         {host && host !== "gitlab.com" ? <span className="gp-provider-host"> ({host})</span> : null}
         <span className="gp-provider-arrow" aria-hidden="true">↗</span>
       </button>
     );
   };
-  const disabledProviders = ["github", "gitlab"].filter((p) => !providerAvailable(p));
 
   return shell(<>
     {mode === "signup" && (
@@ -660,18 +661,14 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
       <p className="lead">Start using GitPilot with a secure workspace.</p>
     </>)}
 
-    <div className="gp-provider-stack">
-      {providerButton("github")}
-      {providerButton("gitlab")}
-    </div>
-    {disabledProviders.map((p) => (
-      <p key={p} id={`gp-${p}-off`} className="gp-provider-note">
-        {PROVIDER_NAMES[p]} sign-in is not configured on this server.
-      </p>
-    ))}
+    {offeredProviders.length > 0 && (
+      <div className="gp-provider-stack">
+        {offeredProviders.map(providerButton)}
+      </div>
+    )}
 
     {accountsEnabled ? (<>
-      <div className="gp-or">or continue with email</div>
+      {offeredProviders.length > 0 && <div className="gp-or">or continue with email</div>}
       <Note note={note} />
       {mode === "signup" && (
         <div className="gp-field">
