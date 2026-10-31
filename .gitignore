@@ -157,3 +157,4 @@ repair-plan.json
 mcp-stack/
 .mcp.env
 mcp-stack/
+/issues
