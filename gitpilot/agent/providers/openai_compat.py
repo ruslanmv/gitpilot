@@ -256,6 +256,25 @@ class OpenAICompatibleProvider:
                         text = (await response.aread()).decode("utf-8", "replace")
                         self._raise_for_status(response.status_code, text)
 
+                    content_type = response.headers.get("content-type", "").lower()
+                    if "text/event-stream" not in content_type:
+                        # A server that ignores ``stream: true`` (OllaBridge does)
+                        # answers with one plain completion. Read as SSE it yields
+                        # nothing at all — an empty turn with no error — so read it
+                        # whole and replay it as chunks instead.
+                        raw = await response.aread()
+                        replayed = self._chunks_from_completion(raw)
+                        if replayed is not None:
+                            for replayed_chunk in replayed:
+                                yield replayed_chunk
+                            return
+                        # Not JSON: an event stream without its content type.
+                        for raw_line in raw.decode("utf-8", "replace").splitlines():
+                            parsed = _parse_stream_line(raw_line)
+                            if parsed is not None:
+                                yield parsed
+                        return
+
                     async for line in response.aiter_lines():
                         chunk = _parse_stream_line(line)
                         if chunk is not None:
@@ -269,6 +288,35 @@ class OpenAICompatibleProvider:
             raise ProviderNotReachable(
                 f"Could not reach {self.name} at {self.base_url}. ({exc})"
             ) from exc
+
+    def _chunks_from_completion(self, raw: bytes) -> Optional[List[StreamChunk]]:
+        """A non-streamed completion as stream chunks, or None if ``raw`` is not JSON.
+
+        The reply goes through :meth:`parse_response`, so reasoning blocks are
+        stripped and tool-call arguments coerced exactly as on the non-streaming
+        path; a body without ``choices`` raises the same ``MalformedResponse``.
+        """
+        try:
+            payload = json.loads(raw)
+        except ValueError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        logger.debug("%s answered a streaming request with a plain completion; replaying it", self.name)
+        response = self.parse_response(payload)
+        chunks: List[StreamChunk] = []
+        if response.text:
+            chunks.append(StreamChunk(text=response.text))
+        for index, call in enumerate(response.tool_calls):
+            chunks.append(StreamChunk(
+                tool_call_index=index,
+                tool_call_id=call.id,
+                tool_call_name=call.name,
+                tool_call_arguments_delta=json.dumps(call.arguments),
+            ))
+        finish = response.finish_reason or ("tool_calls" if response.tool_calls else "stop")
+        chunks.append(StreamChunk(done=True, finish_reason=finish, usage=response.usage))
+        return chunks
 
 
 # ---------------------------------------------------------------------------

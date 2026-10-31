@@ -93,6 +93,16 @@ and this note exists so the gap is visible rather than implied:
 
 Entries below resume normal per-change logging.
 
+### Fixed — empty model turns when streaming through OllaBridge
+- **A streaming request answered with a plain completion is now read, not dropped.**
+  OllaBridge ignores `stream: true` and returns one JSON body; the OpenAI-compatible
+  provider read every response as Server-Sent Events, found no `data:` lines and
+  yielded nothing, so NATIVE and REACT_TEXT turns through OllaBridge came back empty
+  with no error. `OpenAICompatibleProvider.stream` now replays a non-stream reply as
+  chunks (text, tool-call fragments, then usage and finish reason), and a reply
+  without `choices` raises instead of passing as an empty turn. Real event streams
+  are unchanged. See `issues/GP-003-streaming-through-ollabridge-empty.md`.
+
 ### Fixed — 21-second waits reaching local services through `localhost` on Windows
 - **`localhost` now resolves to IPv4 first, for the whole GitPilot process.** On
   Windows, `localhost` resolves to `::1` before `127.0.0.1`, and a service that WSL
