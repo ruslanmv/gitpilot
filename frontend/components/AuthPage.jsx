@@ -303,7 +303,7 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
     const r = await call("/api/auth/device/code", { method: "POST" });
     if (r.data.error || !r.ok) {
       const msg = String(r.data.error || r.data.detail || r.status);
-      if (msg.includes("400") || msg.includes("Bad Request")) {
+      if (r.status === 400 || msg.includes("400") || msg.includes("Bad Request")) {
         throw new Error("Device Flow is disabled for this GitHub App. Enable it under GitHub App Settings → General → 'Enable Device Flow'.");
       }
       if (msg.includes("404") || msg.includes("401")) {
