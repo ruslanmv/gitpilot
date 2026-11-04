@@ -1,7 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { nextDevicePoll } from "../utils/devicePolling.js";
+import { initialDevicePollInterval, nextDevicePoll } from "../utils/devicePolling.js";
+
+test("first poll uses GitHub's interval, or its five-second default", () => {
+  assert.equal(initialDevicePollInterval({ interval: 9 }), 9);
+  assert.equal(initialDevicePollInterval({ interval: "6" }), 6);
+  assert.equal(initialDevicePollInterval({}), 5);
+  assert.equal(initialDevicePollInterval({ interval: 0 }), 5);
+  assert.equal(initialDevicePollInterval({ interval: "bad" }), 5);
+});
 
 test("pending device authorization waits for the advertised interval", () => {
   assert.deepEqual(nextDevicePoll(202, { status: "pending" }, 7, 2),
