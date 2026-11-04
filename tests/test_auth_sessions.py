@@ -505,6 +505,7 @@ def test_device_poll_protocol_responses(client, forges, reply, status, expected)
 
 @pytest.mark.parametrize("reply", [
     httpx.Response(502, json={"message": "gateway down"}),
+    httpx.Response(503, json={"error": "upstream_unavailable"}),
     httpx.Response(200, text="<html>not JSON</html>"),
 ])
 def test_device_poll_upstream_failures_are_retryable_not_500(client, forges, reply):
