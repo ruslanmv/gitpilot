@@ -8,7 +8,7 @@ import os
 from typing import Optional, Dict, Any
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 # Configure logging
 logger = logging.getLogger("gitpilot.auth")
@@ -278,15 +278,18 @@ async def _fetch_user_profile(client: httpx.AsyncClient, token: str) -> GitHubUs
     if not isinstance(u, dict) or not {"login", "id", "avatar_url"}.issubset(u):
         raise httpx.DecodingError("GitHub user profile response is incomplete.")
 
-    return GitHubUser(
-        login=u["login"], 
-        id=u["id"], 
-        avatar_url=u["avatar_url"],
-        name=u.get("name"),
-        email=u.get("email"),
-        bio=u.get("bio"),
-        html_url=u.get("html_url")
-    )
+    try:
+        return GitHubUser(
+            login=u["login"],
+            id=u["id"],
+            avatar_url=u["avatar_url"],
+            name=u.get("name"),
+            email=u.get("email"),
+            bio=u.get("bio"),
+            html_url=u.get("html_url"),
+        )
+    except (KeyError, TypeError, ValidationError) as exc:
+        raise httpx.DecodingError("GitHub user profile response is invalid.") from exc
 
 
 async def validate_token(access_token: str) -> Optional[GitHubUser]:
