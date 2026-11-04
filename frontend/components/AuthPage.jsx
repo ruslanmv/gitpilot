@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import "./auth.css";
 import { adoptSession, authFetch, fetchAuthProviders, fetchSession } from "../utils/api.js";
 import { clearPending, errorText, initialView, readPending, writePending } from "../utils/authFlow.js";
-import { nextDevicePoll } from "../utils/devicePolling.js";
+import { initialDevicePollInterval, nextDevicePoll } from "../utils/devicePolling.js";
 
 // GitPilot sign-in: GitHub or GitLab OAuth, or an email/password account.
 //
@@ -316,7 +316,7 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
     setPhase("device");
     stopPolling.current = false;
     // GitHub forbids the first token request before its advertised interval.
-    const interval = Math.max(1, Number(r.data.interval) || 5);
+    const interval = initialDevicePollInterval(r.data);
     pollTimer.current = setTimeout(
       () => pollDevice(r.data.device_code, interval), interval * 1000,
     );
