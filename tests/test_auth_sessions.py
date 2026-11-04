@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from gitpilot.auth import crypto
 from gitpilot.auth import web_session as ws
 from gitpilot.auth.middleware import WebSessionMiddleware
+from gitpilot.auth.device_router import build_device_router
 from gitpilot.auth.session_router import build_session_router
 from gitpilot.gitlab import build_gitlab_router
 from tests._forge_fakes import GITHUB_API, GITHUB_WEB, GITLAB, FakeForges, gitlab_project
@@ -60,6 +61,7 @@ def forges(env, monkeypatch):
 def client(forges):
     app = FastAPI()
     app.include_router(build_session_router())
+    app.include_router(build_device_router())
     app.include_router(build_gitlab_router())
     app.add_middleware(WebSessionMiddleware)
     return TestClient(app)
@@ -459,3 +461,73 @@ def test_auth_dir_prefers_explicit_then_persistent_storage(env, monkeypatch, tmp
     assert crypto.auth_dir() == tmp_path / "persist"
     monkeypatch.delenv("GITPILOT_AUTH_DIR")
     assert deployment.persistent_auth_dir() is None  # not on a Space
+
+
+# --- GitHub device authorization -----------------------------------------------
+
+
+def _device_token_reply(forges, reply):
+    """Put a device-flow response ahead of the shared web-OAuth token fake."""
+    forges.on("POST", GITHUB_WEB, "/login/oauth/access_token", reply)
+    forges.routes.insert(0, forges.routes.pop())
+
+
+def test_device_login_stores_token_only_on_server(client, env):
+    resp = client.post("/api/auth/device/poll", json={"device_code": "device-test", "store": True})
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["authenticated"] is True
+    assert data["providers"]["github"]["connected"] is True
+    assert data["providers"]["github"]["user"]["login"] == "octo"
+    assert data["session_token"].startswith("gps_")
+    assert "gho_user_token" not in resp.text
+    assert b"gho_user_token" not in (env / "sessions.db").read_bytes()
+    assert client.get("/api/auth/session").json()["authenticated"] is True
+
+
+def test_device_login_without_store_keeps_cli_contract(client):
+    resp = client.post("/api/auth/device/poll", json={"device_code": "device-test"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["access_token"] == "gho_user_token"
+
+
+@pytest.mark.parametrize("reply,status,expected", [
+    ({"error": "authorization_pending"}, 202, {"status": "pending"}),
+    ({"error": "slow_down", "interval": 15}, 429, {"error": "slow_down", "interval": 15}),
+    ({"error": "access_denied"}, 400, {"error": "Access denied by user."}),
+])
+def test_device_poll_protocol_responses(client, forges, reply, status, expected):
+    _device_token_reply(forges, reply)
+    resp = client.post("/api/auth/device/poll", json={"device_code": "device-test", "store": True})
+    assert resp.status_code == status
+    assert resp.json() == expected
+
+
+@pytest.mark.parametrize("reply", [
+    httpx.Response(502, json={"message": "gateway down"}),
+    httpx.Response(200, text="<html>not JSON</html>"),
+])
+def test_device_poll_upstream_failures_are_retryable_not_500(client, forges, reply):
+    _device_token_reply(forges, reply)
+    resp = client.post("/api/auth/device/poll", json={"device_code": "device-test", "store": True})
+    assert resp.status_code == 503
+    assert resp.json()["code"] == "github_unavailable"
+    assert resp.headers["retry-after"] == "5"
+
+
+def test_device_poll_storage_failure_has_actionable_error(client, monkeypatch):
+    from gitpilot.auth import session_router
+
+    def fail(*_args, **_kwargs):
+        raise OSError("simulated unavailable session database")
+
+    monkeypatch.setattr(session_router, "connect_credential", fail)
+    resp = client.post("/api/auth/device/poll", json={"device_code": "device-test", "store": True})
+    assert resp.status_code == 503
+    assert resp.json()["code"] == "session_storage_unavailable"
+    assert "gho_user_token" not in resp.text
+    assert "simulated" not in resp.text
+
+
+def test_device_poll_rejects_missing_code(client):
+    assert client.post("/api/auth/device/poll", json={"store": True}).status_code == 400
