@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import "./auth.css";
 import { adoptSession, authFetch, fetchAuthProviders, fetchSession } from "../utils/api.js";
 import { clearPending, errorText, initialView, readPending, writePending } from "../utils/authFlow.js";
+import { initialDevicePollInterval, nextDevicePoll } from "../utils/devicePolling.js";
 
 // GitPilot sign-in: GitHub or GitLab OAuth, or an email/password account.
 //
@@ -270,20 +271,29 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
   }, [view]);
 
   // ── Start a provider sign-in ────────────────────────────────────────────
-  async function pollDevice(deviceCode, interval) {
+  async function pollDevice(deviceCode, interval, failures = 0) {
     if (stopPolling.current) return;
     try {
-      const r = await call("/api/auth/device/poll", { method: "POST", body: { device_code: deviceCode, store: true } });
+      // A failed fetch is transient, just like an upstream 503. Neither should
+      // discard the verification code on its first occurrence.
+      const r = await call("/api/auth/device/poll", {
+        method: "POST", body: { device_code: deviceCode, store: true },
+      }).catch(() => ({ status: 0, data: {} }));
+      if (stopPolling.current) return;
       if (r.status === 200) { await finish(r.data); return; }
-      if (r.status === 202) {
-        pollTimer.current = setTimeout(() => pollDevice(deviceCode, interval), interval * 1000);
+
+      const next = nextDevicePoll(r.status, r.data, interval, failures);
+      if (next) {
+        pollTimer.current = setTimeout(
+          () => pollDevice(deviceCode, next.interval, next.failures),
+          next.interval * 1000,
+        );
         return;
       }
-      if (r.data.error === "slow_down") {
-        pollTimer.current = setTimeout(() => pollDevice(deviceCode, interval + 5), (interval + 5) * 1000);
-        return;
-      }
-      throw new Error(errorText(r.data, `Polling failed (${r.status}).`));
+      const fallback = r.status === 0
+        ? "Could not reach the authentication server. Please try again."
+        : "Polling failed (" + r.status + ").";
+      throw new Error(errorText(r.data, fallback));
     } catch (e) {
       if (!stopPolling.current) { setPhase("error"); setProviderError(e.message || "Could not reach GitHub."); }
     }
@@ -293,7 +303,7 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
     const r = await call("/api/auth/device/code", { method: "POST" });
     if (r.data.error || !r.ok) {
       const msg = String(r.data.error || r.data.detail || r.status);
-      if (msg.includes("400") || msg.includes("Bad Request")) {
+      if (r.status === 400 || msg.includes("400") || msg.includes("Bad Request")) {
         throw new Error("Device Flow is disabled for this GitHub App. Enable it under GitHub App Settings → General → 'Enable Device Flow'.");
       }
       if (msg.includes("404") || msg.includes("401")) {
@@ -305,7 +315,11 @@ export default function AuthPage({ onAuthenticated, backendReady = false, connec
     setDevice(r.data);
     setPhase("device");
     stopPolling.current = false;
-    pollDevice(r.data.device_code, r.data.interval || 5);
+    // GitHub forbids the first token request before its advertised interval.
+    const interval = initialDevicePollInterval(r.data);
+    pollTimer.current = setTimeout(
+      () => pollDevice(r.data.device_code, interval), interval * 1000,
+    );
   }
 
   async function startProvider(p) {
