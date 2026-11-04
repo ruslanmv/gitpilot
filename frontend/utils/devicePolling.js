@@ -1,3 +1,11 @@
+// Use the minimum interval supplied by GitHub (default five seconds) even
+// before the very first poll; never request a token immediately after /code.
+export function initialDevicePollInterval(data) {
+  const suggested = Number(data?.interval);
+  return Number.isFinite(suggested) && suggested >= 1
+    ? Math.min(Math.ceil(suggested), 300) : 5;
+}
+
 // GitHub device authorization requires a minimum polling interval. Retry
 // transient transport/upstream errors, but don't retry rejected credentials or
 // a server-side session-storage failure after the device was authorized.
