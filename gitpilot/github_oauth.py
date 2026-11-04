@@ -172,6 +172,14 @@ async def initiate_device_flow() -> Dict[str, Any]:
         return response.json()
 
 
+class DevicePollSlowDown(Exception):
+    """GitHub requires at least five more seconds before the next token poll."""
+
+    def __init__(self, interval: Optional[int] = None):
+        self.interval = interval
+        super().__init__("slow_down")
+
+
 async def poll_device_token(device_code: str) -> Optional[AuthSession]:
     """
     Step 2: Exchange device code for token (Polling).
@@ -195,14 +203,26 @@ async def poll_device_token(device_code: str) -> Optional[AuthSession]:
             },
             headers={"Accept": "application/json"}
         )
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise httpx.DecodingError("Invalid JSON from GitHub device-token endpoint.") from exc
+        if not isinstance(data, dict):
+            raise httpx.DecodingError("Unexpected GitHub device-token response.")
 
         # Handle GitHub Device Flow Errors
         if "error" in data:
             error_code = data["error"]
             # These are expected during polling
-            if error_code in ["authorization_pending", "slow_down"]:
-                return None 
+            if error_code == "authorization_pending":
+                return None
+            if error_code == "slow_down":
+                suggested = data.get("interval")
+                try:
+                    interval = int(suggested)
+                except (TypeError, ValueError):
+                    interval = None
+                raise DevicePollSlowDown(interval if interval and 0 < interval <= 3600 else None)
             
             # These are actual failures
             desc = data.get("error_description", error_code)
@@ -213,9 +233,10 @@ async def poll_device_token(device_code: str) -> Optional[AuthSession]:
             
             raise ValueError(f"GitHub Auth Error: {desc}")
 
+        response.raise_for_status()
         access_token = data.get("access_token")
         if not access_token:
-            return None
+            raise httpx.DecodingError("GitHub device-token response omitted the access token.")
 
         # Success: Fetch User details
         user = await _fetch_user_profile(client, access_token)
