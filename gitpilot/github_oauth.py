@@ -169,7 +169,13 @@ async def initiate_device_flow() -> Dict[str, Any]:
             headers={"Accept": "application/json"}
         )
         response.raise_for_status()
-        return response.json()
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise httpx.DecodingError("Invalid JSON from GitHub device-code endpoint.") from exc
+        if not isinstance(data, dict) or not data.get("device_code"):
+            raise httpx.DecodingError("GitHub device-code response is incomplete.")
+        return data
 
 
 class DevicePollSlowDown(Exception):
@@ -186,10 +192,12 @@ async def poll_device_token(device_code: str) -> Optional[AuthSession]:
     
     Returns:
         AuthSession: If authentication is successful.
-        None: If status is 'authorization_pending' or 'slow_down'.
-    
+        None: While authorization is pending.
+
     Raises:
-        ValueError: If the code expired, access denied, or other errors.
+        DevicePollSlowDown: If GitHub requires a longer polling interval.
+        ValueError: If the device code expired, was denied, or is invalid.
+        httpx.HTTPError: If the GitHub API is temporarily unavailable.
     """
     config = get_oauth_config()
     
@@ -231,6 +239,7 @@ async def poll_device_token(device_code: str) -> Optional[AuthSession]:
             if error_code == "access_denied":
                 raise ValueError("Access denied by user.")
             
+            response.raise_for_status()
             raise ValueError(f"GitHub Auth Error: {desc}")
 
         response.raise_for_status()
@@ -262,8 +271,13 @@ async def _fetch_user_profile(client: httpx.AsyncClient, token: str) -> GitHubUs
         },
     )
     response.raise_for_status()
-    u = response.json()
-    
+    try:
+        u = response.json()
+    except ValueError as exc:
+        raise httpx.DecodingError("Invalid JSON from GitHub user profile endpoint.") from exc
+    if not isinstance(u, dict) or not {"login", "id", "avatar_url"}.issubset(u):
+        raise httpx.DecodingError("GitHub user profile response is incomplete.")
+
     return GitHubUser(
         login=u["login"], 
         id=u["id"], 
