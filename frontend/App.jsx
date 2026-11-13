@@ -140,6 +140,27 @@ export default function App() {
     }
   });
 
+  // Phones: the sidebar becomes an off-canvas drawer and the workspace shows
+  // one pane at a time (chat or project), switched from a segmented control.
+  const [isMobile, setIsMobile] = useState(() => {
+    try { return window.matchMedia("(max-width: 768px)").matches; } catch { return false; }
+  });
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [mobilePane, setMobilePane] = useState("chat");
+  useEffect(() => {
+    let mq;
+    try { mq = window.matchMedia("(max-width: 768px)"); } catch { return undefined; }
+    const onChange = (e) => { setIsMobile(e.matches); if (!e.matches) setMobileNavOpen(false); };
+    mq.addEventListener?.("change", onChange);
+    return () => mq.removeEventListener?.("change", onChange);
+  }, []);
+  useEffect(() => {
+    if (!mobileNavOpen) return undefined;
+    const onKey = (e) => { if (e.key === "Escape") setMobileNavOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mobileNavOpen]);
+
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed((prev) => {
       const next = !prev;
@@ -955,20 +976,63 @@ export default function App() {
 
   const hasContext = contextRepos.length > 0;
 
+  const collapsed = sidebarCollapsed && !isMobile;
+  const go = (page) => { setActivePage(page); setMobileNavOpen(false); };
+  const pageTitle = activePage === "flow" ? "Agent Workflow" : activePage === "admin" ? "Admin"
+    : (repo ? repoFullName(repo) : "Workspace");
+
   return (
-    <div className="app-root">
+    <div className={"app-root" + (mobileNavOpen ? " app-root--nav-open" : "")}>
+      <header className="mobile-topbar">
+        <button
+          type="button"
+          className="mobile-icon-btn"
+          aria-label="Open menu"
+          aria-expanded={mobileNavOpen}
+          onClick={() => setMobileNavOpen(true)}
+        >
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <path d="M3 5.5h14M3 10h14M3 14.5h9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          </svg>
+        </button>
+        <div className="mobile-topbar-title">
+          <span className="logo-square logo-square--sm">GP</span>
+          <span className="mobile-topbar-text">{pageTitle}</span>
+        </div>
+        {repo && activePage === "workspace" ? (
+          <button
+            type="button"
+            className="mobile-icon-btn"
+            aria-label="Project settings"
+            onClick={() => setSettingsOpen(true)}
+          >
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <circle cx="10" cy="10" r="2.6" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2M4.7 4.7l1.4 1.4M13.9 13.9l1.4 1.4M4.7 15.3l1.4-1.4M13.9 6.1l1.4-1.4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          </button>
+        ) : <span className="mobile-icon-btn mobile-icon-btn--placeholder" aria-hidden="true" />}
+      </header>
+      <div
+        className="mobile-nav-backdrop"
+        aria-hidden="true"
+        onClick={() => setMobileNavOpen(false)}
+      />
       <div className="main-wrapper">
-        <aside className={`sidebar${sidebarCollapsed ? " sidebar--collapsed" : ""}`}>
+        <aside
+          className={`sidebar${collapsed ? " sidebar--collapsed" : ""}${mobileNavOpen ? " sidebar--mobile-open" : ""}`}
+          aria-label="Navigation"
+        >
           <div
             className="sidebar-top-row"
           >
             <div
               className="logo-row"
-              onClick={sidebarCollapsed ? toggleSidebar : undefined}
-              style={sidebarCollapsed ? { cursor: "pointer" } : undefined}
+              onClick={collapsed ? (isMobile ? () => setMobileNavOpen(false) : toggleSidebar) : undefined}
+              style={collapsed ? { cursor: "pointer" } : undefined}
             >
               <div className="logo-square">GP</div>
-              {!sidebarCollapsed && (
+              {!collapsed && (
                 <div>
                   <div className="logo-title">GitPilot</div>
                   <div className="logo-subtitle">Agentic GitHub &amp; GitLab Copilot</div>
@@ -976,10 +1040,10 @@ export default function App() {
               )}
             </div>
 
-            {!sidebarCollapsed && (
+            {!collapsed && (
               <button
                 className="sidebar-toggle-btn"
-                onClick={toggleSidebar}
+                onClick={(isMobile ? () => setMobileNavOpen(false) : toggleSidebar)}
                 title="Collapse sidebar (Ctrl+B)"
               >
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -998,7 +1062,7 @@ export default function App() {
           <div className="main-nav">
             <button
               className={"nav-btn" + (activePage === "workspace" ? " nav-btn-active" : "")}
-              onClick={() => setActivePage("workspace")}
+              onClick={() => go("workspace")}
               title="Workspace"
             >
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -1007,12 +1071,12 @@ export default function App() {
                 <rect x="2" y="9" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.3" />
                 <rect x="9" y="9" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.3" />
               </svg>
-              {!sidebarCollapsed && <span>Workspace</span>}
+              {!collapsed && <span>Workspace</span>}
             </button>
 
             <button
               className={"nav-btn" + (activePage === "flow" ? " nav-btn-active" : "")}
-              onClick={() => setActivePage("flow")}
+              onClick={() => go("flow")}
               title="Agent Workflow"
             >
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -1022,12 +1086,12 @@ export default function App() {
                 <path d="M5.5 5.5L7 10.5" stroke="currentColor" strokeWidth="1.3" />
                 <path d="M10.5 5.5L9 10.5" stroke="currentColor" strokeWidth="1.3" />
               </svg>
-              {!sidebarCollapsed && <span>Agent Workflow</span>}
+              {!collapsed && <span>Agent Workflow</span>}
             </button>
 
             <button
               className={"nav-btn" + (activePage === "admin" ? " nav-btn-active" : "")}
-              onClick={() => setActivePage("admin")}
+              onClick={() => go("admin")}
               title="Admin"
             >
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -1039,15 +1103,15 @@ export default function App() {
                 />
                 <circle cx="8" cy="6" r="1.5" stroke="currentColor" strokeWidth="1.3" />
               </svg>
-              {!sidebarCollapsed && <span>Admin</span>}
+              {!collapsed && <span>Admin</span>}
             </button>
           </div>
 
-          {!sidebarCollapsed && (
+          {!collapsed && (
             <>
               {!hasContext && (
                 <RepoSelector
-                  onSelect={(r) => addRepoToContext(r)}
+                  onSelect={(r) => { addRepoToContext(r); setMobileNavOpen(false); }}
                   workspace={startupStatusSnapshot?.workspace}
                   onOpenLocal={async (payload) => {
                     const result = await startSession(payload);
@@ -1064,8 +1128,8 @@ export default function App() {
                 <SessionSidebar
                   repo={repo}
                   activeSessionId={activeSessionId}
-                  onSelectSession={handleSelectSession}
-                  onNewSession={handleNewSession}
+                  onSelectSession={(...a) => { setMobileNavOpen(false); return handleSelectSession(...a); }}
+                  onNewSession={(...a) => { setMobileNavOpen(false); return handleNewSession(...a); }}
                   onDeleteSession={handleDeleteSession}
                   refreshNonce={sessionRefreshNonce}
                 />
@@ -1077,13 +1141,13 @@ export default function App() {
             <div className="user-profile">
               <UserMenu
                 userInfo={userInfo}
-                sidebarCollapsed={sidebarCollapsed}
+                collapsed={collapsed}
                 onOpenAccount={() => {
-                  setActivePage("admin");
+                  go("admin");
                   setAdminTab("account");
                 }}
                 onOpenSettings={() => {
-                  setActivePage("admin");
+                  go("admin");
                   setAdminTab("advanced");
                 }}
                 onOpenAbout={() => setAboutOpen(true)}
@@ -1096,6 +1160,7 @@ export default function App() {
         <main className="workspace">
           {activePage === "admin" && (
             <div
+              className="admin-page"
               style={{
                 flex: 1,
                 minHeight: 0,
@@ -1107,10 +1172,13 @@ export default function App() {
                 boxSizing: "border-box",
               }}
             >
-              <div style={{ display: "flex", gap: "8px", marginBottom: "24px", flexWrap: "wrap" }}>
+              <div className="admin-tabs" role="tablist" style={{ display: "flex", gap: "8px", marginBottom: "24px", flexWrap: "wrap" }}>
                 {["overview", "account", "providers", "workspace-modes", "integrations", "mcp-servers", "sandbox", "sessions", "skills", "security", "advanced"].map((tab) => (
                   <button
                     key={tab}
+                    role="tab"
+                    aria-selected={adminTab === tab}
+                    className={"admin-tab" + (adminTab === tab ? " is-active" : "")}
                     onClick={() => setAdminTab(tab)}
                     style={{
                       padding: "8px 16px",
@@ -1129,7 +1197,7 @@ export default function App() {
               </div>
 
               {adminTab === "overview" && (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "16px" }}>
+                <div className="admin-overview-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "16px" }}>
                   <div style={{ background: "#1a1b26", borderRadius: "8px", padding: "16px", border: "1px solid #2a2b36" }}>
                     <div style={{ fontSize: "12px", opacity: 0.6, marginBottom: "8px" }}>Server</div>
                     <div style={{ fontSize: "16px", fontWeight: 600 }}>
@@ -1205,7 +1273,6 @@ export default function App() {
 
               {adminTab === "providers" && (
                 <div>
-                  <h3 style={{ marginBottom: "16px" }}>AI Providers</h3>
                   <LlmSettings />
                 </div>
               )}
@@ -1281,7 +1348,22 @@ export default function App() {
                   onBranchChange={handleContextBranchChange}
                 />
 
-                <div className="workspace-grid" style={{ flex: 1 }}>
+                <div className="mobile-pane-switch" role="tablist" aria-label="Workspace view">
+                  {[["chat", "Chat"], ["project", "Project"]].map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      role="tab"
+                      aria-selected={mobilePane === id}
+                      className={"mobile-pane-tab" + (mobilePane === id ? " is-active" : "")}
+                      onClick={() => setMobilePane(id)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className={"workspace-grid workspace-grid--pane-" + mobilePane} style={{ flex: 1 }}>
                   <aside className="gp-context-column">
                     <ProjectContextPanel
                       repo={repo}
@@ -1319,6 +1401,9 @@ export default function App() {
                 <div className="empty-bot">🤖</div>
                 <h1>Select a repository</h1>
                 <p>Select a repo to begin agentic workflow.</p>
+                <button type="button" className="empty-state-cta" onClick={() => setMobileNavOpen(true)}>
+                  Choose a repository
+                </button>
               </div>
             ))}
         </main>

@@ -31,14 +31,14 @@ export default function ProjectSettingsModal({
 
   return (
     <div
-      style={styles.backdrop}
+      className="psm-backdrop" style={styles.backdrop}
       onMouseDown={(e) => {
         // click outside closes
         if (e.target === e.currentTarget) onClose?.();
       }}
     >
-      <div style={styles.modal} onMouseDown={(e) => e.stopPropagation()}>
-        <div style={styles.header}>
+      <div className="psm-modal" style={styles.modal} onMouseDown={(e) => e.stopPropagation()}>
+        <div className="psm-header" style={styles.header}>
           <div style={styles.headerLeft}>
             <div style={styles.title}>{title}</div>
             <div style={styles.subtitle}>
@@ -50,7 +50,7 @@ export default function ProjectSettingsModal({
           </button>
         </div>
 
-        <div style={styles.tabsRow}>
+        <div className="psm-tabs" style={styles.tabsRow}>
           <TabButton
             label="Context"
             isActive={activeTab === "context"}
@@ -73,7 +73,7 @@ export default function ProjectSettingsModal({
           />
         </div>
 
-        <div style={styles.body}>
+        <div className="psm-body" style={styles.body}>
           {activeTab === "context" && <ContextTab owner={owner} repo={repo} />}
           {activeTab === "usecase" && <UseCaseTab owner={owner} repo={repo} />}
           {activeTab === "conventions" && (
@@ -92,8 +92,8 @@ export default function ProjectSettingsModal({
           )}
         </div>
 
-        <div style={styles.footer}>
-          <div style={styles.footerHint}>
+        <div className="psm-footer" style={styles.footer}>
+          <div className="psm-footer-hint" style={styles.footerHint}>
             Tip: Upload meeting notes/transcripts in Context, then finalize a Use
             Case spec.
           </div>

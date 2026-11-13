@@ -1,0 +1,321 @@
+/* ==========================================================================
+   Mobile shell (≤ 768px)
+   - top app bar with menu button, page title and project settings
+   - the sidebar becomes an off-canvas drawer over a dimmed backdrop
+   - the workspace shows one pane at a time (Chat / Project)
+   - the desktop footer is hidden; safe areas are respected
+   Desktop layout is unchanged: everything here is scoped to the media query,
+   and the elements added for phones are hidden above it.
+   ========================================================================== */
+
+.mobile-topbar,
+.mobile-nav-backdrop,
+.empty-state-cta,
+.mobile-pane-switch { display: none; }
+
+@media (max-width: 768px) {
+  html, body { overscroll-behavior: none; }
+
+  .app-root {
+    height: 100vh;
+    height: 100dvh;
+    background: #08090d;
+  }
+
+  /* ---- top app bar ---- */
+  .mobile-topbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: none;
+    height: calc(56px + env(safe-area-inset-top, 0px));
+    padding: env(safe-area-inset-top, 0px) max(8px, env(safe-area-inset-right, 0px)) 0 max(8px, env(safe-area-inset-left, 0px));
+    background: rgba(10, 11, 15, 0.86);
+    -webkit-backdrop-filter: saturate(160%) blur(14px);
+    backdrop-filter: saturate(160%) blur(14px);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    position: relative;
+    z-index: 30;
+  }
+  .mobile-topbar-title {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+  }
+  .mobile-topbar-text {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: #f5f5f7;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .logo-square--sm {
+    width: 26px;
+    height: 26px;
+    min-width: 26px;
+    border-radius: 7px;
+    font-size: 11px;
+    background: linear-gradient(135deg, #ff8a4c, #ff6a2b);
+    box-shadow: 0 6px 16px -6px rgba(255, 106, 43, 0.7);
+  }
+  .mobile-icon-btn {
+    width: 44px;
+    height: 44px;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    color: #d6d7e6;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .mobile-icon-btn:active { background: rgba(255, 255, 255, 0.08); color: #fff; }
+  .mobile-icon-btn:focus-visible { outline: 2px solid #ff7a3c; outline-offset: -2px; }
+  .mobile-icon-btn--placeholder { pointer-events: none; }
+
+  /* ---- drawer ---- */
+  .main-wrapper { position: relative; }
+  .app-root > .main-wrapper { padding-bottom: 0; }
+
+  .sidebar,
+  .sidebar.sidebar--collapsed {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 50;
+    width: min(86vw, 340px);
+    min-width: 0;
+    padding: calc(14px + env(safe-area-inset-top, 0px)) 14px calc(14px + env(safe-area-inset-bottom, 0px)) max(14px, env(safe-area-inset-left, 0px));
+    gap: 14px;
+    border-right: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 0 20px 20px 0;
+    background: linear-gradient(180deg, #12131a 0, #0a0b10 100%);
+    box-shadow: 24px 0 60px -20px rgba(0, 0, 0, 0.85);
+    transform: translateX(-104%);
+    visibility: hidden;
+    transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1), visibility 0s linear 0.28s;
+    overscroll-behavior: contain;
+  }
+  .sidebar.sidebar--mobile-open {
+    transform: translateX(0);
+    visibility: visible;
+    transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1), visibility 0s;
+  }
+  .mobile-nav-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: rgba(3, 4, 7, 0.6);
+    -webkit-backdrop-filter: blur(2px);
+    backdrop-filter: blur(2px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease;
+  }
+  .app-root--nav-open .mobile-nav-backdrop { opacity: 1; pointer-events: auto; }
+
+  .sidebar .logo-subtitle { font-size: 11.5px; }
+  .sidebar .nav-btn {
+    min-height: 46px;
+    font-size: 15px;
+    border-radius: 12px;
+  }
+  .sidebar input,
+  .sidebar select,
+  .sidebar textarea { font-size: 16px; } /* no iOS focus zoom */
+
+  .sidebar .repo-search-row { min-width: 0; }
+  .sidebar .repo-search-input { flex: 1; min-width: 0; width: auto; }
+  .sidebar .repo-search-row > button { flex: none; min-height: 40px; }
+
+  .empty-state-cta {
+    display: inline-flex;
+    margin-top: 20px;
+    padding: 12px 20px;
+    border: 0;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #ff8a4c, #ff6a2b);
+    color: #120a05;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 10px 24px -10px rgba(255, 106, 43, 0.75);
+  }
+
+  /* ---- workspace ---- */
+  .workspace { min-width: 0; width: 100%; }
+
+  .empty-state {
+    padding: 32px 24px;
+    max-width: 340px;
+  }
+  .empty-state h1 { font-size: 22px; letter-spacing: -0.02em; }
+
+  .mobile-pane-switch {
+    display: flex;
+    flex: none;
+    gap: 4px;
+    margin: 10px 12px 8px;
+    padding: 4px;
+    border-radius: 12px;
+    background: #12131a;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+  }
+  .mobile-pane-tab {
+    flex: 1;
+    height: 36px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: #9a9bb0;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.18s ease, color 0.18s ease;
+  }
+  .mobile-pane-tab.is-active {
+    background: #23242f;
+    color: #fff;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 4px 12px -6px rgba(0, 0, 0, 0.8);
+  }
+
+  .workspace-grid {
+    display: flex;
+    flex-direction: column;
+    grid-template-columns: none;
+    min-width: 0;
+  }
+  .workspace-grid > .gp-context-column,
+  .workspace-grid > .gp-chat-column {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    width: 100%;
+    border: 0;
+  }
+  .workspace-grid--pane-chat > .gp-context-column { display: none; }
+  .workspace-grid--pane-project > .gp-chat-column { display: none; }
+  .gp-chat-column > .panel-header { display: none; }
+
+  /* Composer: full width, 16px text, clear of the home indicator. */
+  .workspace textarea,
+  .workspace input[type="text"],
+  .workspace input:not([type]) { font-size: 16px; }
+  .gp-chat-column { padding-bottom: env(safe-area-inset-bottom, 0px); }
+
+  /* ---- Admin / settings ----
+     The admin page is styled inline for desktop; on phones the tab chips
+     become one horizontally scrolling tab bar, cards stack in one column and
+     the nested panels drop their own outer padding. */
+  .admin-page { padding: 0 0 calc(24px + env(safe-area-inset-bottom, 0px)) !important; }
+  .admin-tabs {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    flex-wrap: nowrap !important;
+    gap: 6px !important;
+    margin: 0 0 8px !important;
+    padding: 10px 12px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+    background: rgba(8, 9, 13, 0.92);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    -webkit-mask-image: linear-gradient(90deg, #000 88%, transparent);
+    mask-image: linear-gradient(90deg, #000 88%, transparent);
+  }
+  .admin-tabs::-webkit-scrollbar { display: none; }
+  .admin-tab {
+    flex: none;
+    scroll-snap-align: start;
+    white-space: nowrap;
+    min-height: 36px;
+    padding: 0 14px !important;
+    border-radius: 999px !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    background: #14151c !important;
+    color: #a3a4b8 !important;
+    font-size: 13.5px !important;
+    font-weight: 500;
+  }
+  .admin-tab.is-active {
+    background: #f5f5f7 !important;
+    border-color: #f5f5f7 !important;
+    color: #0a0b0f !important;
+    font-weight: 600;
+  }
+  .admin-page > :not(.admin-tabs) { margin-left: 16px; margin-right: 16px; }
+  .admin-overview-grid { grid-template-columns: 1fr 1fr !important; gap: 10px !important; }
+  .admin-overview-grid > div { border-radius: 14px !important; min-width: 0; overflow-wrap: anywhere; }
+  .admin-page .settings-root { padding: 8px 0 0; max-width: none; }
+  .admin-page .settings-root h1 { font-size: 22px; letter-spacing: -0.02em; }
+  .admin-page h2 { font-size: 18px; }
+  .admin-page input,
+  .admin-page select,
+  .admin-page textarea { font-size: 16px; max-width: 100%; }
+  .admin-page table { display: block; overflow-x: auto; }
+
+  /* ---- Project settings: full-screen sheet ---- */
+  .psm-backdrop { padding: 0 !important; align-items: stretch !important; }
+  .psm-modal {
+    width: 100% !important;
+    height: 100% !important;
+    border-radius: 0 !important;
+    border: 0 !important;
+    background: #0b0c10 !important;
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  .psm-header { padding: 14px 16px 12px !important; }
+  .psm-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding: 10px 12px !important;
+  }
+  .psm-tabs::-webkit-scrollbar { display: none; }
+  .psm-tabs > button { flex: none; white-space: nowrap; min-height: 36px; }
+  .psm-body { padding: 16px !important; }
+  .psm-body table { display: block; overflow-x: auto; white-space: nowrap; }
+  .psm-body input,
+  .psm-body select,
+  .psm-body textarea { font-size: 16px; max-width: 100%; }
+  .psm-footer { padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px)) !important; }
+  .psm-footer-hint { display: none !important; }
+  .psm-footer > button { flex: 1; min-height: 44px; }
+
+  /* The fixed desktop footer covers the composer on a phone. */
+  .gp-footer { display: none; }
+}
+
+/* ---- public landing page: compact top bar ---- */
+@media (max-width: 620px) {
+  .gp-topbar .gp-nav { gap: 10px; padding-top: 10px; padding-bottom: 10px; }
+  .gp-topbar .gp-brand { gap: 10px; min-width: 0; }
+  .gp-topbar .gp-brand br,
+  .gp-topbar .gp-brand-sub,
+  .gp-topbar .gp-nav-links { display: none; }
+  .gp-topbar .gp-logo { width: 34px; height: 34px; border-radius: 10px; font-size: 13px; }
+  .gp-topbar .gp-brand-name { font-size: 17px; }
+  .gp-topbar .gp-nav-right { gap: 6px; margin-left: auto; flex: none; }
+  .gp-topbar .gp-signin { white-space: nowrap; padding: 10px 8px; font-size: 14px; }
+  .gp-topbar .gp-btn { white-space: nowrap; padding: 10px 14px; font-size: 14px; border-radius: 11px; }
+}
+
+@media (max-width: 768px) and (prefers-reduced-motion: reduce) {
+  .sidebar, .sidebar.sidebar--mobile-open, .mobile-nav-backdrop { transition: none; }
+}
