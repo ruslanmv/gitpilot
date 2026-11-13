@@ -13,6 +13,7 @@ from typing import Optional
 from crewai.tools import tool
 
 from .idempotency import run_legacy_mutation
+from .large_read import frame
 from .sandbox_routing import (
     SandboxFallback,
     coerce_timeout,
@@ -64,7 +65,7 @@ def read_local_file(file_path: str) -> str:
     ws = _require_workspace()
     try:
         content = _run_async(_ws_manager.read_file(ws, file_path))
-        return f"Content of {file_path}:\n---\n{content}\n---"
+        return frame(file_path, content)
     except Exception as e:
         return f"Error reading {file_path}: {e}"
 
