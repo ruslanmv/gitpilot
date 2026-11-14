@@ -72,6 +72,16 @@ device flow (`/api/auth/device/code`, `/api/auth/device/poll`). The web app poll
 with `{"store": true}`, so the token is stored on the session and not returned.
 CLI and VS Code clients poll without it and receive the token as before.
 
+The browser waits for GitHub's `interval` before its first poll. Poll responses
+are `202` while pending, `429 {"error":"slow_down","interval":…}` when GitHub
+requires a longer wait, `400` for a denied/expired code, and `503` when GitHub
+is temporarily unreachable (the browser retries a few times). If GitHub has
+authorized the device but the session vault cannot save the credential, the API
+returns `503` with `code: "session_storage_unavailable"` **without any token**;
+this is not retryable by polling. Check backend logs, the session database
+(`DATABASE_URL` or the writable auth directory) and the token-vault key
+(`GITPILOT_TOKEN_ENCRYPTION_KEY` / `GITPILOT_AUTH_SECRET`), then restart sign-in.
+
 ### Email and password (optional)
 
 Mounted with `GITPILOT_ENABLE_ACCOUNTS=true`. The sign-in page hides the email form

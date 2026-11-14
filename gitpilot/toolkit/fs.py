@@ -111,6 +111,16 @@ READ_SCHEMA = {
             "type": "string",
             "description": "Path relative to the repository root, e.g. 'src/main.py'.",
         },
+        "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "0-indexed line to start from. Use it to page through a large file.",
+        },
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Lines to return (default 2000).",
+        },
     },
     "required": ["path"],
     "additionalProperties": False,
@@ -138,10 +148,23 @@ async def _fs_read(call: ToolCall, ctx: ToolExecutionContext) -> ToolResult:
                 call, f"Error reading file {path}: {exc}", error="read_failed",
             )
 
+    from ..large_read import READ_PAGE_LINES, fits_inline, frame, window
+
+    offset = call.arguments.get("offset")
+    limit = call.arguments.get("limit")
+    if offset is None and limit is None:
+        text = frame(path, content)
+    else:
+        text = window(path, content, int(offset or 0), int(limit or READ_PAGE_LINES))
     return ToolResult.success(
         call,
-        f"Content of {path}:\n---\n{content}\n---",
-        data={"path": path, "bytes": len(content or ""), "lines": len((content or "").splitlines())},
+        text,
+        data={
+            "path": path,
+            "bytes": len(content or ""),
+            "lines": len((content or "").splitlines()),
+            "paged": not fits_inline(content or "") or offset is not None or limit is not None,
+        },
     )
 
 
@@ -640,7 +663,8 @@ SPECS: List[Tuple[ToolSpec, Any]] = [
             id="fs.read",
             title="Read file",
             description=(
-                "Read a file from the repository. Returns its full text content. "
+                "Read a file from the repository. Small files come back whole; a large "
+                "file comes back as a numbered page with the offset to continue from. "
                 "Prefer this over guessing what a file contains."
             ),
             params_schema=READ_SCHEMA,

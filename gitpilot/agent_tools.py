@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from crewai.tools import tool
 
+from . import large_read
 from . import scm as _scm
 from .glob_match import GLOB_DEFAULT_MAX_RESULTS as _GLOB_DEFAULT_MAX_RESULTS
 from .glob_match import GLOB_HARD_MAX_RESULTS as _GLOB_HARD_MAX_RESULTS
@@ -405,7 +406,8 @@ def read_file(file_path: Any) -> str:
     file_path = _sanitize_tool_arg(file_path)
     try:
         content = _fetch_file_content(file_path)
-        return f"Content of {file_path}:\n---\n{content}\n---"
+        # Small files exactly as before; large ones as a bounded first page.
+        return large_read.frame(file_path, content)
     except Exception as e:
         return f"Error reading file {file_path}: {str(e)}"
 
@@ -433,27 +435,7 @@ def read_file_window(
         content = _fetch_file_content(file_path)
         if content is None:
             return f"Error reading file {file_path}: empty response"
-
-        lines = content.splitlines()
-        total = len(lines)
-        if total == 0:
-            return f"Content of {file_path}:\n---\n(empty file)\n---"
-
-        end = min(total, start + span)
-        slice_text = "\n".join(lines[start:end])
-
-        header = f"Content of {file_path}"
-        if start > 0 or end < total:
-            header += f" (lines {start + 1}-{end} of {total})"
-
-        footer = ""
-        if end < total:
-            remaining = total - end
-            footer = (
-                f"\n…{remaining} more lines. Continue with offset={end} "
-                f"to read further."
-            )
-        return f"{header}:\n---\n{slice_text}\n---{footer}"
+        return large_read.window(file_path, content, start, span)
     except Exception as e:
         return f"Error reading file {file_path}: {str(e)}"
 

@@ -115,8 +115,6 @@ def _is_lite_mode_active() -> bool:
 # NL database types are imported lazily at call site (see /api/nl-db endpoint)
 from .github_oauth import (
     validate_token,
-    initiate_device_flow,
-    poll_device_token,
     web_flow_available,
     GitHubUser,
 )
@@ -381,6 +379,8 @@ except Exception:  # noqa: BLE001
 # PKCE), the encrypted token vault, CSRF tokens and WebSocket tickets.
 from .auth.session_router import build_session_router
 app.include_router(build_session_router())
+from .auth.device_router import build_device_router
+app.include_router(build_device_router())
 
 # GitLab OAuth and repository endpoints; GitHub routes remain intact.
 from .gitlab import build_gitlab_router
@@ -2620,52 +2620,6 @@ async def api_validate_token(request: TokenValidationRequest):
         user=GitHubUser(login="", id=0, avatar_url=""),
         authenticated=False,
     )
-
-
-@app.post("/api/auth/device/code")
-async def api_device_code():
-    """
-    Start the device login flow (Step 1).
-    Does NOT require a client secret.
-    """
-    try:
-        data = await initiate_device_flow()
-        return data
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
-
-
-@app.post("/api/auth/device/poll")
-async def api_device_poll(payload: dict, request: Request, response: Response):
-    """
-    Poll GitHub to check if user authorized the device (Step 2).
-
-    With ``"store": true`` (the web app) the token is kept server-side on the
-    web session and only the identity is returned. Without it (CLI, VS Code)
-    the token is returned to the client as before.
-    """
-    device_code = payload.get("device_code")
-    if not device_code:
-        return JSONResponse({"error": "Missing device_code"}, status_code=400)
-
-    try:
-        session = await poll_device_token(device_code)
-        if not session:
-            return JSONResponse({"status": "pending"}, status_code=202)
-        if not payload.get("store"):
-            return session
-        from .auth.session_router import connect_credential, session_payload
-        from .auth.web_session import ProviderCredential
-
-        profile = {**session.user.model_dump(), "provider": "github", "host": "github.com"}
-        cred = ProviderCredential(provider="github", access_token=session.access_token,
-                                  scope=session.scope, profile=profile)
-        sess, raw = connect_credential(request, response, cred)
-        result = session_payload(sess, session_token=raw)
-        result.update({"provider": "github", "user": profile})
-        return result
-    except ValueError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
 
 
 @app.get("/api/auth/status")
