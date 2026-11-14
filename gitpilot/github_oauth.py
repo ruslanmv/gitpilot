@@ -8,7 +8,7 @@ import os
 from typing import Optional, Dict, Any
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 # Configure logging
 logger = logging.getLogger("gitpilot.auth")
@@ -169,7 +169,21 @@ async def initiate_device_flow() -> Dict[str, Any]:
             headers={"Accept": "application/json"}
         )
         response.raise_for_status()
-        return response.json()
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise httpx.DecodingError("Invalid JSON from GitHub device-code endpoint.") from exc
+        if not isinstance(data, dict) or not data.get("device_code"):
+            raise httpx.DecodingError("GitHub device-code response is incomplete.")
+        return data
+
+
+class DevicePollSlowDown(Exception):
+    """GitHub requires at least five more seconds before the next token poll."""
+
+    def __init__(self, interval: Optional[int] = None):
+        self.interval = interval
+        super().__init__("slow_down")
 
 
 async def poll_device_token(device_code: str) -> Optional[AuthSession]:
@@ -178,10 +192,12 @@ async def poll_device_token(device_code: str) -> Optional[AuthSession]:
     
     Returns:
         AuthSession: If authentication is successful.
-        None: If status is 'authorization_pending' or 'slow_down'.
-    
+        None: While authorization is pending.
+
     Raises:
-        ValueError: If the code expired, access denied, or other errors.
+        DevicePollSlowDown: If GitHub requires a longer polling interval.
+        ValueError: If the device code expired, was denied, or is invalid.
+        httpx.HTTPError: If the GitHub API is temporarily unavailable.
     """
     config = get_oauth_config()
     
@@ -195,14 +211,26 @@ async def poll_device_token(device_code: str) -> Optional[AuthSession]:
             },
             headers={"Accept": "application/json"}
         )
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise httpx.DecodingError("Invalid JSON from GitHub device-token endpoint.") from exc
+        if not isinstance(data, dict):
+            raise httpx.DecodingError("Unexpected GitHub device-token response.")
 
         # Handle GitHub Device Flow Errors
         if "error" in data:
             error_code = data["error"]
             # These are expected during polling
-            if error_code in ["authorization_pending", "slow_down"]:
-                return None 
+            if error_code == "authorization_pending":
+                return None
+            if error_code == "slow_down":
+                suggested = data.get("interval")
+                try:
+                    interval = int(suggested)
+                except (TypeError, ValueError):
+                    interval = None
+                raise DevicePollSlowDown(interval if interval and 0 < interval <= 3600 else None)
             
             # These are actual failures
             desc = data.get("error_description", error_code)
@@ -211,11 +239,13 @@ async def poll_device_token(device_code: str) -> Optional[AuthSession]:
             if error_code == "access_denied":
                 raise ValueError("Access denied by user.")
             
+            response.raise_for_status()
             raise ValueError(f"GitHub Auth Error: {desc}")
 
+        response.raise_for_status()
         access_token = data.get("access_token")
         if not access_token:
-            return None
+            raise httpx.DecodingError("GitHub device-token response omitted the access token.")
 
         # Success: Fetch User details
         user = await _fetch_user_profile(client, access_token)
@@ -241,17 +271,25 @@ async def _fetch_user_profile(client: httpx.AsyncClient, token: str) -> GitHubUs
         },
     )
     response.raise_for_status()
-    u = response.json()
-    
-    return GitHubUser(
-        login=u["login"], 
-        id=u["id"], 
-        avatar_url=u["avatar_url"],
-        name=u.get("name"),
-        email=u.get("email"),
-        bio=u.get("bio"),
-        html_url=u.get("html_url")
-    )
+    try:
+        u = response.json()
+    except ValueError as exc:
+        raise httpx.DecodingError("Invalid JSON from GitHub user profile endpoint.") from exc
+    if not isinstance(u, dict) or not {"login", "id", "avatar_url"}.issubset(u):
+        raise httpx.DecodingError("GitHub user profile response is incomplete.")
+
+    try:
+        return GitHubUser(
+            login=u["login"],
+            id=u["id"],
+            avatar_url=u["avatar_url"],
+            name=u.get("name"),
+            email=u.get("email"),
+            bio=u.get("bio"),
+            html_url=u.get("html_url"),
+        )
+    except (KeyError, TypeError, ValidationError) as exc:
+        raise httpx.DecodingError("GitHub user profile response is invalid.") from exc
 
 
 async def validate_token(access_token: str) -> Optional[GitHubUser]:
